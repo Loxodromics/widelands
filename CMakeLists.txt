@@ -118,7 +118,19 @@ endif()
 
 find_package (Python3 REQUIRED)
 
+# CMAKE_FIND_FRAMEWORK is set to LAST above so that MacPorts/Homebrew-installed libraries are
+# preferred over same-named system frameworks. OpenGL is the exception: on macOS, deprioritizing
+# frameworks causes CMake to pick up an X11/Mesa libGL (e.g. from MacPorts' "mesa" port) instead of
+# the native OpenGL.framework. That Mesa build doesn't understand the native Cocoa GL context SDL2
+# creates, causing glGetString() to fail at runtime with "GL User Error: glGetString called without
+# a rendering context". Prefer the framework for this one lookup.
+if(APPLE)
+  set(CMAKE_FIND_FRAMEWORK FIRST)
+endif()
 find_package(OpenGL REQUIRED)
+if(APPLE)
+  set(CMAKE_FIND_FRAMEWORK LAST)
+endif()
 find_package(PNG 1.6 REQUIRED)
 
 find_package(SDL2 REQUIRED)
