@@ -108,20 +108,46 @@ across octaves:
 const mat2 kOctaveRotation = mat2(0.80, 0.60, -0.60, 0.80);
 ```
 
-| Octave | Frequency | Wavelength | Role |
-|---|---|---|---|
-| 1 | 0.09 | ~11 fields | Regional patchiness: a dry stretch, a lush stretch. The AoE "this area differs from that area" read. |
-| 2 | 0.21 | ~4.8 fields | Mid-scale mottling. |
-| 3 | 0.55 | ~1.8 fields | Directly disrupts the 1-field lattice. This is the octave that fixes the stated defect. |
+| Octave | Frequency | Wavelength | Amplitude | Role |
+|---|---|---|---|---|
+| 1 | 0.09 | ~11 fields | 1.00 | Regional patchiness: a dry stretch, a lush stretch. The AoE "this area differs from that area" read. |
+| 2 | 0.21 | ~4.8 fields | 0.50 | Mid-scale mottling. |
+| 3 | 0.55 | ~1.8 fields | 1.20 | Breaks the 1-field repeat. Carries most of the budget on purpose — see the antiphase rule below. |
 
-Amplitudes 1.0 / 0.5 / 0.25, normalised by their sum. Standard fBm gain of 0.5 with lacunarity
-around 2.3.
+Normalised by the sum, 2.70.
+
+### The antiphase rule
+
+**This is the governing constraint for this renderer, and getting it wrong is what made the first
+parameter set ineffective.**
+
+The repetition to be broken has a period of exactly one field (§1). Two points one period apart
+are separated most strongly by a wave whose own wavelength is *twice* that separation — at
+λ = 2 fields the two points sit in antiphase. So the octave that does the work is at **f ≈ 0.5
+cycles per field**, and there is no benefit in going finer:
+
+- f ≈ 0.5 (λ = 2 fields): adjacent repeats land in antiphase. Maximum separation.
+- f ≈ 1.0 (λ = 1 field): adjacent repeats land back *in phase*. Nearly zero separation — the
+  octave aliases with the lattice and does almost nothing.
+
+Measured on `Finnish_Lakes` at view 640,640,1.0, as RMS relative-luminance difference between
+pixels exactly one field (64 px) apart, against the total field sd:
+
+| Weighting | field sd | adjacent-tile RMS | % of fully decorrelated |
+|---|---|---|---|
+| 0.25 @ f=0.55 (first attempt) | 2.60% | 1.42% | 39% |
+| + a 4th octave at f=1.10 | 2.31% | 1.59% | 49% |
+| **1.20 @ f=0.55 (current)** | **2.59%** | **2.59%** | **71%** |
+
+Adding a higher-frequency octave barely helped, exactly as the rule predicts. Moving amplitude
+into the f≈0.55 octave nearly doubled the adjacent-tile difference at unchanged total sd — the
+same visual loudness, much better aimed.
 
 Calibration note from the references: in `referenceImages/AoE2_0.png` the grass variation is
-dominated by the *large* scales — patches many tiles across — with fine detail supplied by
-scattered clutter rather than by the ground texture. If in doubt, weight octave 1 higher rather
-than octave 3. Getting the frequency balance right is most of the work here; the code is the
-easy part.
+dominated by the *large* scales, with fine detail supplied by scattered clutter rather than by the
+ground texture. That argues for keeping octave 1 present, which it is — but it must not come at
+the cost of the f≈0.5 octave, because the two are solving different problems: octave 1 buys
+regional interest, octave 3 buys the lattice not reading as wallpaper.
 
 ## 6. What gets modulated
 
@@ -287,6 +313,10 @@ settle.
 
 ## 12. Open questions
 
+**Caveat on the answers below:** they were measured before the §14 review, i.e. on captures that
+still carried the build-help overlay and with the pre-retune octave weights. The directions still
+hold, the numbers are stale.
+
 - Does the large-scale octave fight the existing per-terrain art, which already carries its own
   baked colour variation? Possible that octave 1 wants to be weaker than the AoE reference
   suggests. — **Measured, not settled.** At zoom 2.0 the octave-1-scale component is 5-7% of the
@@ -334,10 +364,8 @@ view 640,640, deterministic (two runs per map byte-identical; `wl.py --compare`)
   byte-identical across runs.
 - Water takes the full amplitude, see §12.
 
-**What got tuned:** nothing. The design parameters (0.07 / 0.09 / 0.21 / 0.55) survived the first
-look; the evidence did not give a clear direction, and the plan's tuning authority is the eyeball
-test. The numbers above say where to push if the captures say so: octave 3 up to break the
-lattice, octave 1's regional read was the subtle part at zoom 2.0.
+**What got tuned:** nothing, on the first pass. The eyeball call was deferred, and that turned out
+to matter — see §14.
 
 **What is now known that was not at design time:**
 
@@ -348,3 +376,40 @@ lattice, octave 1's regional read was the subtle part at zoom 2.0.
   captures: the per-pixel texture shimmer is expected at this amplitude.
 - Roads (`road.fp`) and minimap are unaffected, as designed; whether roads now look "cleaner" than
   their surroundings is on the eyeball list.
+
+## 14. Review of Phase 1, and the retune
+
+The statistics in §13 were gathered but the visual judgement was not made. Making it turned up two
+problems.
+
+**The captures were not clean.** Clearing `dfShowGrid` and `dfShowResources` was not enough:
+`EditorInteractive::map_changed()` calls `show_buildhelp(true)` *after* the constructor sets the
+display flags, so every capture carried a build-help symbol on nearly every field — the same
+per-field lattice the terrain work is judged against. Fixed in the harness; §11's capture recipe
+only produces usable images from that commit onward. Any conclusion drawn from an editor capture
+taken before it should be re-checked.
+
+**The parameters could not do the job they were chosen for.** With 0.25 amplitude on the f=0.55
+octave, the noise field was a smooth wash: sd 2.6% relative luminance, but only 1.42% RMS between
+pixels one field apart — 39% of what two uncorrelated points would show, with full decorrelation
+only at four fields' distance. Rendering the difference field amplified made it obvious: blobs
+several hundred pixels across, essentially no structure at the 64 px repeat. Phase 1 as first
+landed delivered *regional tonal variation*, which is worth having, but left the wallpaper
+symptom untouched.
+
+The cause was a wrong claim in §5 — that the f=0.55 octave "directly disrupts the 1-field
+lattice". The frequency was right; its share of the amplitude budget was not. §5 now carries the
+antiphase rule and the measurements behind it, and the octave weights are 1.00 / 0.50 / 1.20
+normalised by 2.70, which takes adjacent-tile decorrelation from 39% to 71% at unchanged total sd.
+
+**Amplitude is the remaining open call.** At `kValueAmplitude = 0.07` the retuned field is still
+near the threshold of perception on a 1280x720 capture. A test at 0.12 makes the mottling plainly
+visible on meadow and steppe without reading as dirt, which suggests the "beyond 0.10 looks like
+mould" guess in §6 was pessimistic — it was made when the amplitude was spread across the wrong
+scales, where a large value would have shown up as broad blotches rather than as texture. Left at
+0.07 pending an aesthetic decision; raising it is a one-line change in both shaders.
+
+**Method note for later phases:** the useful measurement here was not mean pixel change, which
+says only that something happened. It was the RMS difference between points exactly one repeat
+apart, normalised by the field's own sd. That is what distinguishes "the noise is loud" from "the
+noise is aimed at the defect", and the two came apart badly on the first attempt.

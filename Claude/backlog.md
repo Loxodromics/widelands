@@ -134,9 +134,13 @@ Grow the harness against real need rather than speculatively.
 
 ### [ ] Terrain noise — phases 1b, 2, 3
 
-Phase 1 (value-only layered simplex in `terrain.fp`/`dither.fp`) landed 2026-08-13; design,
-parameter values and measured results in `TERRAIN_NOISE.md`, results section §13. Open sub-items:
+Phase 1 (value-only layered simplex in `terrain.fp`/`dither.fp`) landed 2026-08-13 and was retuned
+the same day after review — the first octave weighting left the 1-field repeat untouched. Design,
+parameter values and measured results in `TERRAIN_NOISE.md`; read §14 (review and retune) before
+§13, whose numbers predate both the retune and the build-help fix. Open sub-items:
 
+- [ ] **Amplitude decision** — `kValueAmplitude` is 0.07, which is near the threshold of
+      perception; 0.12 was tested and reads well. One-line change in both shaders, aesthetic call.
 - [ ] **1b** — shared `data/shaders/noise.glsl` plus a single-level `#include` expansion in
       `Program::build` (`gl/utils.cc`); removes the temporary duplicate in `dither.fp`. Also the
       warm/cool tint axis.

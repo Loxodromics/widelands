@@ -95,9 +95,12 @@ Re-ranked after verification. Original numbering kept for cross-reference.
    out in `TERRAIN_NOISE.md`.** Corrected in one important respect: a per-*tile* constant jitter
    would produce a triangular patchwork, the same artefact at a different frequency. It has to be
    per-vertex (interpolated) or per-fragment. Decision: layered 2D simplex in the fragment shader,
-   keyed on the existing `var_texture_position` varying. **Landed 2026-08-13** — Phase 1 (value
-   modulation, `terrain.fp` + matching `dither.fp`) is in and judged against four maps, see
-   `TERRAIN_NOISE.md` §13 "Phase 1 results". Phases 1b (tint axis), 2 (config toggle) and 3
+   keyed on the existing `var_texture_position` varying. **Landed 2026-08-13**, then retuned after
+   review: the first octave weighting produced regional tonal variation but left the 1-field repeat
+   — the actual defect in §1 — untouched. The governing constraint is the antiphase rule
+   (`TERRAIN_NOISE.md` §5): the octave that breaks a repeat of period *p* has wavelength 2*p*, so
+   finer is worse, not better. See §14 for the review, §13 for the earlier (stale) numbers.
+   Amplitude remains an open aesthetic call; phases 1b (tint axis), 2 (config toggle) and 3
    (per-terrain amplitude) are still open.
 
 3. ~~**Randomize existing texture via rotation/mirroring**~~ — **rejected.** The UV field is
