@@ -480,6 +480,8 @@ the whole point of the shared file (§8).
 | Value weighting | `:61` `(1.00 * o1 + 0.50 * o2 + 1.20 * o3) / 2.70` | — | Sum of the three amplitudes in the normaliser, or the effective strength drifts away from `kValueAmplitude`. |
 | Tint weighting | `:62` `(1.00 * o1 + 0.40 * o2 - 1.00 * o3) / 2.40` | — | Chosen orthogonal to the value weighting (dot product 0); if it ever drifts from that, value and hue trend together again. |
 | Inter-octave rotation | `:53` `mat2(0.80, 0.60, -0.60, 0.80)` | ~37° | Keeps the simplex lattice axes from lining up across octaves. No reason to touch it. |
+| Warp amplitude | `:74` `kWarpAmplitude` | `0.05` | Peak texture displacement in fields, applied before the `fract()` in both shaders. The only knob for how much the 1-field repeat is broken; ladder in §17. |
+| Warp frequency | `:73` `kWarpFrequency` | `0.55` | Cycles per field, per the antiphase rule. Do not raise — it changes the spatial scale of the wobble, not the exchange rate between repeat-breaking and distortion (§17). |
 
 Frequencies are in **cycles per field**, because the input `var_texture_position` is world position
 in field units (§1). So wavelength in fields is `1 / f`, and a patch "N fields across" is `f = 1/N`.
@@ -538,9 +540,68 @@ this document:
 - *Tonal uniformity* — flat, dead colour over large areas. Value noise fixes this, and is the
   feature we now have. It wants an amplitude around 0.15-0.25 on this evidence, not 0.07.
 - *Pattern repetition* — the 64 px wallpaper lattice. Needs the sampled texel to change, not its
-  brightness. Cheapest next experiment is **domain warping**: perturb `var_texture_position` by a
-  small noise offset *before* the `fract()` in both shaders, which distorts the pattern itself and
-  stays a shader-only change. Risk is wobbling hard-edged terrains such as cobble, so it likely
-  wants a small amplitude and possibly per-terrain control (Phase 3). The other routes are per-tile
-  texture variants (rejected in the ideas doc §2.3, it breaks UV continuity) and the scatter layer
-  (ideas doc §2.6), which sidesteps the problem by covering the ground.
+  brightness. Carried out as **domain warping** in §17 and committed at a global amplitude of 0.05.
+
+## 17. Domain warping: the repeat, attacked at the sampling stage
+
+**What was done.** `terrain_warp()` in the shared file perturbs `var_texture_position` by a small
+noise offset *before* the `fract()` in both `terrain.fp` and `dither.fp`, so the sampled texel
+moves instead of its brightness. Two dedicated `snoise` calls give independent x and y
+displacements; reusing the value/tint octaves would couple the warp to the colour variation and
+make it anisotropic. Frequency 0.55 follows the §5 antiphase rule. The colour variation keeps the
+**unwarped** position, so value and tint stay locked to world space.
+
+**The exchange rate, stated before measuring.** Repeat-breaking needs the warp to differ by a
+meaningful fraction of the one-field texture period between two points one field apart; visible
+distortion is the local *gradient* of the warp. Both scale as `A·f`, so changing `f` only changes
+the spatial scale of the wobble, not the exchange rate. Shifting adjacent tiles by half a texture
+period — what it would take to actually hide the repeat — implies a local gradient near 0.5, i.e.
+~50% local stretch, which reads as melting. Prediction: warping **softens** the repeat at tolerable
+distortion rather than removing it.
+
+**The ladder**, 0.02 / 0.05 / 0.10 / 0.20 at `kWarpFrequency = 0.55`, on:
+
+- Finnish Lakes cobble/steppe at zoom 0.5, view 2288,1266 — the steppe block is this map's worst
+  case for distortion (the "cobble" of earlier sections; no cobble terrain exists, the steppe
+  texture is the small-stone one). Note for reproducibility: the §16 region was measured at a
+  steppe-centred view whose coordinates were never recorded; view 640,640 does not reach steppe.
+- Atoll open water at zoom 1, view 640,640 — the most visibly repeating surface (§16), and highly
+  structured.
+- Metric: high-pass (box blur, radius ~half a field) then normalised autocorrelation at a 1-field
+  lag over a terrain-only region, exactly as in §16. Baseline lag sweep still peaks at 1 and 2
+  fields (0.098 / 0.089 on steppe) with near-zero in between, so the metric still tracks the
+  tiling. The §16 baseline of 0.0618 was measured on the unrecorded region; our region yields
+  0.0976, and the *comparison across the ladder* is what matters.
+- Distortion: numerical gradient of the warp field; "stretch" = max |∇warp| in texels per texel.
+
+| amplitude | steppe 1-field lag (x / y) | water 1-field lag (x / y) | max stretch | mean stretch |
+|---|---|---|---|---|
+| baseline | 0.0976 / 0.0685 | 0.1721 / 0.1591 | — | — |
+| 0.02 | 0.0617 / 0.0460 | 0.1096 / 0.0936 | 8% | 4% |
+| 0.05 | 0.0365 / 0.0295 | 0.0617 / 0.0537 | 20% | 10% |
+| 0.10 | 0.0224 / 0.0158 | 0.0223 / 0.0186 | 40% | 21% |
+| 0.20 | 0.0114 / 0.0199 | 0.0053 / -0.001 | 81% | 41% |
+
+**Result.** The mechanism works, and the exchange rate is more favourable than the derivation
+predicted: 8% worst-case stretch (amp 0.02) already cuts the repeat metric by ~1.6x, because the
+1-field-lag correlation is sensitive to even small displacements. At 0.05 the repeat drops ~2.7x
+on steppe and ~2.8x on water for a worst-case stretch of 20%. The plan's lock-in is nonetheless
+confirmed at the top of the ladder: 0.20 is melting (90% of pixels over 25% stretch) and 0.10 is
+wobbly on structured textures (a quarter of pixels over 25%). The residual correlation at high
+amplitude is the warp's own antiphase structure, not the texture repeat.
+
+**Verdict: committed globally at `kWarpAmplitude = 0.05`** (outcome (a) of the experiment plan).
+Water keeps the strongest visible repeat at that amplitude (0.062 vs 0.172 baseline) and is the
+terrain most likely to want per-terrain strength later; the Phase 3 plumbing is the fallback if
+the dedicated water work (§12) slips.
+
+**Safety properties.** No atlas bleeding — the warp only changes the value inside the existing
+`clamp(..., MARGIN, 1-MARGIN)`. Seams stay seamless — the warp is a pure function of world
+position, so the warped UV is continuous across triangle boundaries. Dither alignment — both
+programs include the same file and evaluate the same world position; the coastline and
+terrain-boundary captures at 0.05 show no border seam. No LOD trouble — there is no mipmapping
+(`texture.cc`, `GL_LINEAR`). Determinism — a re-capture at 0.05 compares byte-identical.
+
+**Cost.** Two more `snoise` per terrain fragment, 3 → 5 (~200 → ~330 instructions, §7). Still no
+config toggle (Phase 2). Roads (`road.fp`) sample their own texture with their own UV and are
+unaffected.

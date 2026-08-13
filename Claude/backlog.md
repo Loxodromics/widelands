@@ -159,6 +159,11 @@ sub-items:
       the land amplitude is the one we want on land, so water goes to the dedicated water work
       (ideas doc §6) and Phase 3 is the fallback if that slips. Snow/lava/meadow may still want
       different values. The single-entry-point structure makes this a one-file change.
-- [ ] **Domain warping** — the only route at the repetition defect itself (§16). Perturb
+- [x] **Domain warping** — the only route at the repetition defect itself (§16). Perturb
       `var_texture_position` before the `fract()` in both shaders; single-entry-point structure
-      keeps it a one-file change. **Next** after 2/3 settle amplitudes.
+      keeps it a one-file change. **Closed 2026-08-13**, committed at `kWarpAmplitude = 0.05`
+      (f = 0.55, antiphase rule): the §16 repeat metric drops ~2.7x on steppe and ~2.8x on water
+      at 20% worst-case local stretch; full ladder in `TERRAIN_NOISE.md` §17. Residual: water still
+      reads as repeating at 0.05 — per-terrain warp strength (Phase 3) is the fallback if the
+      water work slips. Cost: 3 → 5 `snoise` per terrain fragment; still no config toggle
+      (Phase 2).
