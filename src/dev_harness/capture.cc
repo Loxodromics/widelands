@@ -66,12 +66,15 @@ void Capture::think(InteractiveBase& ibase) {
 		}
 		ibase.set_chrome_visible(!capture_options().clean_ui);
 		if (capture_options().clean_ui) {
-			// The editor turns grid and resource overlays on in its constructor
-			// (ui/editor/editorinteractive.cc), which would sit on top of whatever
-			// the capture is meant to show. Harmless in game mode, where both are
-			// already off.
+			// The editor turns grid and resource overlays on in its constructor and
+			// the build help on in map_changed() (ui/editor/editorinteractive.cc),
+			// all of which would sit on top of whatever the capture is meant to
+			// show. The build help in particular puts a symbol on nearly every
+			// field, i.e. exactly the lattice terrain work is judged against.
+			// Harmless in game mode, where all three are already off.
 			ibase.set_display_flag(InteractiveBase::dfShowGrid, false);
 			ibase.set_display_flag(InteractiveBase::dfShowResources, false);
+			ibase.set_display_flag(InteractiveBase::dfShowBuildhelp, false);
 		}
 		settle_frames_left_ = capture_options().settle_frames;
 		state_ = State::kSettling;
