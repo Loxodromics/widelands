@@ -88,6 +88,11 @@ public:
 	// Requests a screenshot being taken on the next frame.
 	void screenshot(const std::string& fname);
 
+	// True while a requested screenshot has not been written to disk yet.
+	[[nodiscard]] bool screenshot_pending() const {
+		return !screenshot_filename_.empty();
+	}
+
 private:
 	[[nodiscard]] int get_display_at(int x, int y) const;
 	void move_to_display(int display);

@@ -24,6 +24,7 @@ wl_library(wui_interactive
   DEPENDS
     ui_basic
     logic_map_objects
+    dev_harness_capture
     graphic_fonthandler
     ui_game_map_object_windows
     wui_minimap

@@ -226,6 +226,10 @@ public:
 		return &map_view_;
 	}
 
+	// Hides or shows the toolbar and the info panel. Used for screenshot
+	// captures that should show the map without the surrounding chrome.
+	void set_chrome_visible(bool visible);
+
 	void info_panel_fast_forward_message_queue();
 
 	// This function should return true only in EditorInteractive

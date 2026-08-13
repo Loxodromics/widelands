@@ -67,6 +67,7 @@ wl_library(logic_game_controller
   DEPENDS
     ai
     base_times
+    dev_harness_options
     logic
     commands
     logic_game_settings

@@ -22,6 +22,7 @@
 
 #include "ai/computer_player.h"
 #include "commands/command.h"
+#include "dev_harness/options.h"
 #include "logic/game.h"
 #include "logic/player.h"
 #include "logic/playersmanager.h"
@@ -48,7 +49,7 @@ SinglePlayerGameController::~SinglePlayerGameController() {
 
 void SinglePlayerGameController::think() {
 	uint32_t const curtime = SDL_GetTicks();
-	int32_t frametime = curtime - lastframe_;
+	int32_t frametime = DevHarness::fixed_timestep_or(curtime - lastframe_);
 	lastframe_ = curtime;
 
 	// prevent crazy frametimes
@@ -59,6 +60,19 @@ void SinglePlayerGameController::think() {
 	}
 
 	frametime = frametime * real_speed() / 1000;
+
+	// Capture support (see Claude/DEV_HARNESS.md): freeze the simulation at the
+	// first logic tick at or after the requested capture time. With the fixed
+	// timestep the sequence of reached game times is reproducible, and freezing
+	// here on the logic thread keeps the freeze point independent of frame
+	// timing. The previous tick has been fully processed by the command queue
+	// when the UI thread observes the freeze, so the captured scene is stable.
+	if (DevHarness::capture_enabled() && !DevHarness::capture_frozen() &&
+	    game_.get_gametime().get() >= DevHarness::capture_options().capture_at) {
+		frametime = 0;
+		DevHarness::set_capture_frozen();
+		set_desired_speed(0);
+	}
 
 	time_ = game_.get_gametime() + Duration(frametime);
 

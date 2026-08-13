@@ -29,6 +29,7 @@
 #include "base/multithreading.h"
 #include "base/string.h"
 #include "base/time_string.h"
+#include "dev_harness/capture.h"
 #include "economy/flag.h"
 #include "economy/road.h"
 #include "economy/waterway.h"
@@ -475,6 +476,11 @@ bool InteractiveBase::has_workarea_preview(const Widelands::Coords& coords,
 
 void InteractiveBase::set_toolbar_imageset(const ToolbarImageset& imageset) {
 	toolbar_.change_imageset(imageset);
+}
+
+void InteractiveBase::set_chrome_visible(const bool visible) {
+	info_panel_.set_visible(visible);
+	toolbar_.set_visible(visible);
 }
 
 UniqueWindowHandler& InteractiveBase::unique_windows() {
@@ -989,6 +995,8 @@ void InteractiveBase::think() {
 	}
 
 	plugin_actions_.think();
+
+	DevHarness::Capture::instance().think(*this);
 }
 
 double InteractiveBase::average_fps() const {

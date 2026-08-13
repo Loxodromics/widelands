@@ -50,6 +50,7 @@
 #include "base/wexception.h"
 #include "build_info.h"
 #include "config.h"
+#include "dev_harness/options.h"
 #include "graphic/default_resolution.h"
 #include "graphic/font_handler.h"
 #include "graphic/graphic.h"
@@ -1886,6 +1887,89 @@ void WLApplication::handle_commandline_parameters() {
 			                     ("Value for command line parameter --difficulty must be positive."));
 		}
 		scenario_difficulty_ = d;
+	}
+
+	// Deterministic screenshot capture for the dev harness
+	// (Claude/DEV_HARNESS.md). The capture switches are only meaningful for
+	// direct game starts from the command line.
+	if (OptionalParameter capture = get_commandline_option_value("capture");
+	    capture.has_value()) {
+		if (game_type_ != GameType::kScenario && game_type_ != GameType::kLoadGame &&
+		    game_type_ != GameType::kEditor) {
+			throw ParameterError(CmdLineVerbosity::None,
+			                     ("Command line parameter --capture can only be used with "
+			                      "--scenario=..., --loadgame=... or --editor"));
+		}
+		DevHarness::enable_capture(*capture);
+	}
+
+	if (OptionalParameter step = get_commandline_option_value("fixed-timestep");
+	    step.has_value()) {
+		if (!DevHarness::parse_fixed_timestep(*step)) {
+			throw ParameterError(
+			   CmdLineVerbosity::None,
+			   format(_("Invalid value for command line parameter --fixed-timestep=%s: "
+			            "expected a non-negative number of milliseconds."),
+			          step.value()));
+		}
+	}
+
+	if (DevHarness::capture_enabled()) {
+		// A fixed timestep keeps the reached game time (and with it the
+		// captured animation phases) reproducible. Default to one logic tick
+		// per tick unless the user overrode the value above.
+		DevHarness::set_capture_mode_defaults();
+
+		if (OptionalParameter at = get_commandline_option_value("capture-at"); at.has_value()) {
+			if (!DevHarness::parse_capture_at(*at)) {
+				throw ParameterError(
+				   CmdLineVerbosity::None,
+				   format(_("Invalid value for command line parameter --capture-at=%s: "
+				            "expected a non-negative number of milliseconds."),
+				          at.value()));
+			}
+		}
+		if (OptionalParameter view = get_commandline_option_value("capture-view");
+		    view.has_value()) {
+			if (!DevHarness::parse_capture_view(*view)) {
+				throw ParameterError(
+				   CmdLineVerbosity::None,
+				   format(_("Invalid value for command line parameter --capture-view=%s: "
+				            "expected <x>,<y>,<zoom>."),
+				          view.value()));
+			}
+		}
+		if (check_commandline_flag("capture-show-ui")) {
+			// The info panel draws real-time-dependent content, so keeping the
+			// chrome makes the capture differ between runs. Allowed, but warn.
+			DevHarness::set_clean_ui(false);
+			log_warn("--capture-show-ui: captures including the toolbar and info panel are not "
+			         "reproducible between runs\n");
+		}
+		if (game_type_ == GameType::kEditor && DevHarness::capture_options().capture_at > 0) {
+			throw ParameterError(
+			   CmdLineVerbosity::None,
+			   ("The game time never advances in the editor, so --capture-at can only be used "
+			    "with --scenario or --loadgame."));
+		}
+	} else {
+		// Reject capture sub-switches without --capture instead of silently
+		// treating them as config overrides.
+		if (get_commandline_option_value("capture-at").has_value()) {
+			throw ParameterError(CmdLineVerbosity::None,
+			                     ("Command line parameter --capture-at can only be used with "
+			                      "--capture."));
+		}
+		if (get_commandline_option_value("capture-view").has_value()) {
+			throw ParameterError(CmdLineVerbosity::None,
+			                     ("Command line parameter --capture-view can only be used with "
+			                      "--capture."));
+		}
+		if (check_commandline_flag("capture-show-ui")) {
+			throw ParameterError(CmdLineVerbosity::None,
+			                     ("Command line parameter --capture-show-ui can only be used with "
+			                      "--capture."));
+		}
 	}
 
 	if (OptionalParameter val = get_commandline_option_value("script"); val.has_value()) {

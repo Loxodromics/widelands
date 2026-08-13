@@ -85,6 +85,7 @@ add_subdirectory(ai)
 add_subdirectory(base)
 add_subdirectory(chat)
 add_subdirectory(commands)
+add_subdirectory(dev_harness)
 add_subdirectory(economy)
 add_subdirectory(editor)
 add_subdirectory(game_io)
@@ -121,6 +122,7 @@ wl_library(widelands_ball_of_mud
     base_random
     base_time_string
     build_info
+    dev_harness_options
     graphic
     graphic_fonthandler
     graphic_functions

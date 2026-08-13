@@ -120,6 +120,37 @@ void fill_parameter_vector() {
 	    _("n"),
 	    /** TRANSLATORS: `n` references a numerical placeholder */
 	    _("Start the scenario with difficulty `n`. Only valid with --scenario."), false},
+	   {"", "capture", _("FILENAME"),
+	    _("Capture a deterministic screenshot of the map to a file named `FILENAME` in the "
+	      "screenshots directory of the home directory (--homedir). Only valid with --scenario, "
+	      "--loadgame, or --editor. The Claude/wl.py driver script moves the file to the requested "
+	      "location."),
+	    false},
+	   {"", "capture-at",
+	    /** TRANSLATORS: A placeholder for a time value in milliseconds */
+	    _("ms"),
+	    _("Freeze and capture at the given game time in milliseconds (default: 0, the game start). "
+	      "This is a lower bound: the capture happens at the first logic tick at or after this "
+	      "time, and loading a map advances the game time in bulk, so an early requested time can "
+	      "be overshot by seconds. The game time actually captured is written to the log. "
+	      "Only valid with --capture."),
+	    false},
+	   {"", "capture-view", _("x,y,zoom"),
+	    _("Position the view with the top-left corner at the given map pixel and the given zoom "
+	      "level before capturing. Only valid with --capture."),
+	    false},
+	   {"", "capture-show-ui", "",
+	    _("Keep the toolbar and the info panel in the capture. They are hidden by default because "
+	      "the info panel draws real-time dependent content, which makes captures differ between "
+	      "runs. Only valid with --capture."),
+	    false},
+	   {"", "fixed-timestep",
+	    /** TRANSLATORS: A placeholder for a time value in milliseconds */
+	    _("ms"),
+	    _("Advance the game time by a fixed number of milliseconds per logic tick instead of "
+	      "deriving it from the wall clock, making the reached game time reproducible. "
+	      "Capture mode enables this with a default of 50 ms. Use 0 to disable."),
+	    false},
 	   /// Misc
 	   {"", "nosound", "", _("Start the game with sound disabled."), false},
 	   {"", "shuffle", "", _("Start the game with shuffle mode for playback of songs"), true},

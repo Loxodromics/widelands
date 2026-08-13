@@ -1,0 +1,24 @@
+wl_library(dev_harness_options
+  SRCS
+    options.cc
+    options.h
+  DEPENDS
+    base_geometry
+    base_math
+)
+
+wl_library(dev_harness_capture
+  SRCS
+    capture.cc
+    capture.h
+  DEPENDS
+    base
+    dev_harness_options
+    graphic
+    io_filesystem
+    logic
+    logic_filesystem_constants
+    logic_game_controller
+    wui_interactive
+    wui_main_ui
+)
