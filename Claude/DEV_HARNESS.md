@@ -126,8 +126,12 @@ few small call-outs in upstream files.
 | `--fixed-timestep=<ms>` | Advance gametime by a fixed amount per logic tick; capture mode defaults it to 50 |
 
 Valid with `--scenario`, `--loadgame`, `--editor` (like `--script`); everything else is rejected at
-parse time, as is `--capture-at` > 0 with `--editor` (the editor's gametime never advances). The
-sub-switches require `--capture`.
+parse time, as is `--capture-at` > 0 with `--editor`. Note on the editor: it has no game controller,
+so the simulation cannot be frozen by one — but its gametime *does* advance, by wall clock in
+`EditorInteractive::think()`. That drives the frame animation of water and immovables, which would
+make editor captures non-reproducible, so capture mode pins the editor's gametime instead (same
+mechanism as the overlay cleanup: gated on capture mode, `editorinteractive.cc`). The sub-switches
+require `--capture`.
 
 ### `--capture-at` is a lower bound
 

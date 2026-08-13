@@ -1,0 +1,350 @@
+# Terrain Variation: Layered Simplex Noise
+
+Design for breaking up the visible repetition in terrain rendering, using procedural noise
+evaluated in the fragment shader rather than a baked overlay texture.
+
+Companion documents: `RENDERER.md` (how the renderer is put together),
+`widelands-visual-fidelity-ideas.md` (the wider brainstorm this was selected from).
+
+---
+
+## 1. The defect, stated precisely
+
+Terrain UVs are a **world-space projection**, not per-tile coordinates. In
+`fields_to_draw.cc:145-148`:
+
+```cpp
+Vector2f map_pixel = MapviewPixelFunctions::to_map_pixel_ignoring_height(f.geometric_coords);
+f.texture_coords.x =  map_pixel.x / Widelands::kTextureSideLength;
+f.texture_coords.y = -map_pixel.y / Widelands::kTextureSideLength;
+```
+
+with `kTextureSideLength = 64` (`terrain_description.h:36`), and a load-time check that rejects
+any terrain texture that is not exactly 64x64 (`terrain_description.cc:242`). The isometric
+constants are `kTriangleWidth = 64`, `kTriangleHeight = 32`
+(`ui/wui/mapviewpixelconstants.h:27-29`).
+
+Substituting `map_pixel.x = 64 * fx + 32 * (fy & 1)` and `map_pixel.y = 32 * fy` gives the
+texture coordinate at a node:
+
+```
+u =  fx + 0.5 * (fy & 1)
+v = -fy / 2
+```
+
+Three consequences follow, and they drive every decision below.
+
+**(a) The repetition period is one field wide and two rows tall** — a 64x64 pixel lattice on
+screen at zoom 1. The tiling is *seamless* (adjacent triangles of the same terrain are
+continuous, because the UV is a continuous function of world position), but the period is small
+enough that the eye reads it as wallpaper. This, not the absence of shading, is the dominant
+cause of the flat look. Terrain is already Gouraud-shaded from a real surface normal
+(`field.cc:29-83`, interpolated via `attr_brightness` in `terrain.vp:4` and `terrain.fp:24`).
+
+**(b) The noise input coordinate is, to within a half-field offset, the field coordinate
+itself.** `u` counts fields, `v` counts half-rows. This is convenient: frequency `f` in that
+space has wavelength `1/f` *fields*, so parameters read directly as "patches N fields across".
+
+**(c) The coordinate space is isotropic in screen pixels.** Both `u` and `v` are divided by the
+same constant 64, and `map_pixel` is already in screen pixels. So `snoise(uv)` yields round
+blobs on screen, not blobs stretched along the isometric axes. No aspect correction is needed.
+
+## 2. Why a shader, not a texture
+
+The doc's §2.4 proposed a tileable grunge texture multiplied over the terrain. Against this
+renderer, procedural noise is strictly better:
+
+- **No atlas problem.** Terrain textures must land in the *first* texture atlas, and this is
+  asserted at startup (`build_texture_atlas.cc:113-159`, "Not all images that should fit in the
+  first texture atlas did actually fit"). A separate noise texture would need its own texture
+  unit and its own `GL_REPEAT` wrap mode — `Texture` currently sets `GL_CLAMP_TO_EDGE`
+  unconditionally (`texture.cc`), so it would need a parameter. Doable, but it is real plumbing.
+- **A tiled texture reintroduces a period**, just a longer one. The whole point is to remove
+  periodicity.
+- **Non-repeating detail at any frequency**, tunable by editing a constant instead of
+  regenerating an asset.
+
+The cost is ALU per fragment, quantified in §7.
+
+## 3. Noise choice
+
+**2D simplex, the Ashima Arts / Ian McEwan implementation** (`webgl-noise`). Reasons:
+
+- Pure float math — `floor`, `fract`, `dot`, `max`, `abs`, `step`. No bitwise operators, no
+  integer ops, no texture lookups. We target **GLSL 1.20** (`initialize.cc:44-45,260-261`; every
+  shader in `data/shaders/` opens with `#version 120`), which has none of those. Function
+  overloading on `vec2`/`vec3` is available in 1.20, so the `mod289` overloads are fine.
+- MIT licensed, which is GPL-compatible. The attribution header must be kept in the file.
+- The Simplex patent covered 3D and higher and expired in 2022 in any case.
+
+Value noise would be cheaper but has visible axis-aligned artefacts, which is exactly the
+failure mode we are trying to remove.
+
+## 4. Per-fragment or per-vertex
+
+Both are viable and the choice is worth making deliberately.
+
+| | Per-vertex (in `terrain.vp`, interpolated) | Per-fragment (in `terrain.fp`) |
+|---|---|---|
+| Evaluations/frame | one per visible node, a few thousand | one per terrain pixel, ~2M at 1080p |
+| Frequency limit | wavelengths >> 1 field only | any |
+| C++ changes | none | none |
+| Iteration | same | same |
+
+Per-vertex is nearly free, but it samples the noise on the field lattice — the exact lattice
+whose visibility is the problem. Any octave with a wavelength near one field would alias into
+that lattice, so the octave that does the most useful work is the one it cannot represent.
+
+**Decision: per-fragment.** Keep per-vertex in reserve as the low-spec fallback (§7), where
+dropping the finest octave is acceptable anyway.
+
+## 5. Layering
+
+Three octaves, with a rotation applied between each so the simplex lattice axes never line up
+across octaves:
+
+```glsl
+// ~37 degrees; any angle that is not a multiple of 30 will do.
+const mat2 kOctaveRotation = mat2(0.80, 0.60, -0.60, 0.80);
+```
+
+| Octave | Frequency | Wavelength | Role |
+|---|---|---|---|
+| 1 | 0.09 | ~11 fields | Regional patchiness: a dry stretch, a lush stretch. The AoE "this area differs from that area" read. |
+| 2 | 0.21 | ~4.8 fields | Mid-scale mottling. |
+| 3 | 0.55 | ~1.8 fields | Directly disrupts the 1-field lattice. This is the octave that fixes the stated defect. |
+
+Amplitudes 1.0 / 0.5 / 0.25, normalised by their sum. Standard fBm gain of 0.5 with lacunarity
+around 2.3.
+
+Calibration note from the references: in `referenceImages/AoE2_0.png` the grass variation is
+dominated by the *large* scales — patches many tiles across — with fine detail supplied by
+scattered clutter rather than by the ground texture. If in doubt, weight octave 1 higher rather
+than octave 3. Getting the frequency balance right is most of the work here; the code is the
+easy part.
+
+## 6. What gets modulated
+
+**Phase 1 — value only.** A multiplicative brightness factor, which composes correctly with the
+existing shading and with fog of war:
+
+```glsl
+float n = terrain_fbm(var_texture_position);        // approx [-1, 1]
+clr.rgb *= var_brightness * (1.0 + kValueAmplitude * n);
+```
+
+Starting point `kValueAmplitude = 0.07` (+/-7%). Much beyond 0.10 stops reading as terrain
+variation and starts reading as mould.
+
+**Deviations from this document, agreed at implementation time:**
+
+1. The original Phase 1 was "shader only, no C++". Editor captures are the only way to see a whole
+   map without fog of war, and `ui/editor/editorinteractive.cc:190-191` unconditionally sets
+   `dfShowGrid | dfShowResources` after construction, overriding config. A grid on exactly the
+   lattice we are trying to disrupt makes the result unjudgeable, so a small harness change was
+   included: capture mode clears both flags (`src/dev_harness/capture.cc`). It lands in the dev
+   harness, not the renderer, so the *rendering* change is still pure data.
+2. `dither.fp` was supposed to wait for Phase 1b. Leaving it out puts a brightness seam along every
+   terrain border, competing with the effect during parameter tuning. The noise function is
+   duplicated into `dither.fp`, marked as temporary; Phase 1b removes the duplication via the shared
+   `noise.glsl` and the `#include` mechanism (see §8).
+
+A third finding during implementation: the editor's gametime advances by wall clock
+(`EditorInteractive::think()`), so animated water and immovables made editor captures
+non-reproducible. Capture mode now pins the editor gametime (same harness change as deviation 1).
+See "Phase 1 results".
+
+**Phase 1b — a warm/cool axis.** A pure brightness multiply reads as *lighting*, not as
+*material*. Real ground variation shifts hue as well: drier patches are yellower, shaded growth
+is cooler and greener. A second field driving a small tint fixes this cheaply:
+
+```glsl
+clr.rgb *= mix(vec3(1.0), kWarmTint, kTintAmplitude * t);   // kWarmTint = vec3(1.06, 1.00, 0.92)
+```
+
+With `t` in [-1, 1] the `mix` extrapolates below zero, giving a cool shift on one side and a warm
+shift on the other from a single term. Starting point `kTintAmplitude = 0.4`.
+
+To avoid a second full fBm evaluation, derive `t` from a different weighting of the same three
+octaves rather than sampling a fresh offset field. The two outputs are then correlated rather
+than independent, which is a real if minor compromise — value and hue will trend together. If
+that reads badly, a fourth octave sampled at an offset costs one more `snoise` call.
+
+## 7. Cost, and the low-spec question
+
+The Ashima 2D simplex is roughly 60-70 GPU instructions. Three octaves plus the plumbing is on
+the order of 200 instructions per fragment. Full-screen terrain at 1920x1080 is ~2.07M
+fragments, so ~420M instructions per frame, ~12.6 G/s at the 30 FPS cap
+(`kDrawDelay = 1000/30`, `panel.cc:200`).
+
+Overdraw is not a concern: terrain base is drawn opaque with `BlendMode::Copy` and a depth test
+(`game_renderer.cc`, `render_queue.cc:214`), so each pixel is shaded once, plus the dither pass
+over transition triangles only.
+
+On anything from roughly the last decade this is not measurable — an Intel HD 4000 is around 300
+GFLOPS. On the genuinely old hardware that the deliberate GL 2.1 target implies, it is not free.
+Widelands targets 2.1 for compatibility on purpose, so **a config toggle belongs in phase 2**,
+not as an afterthought. The per-vertex variant from §4 is the natural "low" setting.
+
+## 8. The dither pass must match
+
+`DitherProgram` repaints transition triangles with the neighbouring terrain's texture, masked by
+the dither alpha (`dither.fp:16-24`). It carries the *same* `var_texture_position` varying, so
+applying the identical noise function there yields the identical value at the same world
+position — which is exactly what correctness requires. Omit it and every terrain border gets a
+visible discontinuity in the variation.
+
+GLSL 1.20 has no `#include`, so the function has to be shared somehow. `Program::build`
+(`gl/utils.cc:146-148`) reads each stage as a `std::string` before compiling:
+
+```cpp
+std::string fragment_shader_source = read_file("shaders/" + program_name + ".fp");
+```
+
+A single-level textual `#include` expansion in `read_file` is about 15 lines and lets
+`terrain.fp` and `dither.fp` both pull in a shared `data/shaders/noise.glsl`. That is the right
+answer and it pays off for every shader we touch afterwards.
+
+**Current state:** `dither.fp` carries a byte-identical duplicate of the noise block from
+`terrain.fp` (plus a TODO pointing here), so terrain borders are continuous in Phase 1. Removing
+that duplicate by landing `noise.glsl` + the `#include` expansion is the concrete Phase 1b task —
+the duplication is temporary and deliberately so.
+
+## 9. Interactions checked
+
+**Zoom and aliasing.** Zoom range is 1/4 to 4 with `scale = 1/zoom`, so a field spans between 16
+and 256 screen pixels. The finest octave has a wavelength of ~1.8 fields, i.e. ~29 screen pixels
+at maximum zoom-out. Aliasing would need it under ~4 pixels, so we have an order of magnitude of
+headroom and **no `fwidth`-based octave fading is required**. Worth revisiting only if the zoom
+range widens or a much finer octave is added.
+
+**Fog of war.** FoW is applied as a per-node brightness override
+(`interactive_player.cc:66-87`, `:552`), so the noise multiplies on top and needs no special
+case. Unexplored fields have brightness 0, where the noise is invisible by construction.
+
+**Torus wrap.** `texture_coords` derives from `geometric_coords`, which is *not* normalised
+(`fields_to_draw.cc:145-148`; normalisation happens separately at `:150-152` for `fcoords`). So
+the noise coordinate increases monotonically as you scroll and never wraps — there is no seam.
+The residual artefact is that a field visible *twice at once* would show different variation in
+each copy while its terrain texture matches. That needs the map to be narrower than the
+viewport, which is reachable: a 64-field map is 4096 world pixels wide against 7680 visible at
+maximum zoom-out.
+
+If it turns out to matter, periodic simplex on normalised coordinates fixes it exactly. All map
+dimensions are multiples of 16 (`map.h:57-59`), so the period `(W, H/2)` is always a whole number
+of lattice cells and the `0.5 * (fy & 1)` row offset is preserved across the wrap. Not worth
+doing up front.
+
+**Determinism.** The noise is a pure function of world position, so captures stay byte-identical
+and `wl.py --compare` keeps working.
+
+**Unaffected.** Minimap (`minimap_renderer.cc` uses averaged terrain colours), workarea overlays
+(`workarea.fp` is a flat colour), the height heat map (a separate `FillRectProgram` path), and
+the editor's terrain picker (raw texture thumbnails).
+
+**Roads** sample their own texture with their own UV (`road.fp`), so they stay clean while the
+ground around them varies. Probably fine — roads are worn surfaces — but it is a thing to look
+at in the first captures.
+
+## 10. Phasing
+
+**Phase 1 — shader only, no C++.** Add simplex plus a three-octave fBm to `terrain.fp`,
+brightness modulation only, constants hard-coded. Evaluate on real scenes. Revert cost is
+`git checkout data/shaders/terrain.fp`.
+
+**Done 2026-08-13**, with the two deviations folded into §6: a capture-mode harness change
+(clean editor overlays, pinned editor gametime) and the temporary duplicate in `dither.fp`.
+Parameter values as designed: amplitude 0.07, frequencies 0.09 / 0.21 / 0.55 with the 37°
+rotation. Results in "Phase 1 results".
+
+**Phase 1b — get it right.** Add the warm/cool axis. Add the `#include` expansion to
+`Program::build` and wire `dither.fp` to the shared `noise.glsl`, removing the temporary
+duplicate.
+
+**Phase 2 — make it controllable.** Amplitudes as uniforms, plus a config option so it can be
+switched off. `scale` is already carried in `terrain_arguments` (`game_renderer.cc`) but is not
+currently passed down to `TerrainProgram::draw` (`render_queue.cc:266`), so any zoom-dependent
+uniform needs that plumb-through first.
+
+**Phase 3 — per terrain type, only if needed.** A single global amplitude will not suit snow,
+lava, water and meadow equally. Terrain type is a per-triangle property, and the program already
+replicates a per-triangle value to all three vertices (`texture_offset`,
+`terrain_program.cc:110-125`), so an `attr_noise_amplitude` follows the identical pattern at 4
+bytes per vertex, fed from a new optional field in the Lua terrain definitions. Do not start
+here — decide it from screenshots.
+
+## 11. Verification
+
+The harness gives deterministic capture (`Claude/wl.py`, `DEV_HARNESS.md`), but everything so
+far is validated against `plain.wmf`, which exercises almost none of this. **Backlog item 1.7
+(scene catalog) is a prerequisite in practice**, not because comparison is automated — judging
+this is eyeballing, not pixel diffing — but because we need a scene containing meadow, steppe,
+desert, water, mountain and some real slopes to judge *against*.
+
+Capture each scene at zoom 1, 2 and 0.5. Note that this changes every terrain pixel, so all
+existing terrain baselines are invalidated by design and need recapturing once the parameters
+settle.
+
+## 12. Open questions
+
+- Does the large-scale octave fight the existing per-terrain art, which already carries its own
+  baked colour variation? Possible that octave 1 wants to be weaker than the AoE reference
+  suggests. — **Measured, not settled.** At zoom 2.0 the octave-1-scale component is 5-7% of the
+  difference image's variance (it is dominated by texture-grain-scale modulation instead); the
+  large patches are present but subtle. Whether they fight the baked variation is an eyeball call
+  on the Phase 1 captures — still open.
+- Water is a terrain like any other and is already frame-animated (33 frames at 14 fps,
+  `data/world/terrains/summer/water/init.lua`). Static positional noise on top of animated water
+  may read as dirt on the screen. — **Open, with data.** Water receives the full amplitude
+  (measured mean per-pixel change on Finnish Lakes: 7.8 vs 2.2 on land, in 8-bit sum-of-absolute
+  RGB deltas — proportional to water being brighter). Whether it reads as dirt is a visual call;
+  this is the evidence for Phase 3 (per-terrain amplitude), not for a Phase 1 fix.
+- Does the variation survive at zoom 4 (zoomed out), where a field is 16 pixels and the player is
+  looking at regional structure rather than ground texture? That is the view where octave 1
+  should be doing the most work. — **Partially answered.** At zoom 2.0 (field 32 px) the variation
+  is present at mean |ΔL| ≈ 4-6. Zoom 4.0 was not part of the capture matrix; the octave-1 share
+  at 2.0 (5-7%, see above) suggests it survives but does not dominate. Add a zoom-4 view to the
+  next capture round if this matters.
+
+## 13. Phase 1 results
+
+Landed as planned in §10 plus the §6 deviations. The capture matrix ran on four maps
+(`Finnish_Lakes`, `The_Nile`, `Dolomites`, `Glacier_Lake`) at zooms 0.5 / 1.0 / 2.0, editor mode,
+view 640,640, deterministic (two runs per map byte-identical; `wl.py --compare`).
+
+**What the captures showed:**
+
+- The shaders compile (any capture succeeding after the change proves it; a GLSL error throws at
+  program build during graphics init).
+- The effect is everywhere and subtle-to-moderate: 60-92% of pixels change per view; per-pixel
+  |ΔL| up to ±12 with the mean near zero (−0.1 to −2.4, slight darkening bias from the fBm not
+  being perfectly symmetric). Nothing suggests the "mould" failure mode at 0.07.
+- At the pixels where the baseline texture repeated exactly (the wallpaper symptom, texel pairs
+  matching at lag 64), the noise version now differs by ~1.2 mean luminance — i.e. the repetition
+  envelope is changed, but whether the lattice *reads* is a judgement call on the captures. The
+  plan's tuning lever (bump octave 3, the direct lattice breaker) is available if it still reads.
+- Terrain borders showed no seam: `terrain.fp` and `dither.fp` carry the identical function and
+  the dither pass samples the same world position, so the values agree by construction (verified
+  as identical code text; the dither band changes with the rest of the terrain in the captures).
+- The editor-gametime problem this phase uncovered: `EditorInteractive::think()` advances
+  gametime by wall clock, so water and immovable animation made editor captures differ between
+  runs along every shoreline dither band (5.4% of pixels on Finnish Lakes at view 640,640; the
+  map interior was already deterministic). Capture mode now pins the editor gametime
+  (`editorinteractive.cc`, gated on `DevHarness::capture_enabled()`), which made all four maps
+  byte-identical across runs.
+- Water takes the full amplitude, see §12.
+
+**What got tuned:** nothing. The design parameters (0.07 / 0.09 / 0.21 / 0.55) survived the first
+look; the evidence did not give a clear direction, and the plan's tuning authority is the eyeball
+test. The numbers above say where to push if the captures say so: octave 3 up to break the
+lattice, octave 1's regional read was the subtle part at zoom 2.0.
+
+**What is now known that was not at design time:**
+
+- The editor's gametime claim in the original design (§10, and `capture.cc`) was wrong — it
+  advances by wall clock. Fixed in the harness, recorded in `DEV_HARNESS.md`.
+- The change is dominated by texture-grain-scale modulation (the product of per-pixel brightness
+  with the noise field), not by the octave structure — worth remembering when judging the
+  captures: the per-pixel texture shimmer is expected at this amplitude.
+- Roads (`road.fp`) and minimap are unaffected, as designed; whether roads now look "cleaner" than
+  their surroundings is on the eyeball list.

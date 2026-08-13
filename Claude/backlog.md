@@ -131,3 +131,17 @@ The harness earns its keep on the items that change pixels — the `Workareas` t
 with the existing build; add 1.7 and 1.4 when the work reaches something that moves pixels; fold in
 1.8 (render statistics) alongside the `RenderQueue` changes, since we will be in that file anyway.
 Grow the harness against real need rather than speculatively.
+
+### [ ] Terrain noise — phases 1b, 2, 3
+
+Phase 1 (value-only layered simplex in `terrain.fp`/`dither.fp`) landed 2026-08-13; design,
+parameter values and measured results in `TERRAIN_NOISE.md`, results section §13. Open sub-items:
+
+- [ ] **1b** — shared `data/shaders/noise.glsl` plus a single-level `#include` expansion in
+      `Program::build` (`gl/utils.cc`); removes the temporary duplicate in `dither.fp`. Also the
+      warm/cool tint axis.
+- [ ] **2** — config toggle and amplitudes as uniforms; needs `scale` plumbed into
+      `TerrainProgram::draw` (`render_queue.cc`).
+- [ ] **3** — per-terrain amplitude, only if the captures ask for it. Evidence so far: water takes
+      the full amplitude (measured on Finnish Lakes), which may read as dirt; snow/lava/meadow
+      will likely want different values.

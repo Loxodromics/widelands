@@ -47,3 +47,6 @@ gmon.out
 
 # Saveloading compatibility test cases
 /test/save/*
+
+# Third-party reference screenshots (copyrighted; must not be committed)
+/referenceImages/
