@@ -50,15 +50,21 @@ float snoise(vec2 v) {
 // Terrain variation. The input is var_texture_position, which is world position
 // in units of one field, so a frequency of 0.09 means "patches roughly 11 fields
 // across". See Claude/TERRAIN_NOISE.md.
+//
+// The 0.55 octave carries most of the amplitude deliberately. The repetition it
+// has to break has a period of exactly one field, and a wave separates two
+// points one period apart most strongly when its own wavelength is twice that -
+// about 0.5 cycles per field. Higher frequencies are worse, not better: at ~1.0
+// cycles per field adjacent tiles land back in phase.
 float terrain_fbm(vec2 p) {
 	// Rotate between octaves so the simplex lattice axes never line up.
 	mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
 	float sum = snoise(p * 0.09);
 	p = rot * p;
-	sum += 0.5 * snoise(p * 0.21);
+	sum += 0.50 * snoise(p * 0.21);
 	p = rot * p;
-	sum += 0.25 * snoise(p * 0.55);
-	return sum / 1.75;
+	sum += 1.20 * snoise(p * 0.55);
+	return sum / 2.70;
 }
 
 const float kValueAmplitude = 0.07;
