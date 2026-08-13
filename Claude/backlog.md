@@ -149,13 +149,16 @@ sub-items:
 - [x] **Amplitude decision** — resolved by the §16 ladder: `kValueAmplitude = 0.40` (was 0.07).
 - [x] **1b** — shared `terrain_variation.glsl` plus the single-level `#include` expansion in
       `Program::build` (`gl/utils.cc`); removes the temporary duplicate in `dither.fp`. Also the
-      warm/cool tint axis (`kTintAmplitude = 1.5`, tuned by capture).
+      warm/cool tint axis (`kTintAmplitude = 3.0`, tuned by two ladders — see `TERRAIN_NOISE.md`
+      §6; the first ladder's 1.5 sat near the 8-bit quantization floor on land).
 - [ ] **2** — config toggle and amplitudes as uniforms; needs `scale` plumbed into
       `TerrainProgram::draw` (`render_queue.cc`).
 - [ ] **3** — per-terrain amplitude, only if the captures ask for it. Evidence so far: water takes
-      the full amplitude (measured on Finnish Lakes), which may read as dirt; snow/lava/meadow
-      will likely want different values. The shared single-entry-point structure makes this a
-      one-file change when it comes.
+      the full value amplitude and about twice the land hue swing, and at the committed settings
+      the ocean reads as green patchiness. **Decided not to fix by tuning terrain noise down** —
+      the land amplitude is the one we want on land, so water goes to the dedicated water work
+      (ideas doc §6) and Phase 3 is the fallback if that slips. Snow/lava/meadow may still want
+      different values. The single-entry-point structure makes this a one-file change.
 - [ ] **Domain warping** — the only route at the repetition defect itself (§16). Perturb
       `var_texture_position` before the `fract()` in both shaders; single-entry-point structure
       keeps it a one-file change. **Next** after 2/3 settle amplitudes.

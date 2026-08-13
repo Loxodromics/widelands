@@ -198,13 +198,24 @@ octaves rather than sampling a fresh offset field. **Done 2026-08-13, and the de
 flagged in the original text did not materialise:** the value weighting is `(1.00, 0.50, 1.20)`
 normalised by 2.70 and the tint weighting `(1.00, 0.40, -1.00)` normalised by 2.40, whose dot
 product is `1.00 + 0.20 - 1.20 = 0`. With the three octaves roughly independent, the two outputs
-are then uncorrelated — value and hue do not trend together, at no extra `snoise` cost. Verified
-on captures: the per-pixel correlation between ΔL and Δ(R−B) is −0.33 on Finnish Lakes, matching
-the −0.345 that the terrain palette alone predicts (a warm shift raises luminance on sand and
-lowers it on blue water), so the residual is palette, not field correlation. `kTintAmplitude`
-tuned by a 0.4 / 0.8 / 1.5 ladder to **1.5**: 0.4 stayed below the 8-bit quantization floor
-(|Δ(R−B)| mean 0.5 of 255 codes), 1.5 is clearly visible (mean 1.8–3.8 codes, 19–43% of pixels
-beyond 3 codes) while staying well below the value swing.
+are then uncorrelated — value and hue do not trend together, at no extra `snoise` cost.
+
+Verified two ways. Indirectly, the per-pixel correlation between ΔL and Δ(R−B) is −0.33 on
+Finnish Lakes, matching the −0.345 that the terrain palette alone predicts (a warm shift raises
+luminance on sand and lowers it on blue water), so that residual is palette, not field
+correlation. Directly — correlating the *value field* (no-noise baseline → value-only capture)
+against the *tint field* (value-only → tinted capture) — the correlation is **−0.038** on Finnish
+Lakes and **−0.030** on Atoll, over 1.5M pixels. The design does what it claims. The direct test is
+the one to repeat if the weights are ever changed; the indirect one measures two quantities that
+are both driven by the tint field and will correlate regardless.
+
+`kTintAmplitude` was tuned by two ladders, ending at **3.0**. The first (0.4 / 0.8 / 1.5) picked
+1.5, but that sat near the 8-bit quantization floor on land — mean |Δ(R−B)| 1.9 codes with only
+19% of pixels clearing 3. A second ladder (1.5 / 3.0 / 5.0 / 8.0) showed the swing scales linearly,
+as mean codes land / water: 1.9/3.8, 3.7/7.6, 6.2/12.7, 9.8/20.2. **Water takes about twice the
+land swing** because it is heavily blue-weighted and the tint acts on R and B, so water sets the
+ceiling. Clipping is not a constraint anywhere in that range — the ocean already clips 48% of
+pixels before any tint, and even 8.0 adds only 0.24 points.
 
 ## 7. Cost, and the low-spec question
 
@@ -358,10 +369,14 @@ hold, the numbers are stale.
   on the Phase 1 captures — still open.
 - Water is a terrain like any other and is already frame-animated (33 frames at 14 fps,
   `data/world/terrains/summer/water/init.lua`). Static positional noise on top of animated water
-  may read as dirt on the screen. — **Open, with data.** Water receives the full amplitude
-  (measured mean per-pixel change on Finnish Lakes: 7.8 vs 2.2 on land, in 8-bit sum-of-absolute
-  RGB deltas — proportional to water being brighter). Whether it reads as dirt is a visual call;
-  this is the evidence for Phase 3 (per-terrain amplitude), not for a Phase 1 fix.
+  may read as dirt on the screen. — **Answered, and deferred by decision.** Water receives the
+  full value amplitude (mean per-pixel change on Finnish Lakes 7.8 vs 2.2 on land, 8-bit
+  sum-of-absolute RGB) and roughly *twice* the land hue swing, because the tint acts on R and B
+  and open water is heavily blue-weighted. At the committed settings the ocean reads as green
+  patchiness — "an algae infestation", accurately. It is not being fixed by tuning the terrain
+  noise down, because the amplitude that suits land is the one we want on land. Water is instead
+  left to the dedicated water work (ideas doc §6), which will need its own treatment regardless;
+  per-terrain amplitude (Phase 3) is the fallback if that slips.
 - Does the variation survive at zoom 4 (zoomed out), where a field is 16 pixels and the player is
   looking at regional structure rather than ground texture? That is the view where octave 1
   should be doing the most work. — **Partially answered.** At zoom 2.0 (field 32 px) the variation
@@ -457,7 +472,7 @@ the whole point of the shared file (§8).
 | Knob | `terrain_variation.glsl` | Current | What it does |
 |---|---|---|---|
 | Value strength | `:66` `kValueAmplitude` | `0.40` | Peak brightness swing as a fraction. The only knob that changes how loud the *value* effect is. |
-| Tint strength | `:72` `kTintAmplitude` | `1.5` | Peak warm/cool swing per unit tint field. Chosen by ladder capture; see §6. |
+| Tint strength | `:74` `kTintAmplitude` | `3.0` | Peak warm/cool swing per unit tint field. Chosen by ladder capture; see §6. Water shows roughly twice the land swing, so judge it on a coastal view. |
 | Tint colour | `:67` `kWarmTint` | `vec3(1.06, 1.00, 0.92)` | The warm endpoint of the mix; the cool endpoint is `vec3(1.0)` extrapolated past it. |
 | Octave 1 frequency | `:54` `snoise(p * 0.09)` | `0.09` | Regional patches, ~11 fields across. Lower = broader. |
 | Octave 2 | `:56` `0.50 * snoise(p * 0.21)` | amp `0.50`, f `0.21` | Mid-scale mottling, ~4.8 fields. |
