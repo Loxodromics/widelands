@@ -112,14 +112,15 @@ const mat2 kOctaveRotation = mat2(0.80, 0.60, -0.60, 0.80);
 |---|---|---|---|---|
 | 1 | 0.09 | ~11 fields | 1.00 | Regional patchiness: a dry stretch, a lush stretch. The AoE "this area differs from that area" read. |
 | 2 | 0.21 | ~4.8 fields | 0.50 | Mid-scale mottling. |
-| 3 | 0.55 | ~1.8 fields | 1.20 | Breaks the 1-field repeat. Carries most of the budget on purpose — see the antiphase rule below. |
+| 3 | 0.55 | ~1.8 fields | 1.20 | Maximum tonal contrast between neighbouring repeats. Carries most of the budget on purpose — see the antiphase rule below. |
 
 Normalised by the sum, 2.70.
 
 ### The antiphase rule
 
-**This is the governing constraint for this renderer, and getting it wrong is what made the first
-parameter set ineffective.**
+**This governs octave choice for value modulation. Read it together with §16, which shows what it
+does and does not buy: it maximises the tonal difference between neighbouring repeats, but it does
+not make the repeating pattern itself any less visible.**
 
 The repetition to be broken has a period of exactly one field (§1). Two points one period apart
 are separated most strongly by a wave whose own wavelength is *twice* that separation — at
@@ -147,7 +148,8 @@ Calibration note from the references: in `referenceImages/AoE2_0.png` the grass 
 dominated by the *large* scales, with fine detail supplied by scattered clutter rather than by the
 ground texture. That argues for keeping octave 1 present, which it is — but it must not come at
 the cost of the f≈0.5 octave, because the two are solving different problems: octave 1 buys
-regional interest, octave 3 buys the lattice not reading as wallpaper.
+regional interest, octave 3 buys local tone-to-tone contrast. Neither buys an end to the
+wallpaper pattern; see §16 for what that needs.
 
 ## 6. What gets modulated
 
@@ -413,3 +415,82 @@ scales, where a large value would have shown up as broad blotches rather than as
 says only that something happened. It was the RMS difference between points exactly one repeat
 apart, normalised by the field's own sd. That is what distinguishes "the noise is loud" from "the
 noise is aimed at the defect", and the two came apart badly on the first attempt.
+
+## 15. Tuning: where the knobs are
+
+Everything below lives in `data/shaders/terrain.fp`, and **must be mirrored byte-for-byte into
+`data/shaders/dither.fp`** until Phase 1b lands the shared `noise.glsl` — the two shaders have to
+compute the same value at the same world position or every terrain border grows a seam.
+
+| Knob | `terrain.fp` | Current | What it does |
+|---|---|---|---|
+| Overall strength | `:70` `kValueAmplitude` | `0.07` | Peak brightness swing as a fraction. The only knob that changes how loud the effect is. |
+| Octave 1 frequency | `:62` `snoise(p * 0.09)` | `0.09` | Regional patches, ~11 fields across. Lower = broader. |
+| Octave 2 | `:64` `0.50 * snoise(p * 0.21)` | amp `0.50`, f `0.21` | Mid-scale mottling, ~4.8 fields. |
+| Octave 3 | `:66` `1.20 * snoise(p * 0.55)` | amp `1.20`, f `0.55` | The one aimed at the 1-field repeat. Do not raise its *frequency* — see the antiphase rule in §5. |
+| Normaliser | `:67` `sum / 2.70` | `2.70` | Must equal the sum of the three amplitudes, or the effective strength drifts away from `kValueAmplitude`. |
+| Inter-octave rotation | `:61` `mat2(0.80, 0.60, -0.60, 0.80)` | ~37° | Keeps the simplex lattice axes from lining up across octaves. No reason to touch it. |
+
+Frequencies are in **cycles per field**, because the input `var_texture_position` is world position
+in field units (§1). So wavelength in fields is `1 / f`, and a patch "N fields across" is `f = 1/N`.
+
+**Iteration loop — no rebuild.** `wl.py` passes `--datadir=<repo>/data`, so shaders are read from
+the source tree at run time. Edit the `.fp` files and re-run:
+
+```
+Claude/wl.py --editor data/maps/Finnish_Lakes.wmf --view 640,640,1.0 --shot /tmp/out.png
+```
+
+Zoom is `scale = 1/zoom`: **1.0 native, 0.5 zoomed in, 2.0 zoomed out**. A GLSL error throws at
+program build and `--fail-on-errors` turns it into a non-zero exit, with the info log next to the
+requested screenshot path. `git checkout HEAD -- data/shaders/` reverts.
+
+**Two measurements worth taking, because they answer different questions.** Both operate on a
+capture pair (baseline vs. variant), and both were needed to see what was actually going on:
+
+1. *Is the noise aimed at the repeat?* RMS difference of the relative field between pixels exactly
+   one field apart, normalised by the field's own sd. Mean pixel change does not answer this.
+2. *Did the repeat actually weaken?* High-pass the image (subtract a box blur of about half a
+   field), then take the correlation at a 1-field lag. Validate the metric first by sweeping the
+   lag — it should peak at 1 and 2 fields and sit near zero in between, as it does.
+
+## 16. What the amplitude ladder showed
+
+A ladder at `kValueAmplitude` 0.07 / 0.15 / 0.25 / 0.40 was captured to see the effect clearly and
+calibrate down from there. It answered the amplitude question and invalidated a larger assumption.
+
+**The effect is real and reads well.** At 0.40 the meadow and steppe carry obvious soft patches
+that look like variable grass health or drifting cloud shadow. Nothing about it reads as dirt or
+mould even at 5.7x the shipped strength, so the §6 warning about 0.10 was simply wrong.
+
+**But the repetition is untouched at every amplitude.** Measured on the cobble/steppe region of
+`Finnish_Lakes` at zoom 0.5, high-passed so only the pattern is measured:
+
+| | relative-field sd | pattern self-similarity at 1-field lag |
+|---|---|---|
+| baseline, no noise | — | 0.0618 |
+| amp 0.07 | 2.13% | 0.0623 |
+| amp 0.40 | 10.36% | 0.0636 |
+
+The tonal field grew fivefold; the repeat did not weaken at all — it drifted marginally *up*. The
+zoom-0.5 capture at 0.40 shows the same thing directly: the cobble motif still tiles visibly under
+a strong tonal wash.
+
+**Why, and it should have been obvious from the start.** A multiplicative brightness field is
+smooth over a field or more, so two adjacent repeats get *the same pattern at slightly different
+exposure*. The eye reads repetition from the pattern, not the brightness level. Value modulation
+therefore cannot fix the §1 defect at any amplitude — the antiphase retune in §14 maximised the
+wrong quantity correctly.
+
+**What this means for the roadmap.** These are two separate problems and were conflated throughout
+this document:
+
+- *Tonal uniformity* — flat, dead colour over large areas. Value noise fixes this, and is the
+  feature we now have. It wants an amplitude around 0.15-0.25 on this evidence, not 0.07.
+- *Pattern repetition* — the 64 px wallpaper lattice. Needs the sampled texel to change, not its
+  brightness. Cheapest next experiment is **domain warping**: perturb `var_texture_position` by a
+  small noise offset *before* the `fract()` in both shaders, which distorts the pattern itself and
+  stays a shader-only change. Risk is wobbling hard-edged terrains such as cobble, so it likely
+  wants a small amplitude and possibly per-terrain control (Phase 3). The other routes are per-tile
+  texture variants (rejected in the ideas doc §2.3, it breaks UV continuity) and the scatter layer
+  (ideas doc §2.6), which sidesteps the problem by covering the ground.
