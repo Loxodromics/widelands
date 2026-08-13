@@ -29,6 +29,7 @@
 #include "base/scoped_timer.h"
 #include "base/warning.h"
 #include "build_info.h"
+#include "dev_harness/options.h"
 #include "editor/tools/decrease_resources_tool.h"
 #include "editor/tools/increase_resources_tool.h"
 #include "editor/tools/set_port_space_tool.h"
@@ -640,7 +641,13 @@ void EditorInteractive::think() {
 
 	realtime_ = SDL_GetTicks();
 
-	egbase().get_gametime_pointer().increment(Duration(realtime_ - lasttime));
+	// The editor advances gametime by wall clock, which drives the frame
+	// animation of water and immovables. A capture must be reproducible, so
+	// pin it while the dev harness is running; the simulation is frozen by the
+	// game controller in game mode, the editor has no controller to do that.
+	if (!DevHarness::capture_enabled()) {
+		egbase().get_gametime_pointer().increment(Duration(realtime_ - lasttime));
+	}
 }
 
 void EditorInteractive::exit(const bool force) {

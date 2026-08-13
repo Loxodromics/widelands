@@ -45,9 +45,10 @@ void Capture::think(InteractiveBase& ibase) {
 	case State::kWaiting:
 		// The controller freezes the game from the logic thread at the first
 		// tick at or after the requested gametime, so the freeze point does not
-		// depend on frame timing. The editor has no game controller and its
-		// gametime never advances, so there the game counts as frozen right
-		// away (--capture-at is rejected with --editor).
+		// depend on frame timing. The editor has no game controller; its
+		// gametime still advances, by wall clock (EditorInteractive::think),
+		// which is why capture mode pins it and rejects --capture-at (see the
+		// comment in that file).
 		if (capture_frozen() || ibase.get_game() == nullptr) {
 			state_ = State::kFreezing;
 		}
@@ -64,6 +65,14 @@ void Capture::think(InteractiveBase& ibase) {
 			   MapView::View(view->viewpoint, view->zoom), MapView::Transition::Jump);
 		}
 		ibase.set_chrome_visible(!capture_options().clean_ui);
+		if (capture_options().clean_ui) {
+			// The editor turns grid and resource overlays on in its constructor
+			// (ui/editor/editorinteractive.cc), which would sit on top of whatever
+			// the capture is meant to show. Harmless in game mode, where both are
+			// already off.
+			ibase.set_display_flag(InteractiveBase::dfShowGrid, false);
+			ibase.set_display_flag(InteractiveBase::dfShowResources, false);
+		}
 		settle_frames_left_ = capture_options().settle_frames;
 		state_ = State::kSettling;
 		break;
