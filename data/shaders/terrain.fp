@@ -67,7 +67,7 @@ float terrain_fbm(vec2 p) {
 	return sum / 2.70;
 }
 
-const float kValueAmplitude = 0.07;
+const float kValueAmplitude = 0.40;
 
 void main() {
 	// The arbitrary multiplication by 0.99 makes sure that we never sample

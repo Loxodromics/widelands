@@ -73,7 +73,7 @@ float terrain_fbm(vec2 p) {
 	return sum / 2.70;
 }
 
-const float kValueAmplitude = 0.07;
+const float kValueAmplitude = 0.40;
 
 void main() {
 	vec2 texture_fract = clamp(
