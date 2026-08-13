@@ -43,21 +43,38 @@ float snoise(vec2 v) {
 // points one period apart most strongly when its own wavelength is twice that -
 // about 0.5 cycles per field. Higher frequencies are worse, not better: at ~1.0
 // cycles per field adjacent tiles land back in phase.
-float terrain_fbm(vec2 p) {
+//
+// Both fields are weighted sums of the same three octaves, so the pair costs no
+// extra snoise calls. The tint weighting is orthogonal to the value weighting
+// (their dot product is 1.00 + 0.20 - 1.20 = 0), which keeps value and hue from
+// trending together.
+vec2 terrain_fields(vec2 p) {
 	// Rotate between octaves so the simplex lattice axes never line up.
 	mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
-	float sum = snoise(p * 0.09);
+	float o1 = snoise(p * 0.09);
 	p = rot * p;
-	sum += 0.50 * snoise(p * 0.21);
+	float o2 = snoise(p * 0.21);
 	p = rot * p;
-	sum += 1.20 * snoise(p * 0.55);
-	return sum / 2.70;
+	float o3 = snoise(p * 0.55);
+	// value: 1.00 / 0.50 / 1.20, normalised by 2.70   (unchanged from Phase 1)
+	// tint:  1.00 / 0.40 / -1.00, normalised by 2.40  (orthogonal to the above)
+	float value = (1.00 * o1 + 0.50 * o2 + 1.20 * o3) / 2.70;
+	float tint = (1.00 * o1 + 0.40 * o2 - 1.00 * o3) / 2.40;
+	return vec2(value, tint);
 }
 
 const float kValueAmplitude = 0.40;
+const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
+// Chosen by capture: the 0.4 ladder step stayed below the 8-bit quantization
+// floor (|d(R-B)| mean 0.5 codes), 0.8 was barely there (mean 1.0), 1.5 is
+// clearly visible (mean 1.8-3.8, 19-43% of pixels beyond 3 codes) while
+// staying well below the value swing. Tune by capture like kValueAmplitude.
+const float kTintAmplitude = 1.5;
 
 // Multiplier applied to the terrain texture colour, keyed on world position
-// in field units (var_texture_position).
-float terrain_variation(vec2 world_pos) {
-	return 1.0 + kValueAmplitude * terrain_fbm(world_pos);
+// in field units (var_texture_position). The mix extrapolates for negative
+// tint, giving a cool shift on one side and a warm shift on the other.
+vec3 terrain_variation(vec2 world_pos) {
+	vec2 fields = terrain_fields(world_pos);
+	return (1.0 + kValueAmplitude * fields.x) * mix(vec3(1.0), kWarmTint, kTintAmplitude * fields.y);
 }
