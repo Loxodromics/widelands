@@ -7,13 +7,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Widelands is a free, open source real-time strategy game (C++17, SDL2, Lua scripting) with a
 singleplayer campaign and a deterministic-lockstep multiplayer mode. GPL v2+.
 
-## Contribution policy (important)
+## Fork context (important)
 
-The project's CONTRIBUTING.md explicitly states that AI-generated content will not be accepted
-as pull requests and may be closed without review. Treat this repo as a place to help the user
-work locally (debugging, understanding code, drafting patches for the user to review and rewrite
-in their own words) rather than as a target for autonomous PR submission. Never open, comment on,
-or push directly to PRs/issues on behalf of the user without their explicit instruction.
+This checkout is a personal fork (`origin` = `github.com/Loxodromics/widelands`), worked on for fun.
+Upstream's CONTRIBUTING.md says AI-generated content will not be accepted as pull requests — that
+applies to upstream PRs, not to work done here. Build freely, including C++ changes and dev tooling;
+do not hedge or re-litigate the upstream policy. If something useful comes out of it, whether
+upstream adopts it is their call.
+
+Still: never push, open PRs, or comment on issues (here or upstream) without explicit instruction.
+
+`Claude/` is the shared workspace for design docs, notes, the backlog (`Claude/backlog.md`), and
+dev-harness tooling. Keeping it there also keeps rebases onto upstream clean.
 
 ## Build
 
