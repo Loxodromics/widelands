@@ -65,11 +65,13 @@ vec2 terrain_fields(vec2 p) {
 
 const float kValueAmplitude = 0.40;
 const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
-// Chosen by capture: the 0.4 ladder step stayed below the 8-bit quantization
-// floor (|d(R-B)| mean 0.5 codes), 0.8 was barely there (mean 1.0), 1.5 is
-// clearly visible (mean 1.8-3.8, 19-43% of pixels beyond 3 codes) while
-// staying well below the value swing. Tune by capture like kValueAmplitude.
-const float kTintAmplitude = 1.5;
+// Chosen by capture over two ladders. Hue swing scales linearly; as mean
+// |d(R-B)| in 8-bit codes, land / water: 1.5 -> 1.9/3.8, 3.0 -> 3.7/7.6,
+// 5.0 -> 6.2/12.7, 8.0 -> 9.8/20.2. Below about 1 code is invisible, so 1.5
+// sat near the quantization floor on land. Water takes roughly twice the land
+// swing because it is heavily blue-weighted, which is what sets the ceiling.
+// Clipping is not a constraint anywhere in that range (+0.24 points at worst).
+const float kTintAmplitude = 3.0;
 
 // Multiplier applied to the terrain texture colour, keyed on world position
 // in field units (var_texture_position). The mix extrapolates for negative
