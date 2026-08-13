@@ -174,8 +174,8 @@ variation and starts reading as mould.
    harness, not the renderer, so the *rendering* change is still pure data.
 2. `dither.fp` was supposed to wait for Phase 1b. Leaving it out puts a brightness seam along every
    terrain border, competing with the effect during parameter tuning. The noise function is
-   duplicated into `dither.fp`, marked as temporary; Phase 1b removes the duplication via the shared
-   `noise.glsl` and the `#include` mechanism (see §8).
+   duplicated into `dither.fp`, marked as temporary; Phase 1b removes the duplication via the
+   shared `terrain_variation.glsl` and the `#include` mechanism (see §8).
 
 A third finding during implementation: the editor's gametime advances by wall clock
 (`EditorInteractive::think()`), so animated water and immovables made editor captures
@@ -191,12 +191,20 @@ clr.rgb *= mix(vec3(1.0), kWarmTint, kTintAmplitude * t);   // kWarmTint = vec3(
 ```
 
 With `t` in [-1, 1] the `mix` extrapolates below zero, giving a cool shift on one side and a warm
-shift on the other from a single term. Starting point `kTintAmplitude = 0.4`.
+shift on the other from a single term.
 
 To avoid a second full fBm evaluation, derive `t` from a different weighting of the same three
-octaves rather than sampling a fresh offset field. The two outputs are then correlated rather
-than independent, which is a real if minor compromise — value and hue will trend together. If
-that reads badly, a fourth octave sampled at an offset costs one more `snoise` call.
+octaves rather than sampling a fresh offset field. **Done 2026-08-13, and the design compromise
+flagged in the original text did not materialise:** the value weighting is `(1.00, 0.50, 1.20)`
+normalised by 2.70 and the tint weighting `(1.00, 0.40, -1.00)` normalised by 2.40, whose dot
+product is `1.00 + 0.20 - 1.20 = 0`. With the three octaves roughly independent, the two outputs
+are then uncorrelated — value and hue do not trend together, at no extra `snoise` cost. Verified
+on captures: the per-pixel correlation between ΔL and Δ(R−B) is −0.33 on Finnish Lakes, matching
+the −0.345 that the terrain palette alone predicts (a warm shift raises luminance on sand and
+lowers it on blue water), so the residual is palette, not field correlation. `kTintAmplitude`
+tuned by a 0.4 / 0.8 / 1.5 ladder to **1.5**: 0.4 stayed below the 8-bit quantization floor
+(|Δ(R−B)| mean 0.5 of 255 codes), 1.5 is clearly visible (mean 1.8–3.8 codes, 19–43% of pixels
+beyond 3 codes) while staying well below the value swing.
 
 ## 7. Cost, and the low-spec question
 
@@ -223,20 +231,40 @@ position — which is exactly what correctness requires. Omit it and every terra
 visible discontinuity in the variation.
 
 GLSL 1.20 has no `#include`, so the function has to be shared somehow. `Program::build`
-(`gl/utils.cc:146-148`) reads each stage as a `std::string` before compiling:
+(`gl/utils.cc:223`) reads each stage as a `std::string` before compiling:
 
 ```cpp
 std::string fragment_shader_source = read_file("shaders/" + program_name + ".fp");
 ```
 
-A single-level textual `#include` expansion in `read_file` is about 15 lines and lets
-`terrain.fp` and `dither.fp` both pull in a shared `data/shaders/noise.glsl`. That is the right
-answer and it pays off for every shader we touch afterwards.
+**Done 2026-08-13.** `Program::build` now runs both stages through `expand_includes()` (same
+file, in the anonymous namespace), a single-level textual `#include "name"` expansion against
+`data/shaders/`. `terrain.fp` and `dither.fp` are now reduced to an `#include
+"terrain_variation.glsl"` plus one call, and the shared file holds everything that must not
+diverge: the Ashima simplex, the octave weights, the amplitude constants, and the single
+`terrain_variation()` entry point.
 
-**Current state:** `dither.fp` carries a byte-identical duplicate of the noise block from
-`terrain.fp` (plus a TODO pointing here), so terrain borders are continuous in Phase 1. Removing
-that duplicate by landing `noise.glsl` + the `#include` expansion is the concrete Phase 1b task —
-the duplication is temporary and deliberately so.
+Two deliberate deviations from this section's earlier text, worth recording:
+
+- **The shared file is `terrain_variation.glsl`, not `noise.glsl`.** It is not a generic noise
+  utility: the octave weights and amplitude constants are terrain-specific, and those are
+  exactly the parts that must never diverge between the two programs. Keeping the whole shared
+  contract in one file is simpler than splitting hairs now. When a second consumer of `snoise`
+  appears (water, cloud shadows — see the ideas doc), the generic half moves out to
+  `noise.glsl`; a two-minute change.
+- **No `#line` directives.** They would keep compile-error line numbers pointing at the original
+  files, but GLSL 1.20-era drivers disagree over whether `#line N` makes the *next* line N or
+  N+1. Instead the program name is part of the compile error message (from `Shader::compile`),
+  and line numbers in that message refer to the assembled source.
+
+Include expansion is single level by construction and fails loudly rather than silently: a
+malformed directive, a missing include file, or an `#include` inside an included file throws a
+`wexception` naming the shader program and the offending line. Verified by temporarily
+introducing each case.
+
+Verified as a no-op at the time it landed: captures of Finnish Lakes (zoom 1 and 0.5) and Atoll
+(zoom 1) before and after are byte-identical, which is the property the duplication existed to
+protect.
 
 ## 9. Interactions checked
 
@@ -286,8 +314,11 @@ Parameter values as designed: amplitude 0.07, frequencies 0.09 / 0.21 / 0.55 wit
 rotation. Results in "Phase 1 results".
 
 **Phase 1b — get it right.** Add the warm/cool axis. Add the `#include` expansion to
-`Program::build` and wire `dither.fp` to the shared `noise.glsl`, removing the temporary
-duplicate.
+`Program::build` and wire `dither.fp` to the shared `terrain_variation.glsl`, removing the
+temporary duplicate.
+
+**Done 2026-08-13.** §6 carries the tint result and its tuning; §8 carries the include
+mechanism, verified as a rendering no-op by byte-identical captures.
 
 **Phase 2 — make it controllable.** Amplitudes as uniforms, plus a config option so it can be
 switched off. `scale` is already carried in `terrain_arguments` (`game_renderer.cc`) but is not
@@ -409,7 +440,8 @@ near the threshold of perception on a 1280x720 capture. A test at 0.12 makes the
 visible on meadow and steppe without reading as dirt, which suggests the "beyond 0.10 looks like
 mould" guess in §6 was pessimistic — it was made when the amplitude was spread across the wrong
 scales, where a large value would have shown up as broad blotches rather than as texture. Left at
-0.07 pending an aesthetic decision; raising it is a one-line change in both shaders.
+0.07 pending an aesthetic decision; raising it is a one-line change in the shared
+`terrain_variation.glsl` (since 1b) — and §16 records that it was raised to 0.40.
 
 **Method note for later phases:** the useful measurement here was not mean pixel change, which
 says only that something happened. It was the RMS difference between points exactly one repeat
@@ -418,24 +450,27 @@ noise is aimed at the defect", and the two came apart badly on the first attempt
 
 ## 15. Tuning: where the knobs are
 
-Everything below lives in `data/shaders/terrain.fp`, and **must be mirrored byte-for-byte into
-`data/shaders/dither.fp`** until Phase 1b lands the shared `noise.glsl` — the two shaders have to
-compute the same value at the same world position or every terrain border grows a seam.
+Everything below lives in `data/shaders/terrain_variation.glsl`, included by both `terrain.fp`
+and `dither.fp` — **one edit point, and the two programs can no longer drift apart**, which was
+the whole point of the shared file (§8).
 
-| Knob | `terrain.fp` | Current | What it does |
+| Knob | `terrain_variation.glsl` | Current | What it does |
 |---|---|---|---|
-| Overall strength | `:70` `kValueAmplitude` | `0.07` | Peak brightness swing as a fraction. The only knob that changes how loud the effect is. |
-| Octave 1 frequency | `:62` `snoise(p * 0.09)` | `0.09` | Regional patches, ~11 fields across. Lower = broader. |
-| Octave 2 | `:64` `0.50 * snoise(p * 0.21)` | amp `0.50`, f `0.21` | Mid-scale mottling, ~4.8 fields. |
-| Octave 3 | `:66` `1.20 * snoise(p * 0.55)` | amp `1.20`, f `0.55` | The one aimed at the 1-field repeat. Do not raise its *frequency* — see the antiphase rule in §5. |
-| Normaliser | `:67` `sum / 2.70` | `2.70` | Must equal the sum of the three amplitudes, or the effective strength drifts away from `kValueAmplitude`. |
-| Inter-octave rotation | `:61` `mat2(0.80, 0.60, -0.60, 0.80)` | ~37° | Keeps the simplex lattice axes from lining up across octaves. No reason to touch it. |
+| Value strength | `:66` `kValueAmplitude` | `0.40` | Peak brightness swing as a fraction. The only knob that changes how loud the *value* effect is. |
+| Tint strength | `:72` `kTintAmplitude` | `1.5` | Peak warm/cool swing per unit tint field. Chosen by ladder capture; see §6. |
+| Tint colour | `:67` `kWarmTint` | `vec3(1.06, 1.00, 0.92)` | The warm endpoint of the mix; the cool endpoint is `vec3(1.0)` extrapolated past it. |
+| Octave 1 frequency | `:54` `snoise(p * 0.09)` | `0.09` | Regional patches, ~11 fields across. Lower = broader. |
+| Octave 2 | `:56` `0.50 * snoise(p * 0.21)` | amp `0.50`, f `0.21` | Mid-scale mottling, ~4.8 fields. |
+| Octave 3 | `:58` `1.20 * snoise(p * 0.55)` | amp `1.20`, f `0.55` | The one aimed at the 1-field repeat. Do not raise its *frequency* — see the antiphase rule in §5. |
+| Value weighting | `:61` `(1.00 * o1 + 0.50 * o2 + 1.20 * o3) / 2.70` | — | Sum of the three amplitudes in the normaliser, or the effective strength drifts away from `kValueAmplitude`. |
+| Tint weighting | `:62` `(1.00 * o1 + 0.40 * o2 - 1.00 * o3) / 2.40` | — | Chosen orthogonal to the value weighting (dot product 0); if it ever drifts from that, value and hue trend together again. |
+| Inter-octave rotation | `:53` `mat2(0.80, 0.60, -0.60, 0.80)` | ~37° | Keeps the simplex lattice axes from lining up across octaves. No reason to touch it. |
 
 Frequencies are in **cycles per field**, because the input `var_texture_position` is world position
 in field units (§1). So wavelength in fields is `1 / f`, and a patch "N fields across" is `f = 1/N`.
 
 **Iteration loop — no rebuild.** `wl.py` passes `--datadir=<repo>/data`, so shaders are read from
-the source tree at run time. Edit the `.fp` files and re-run:
+the source tree at run time. Edit the `.fp`/`.glsl` files and re-run:
 
 ```
 Claude/wl.py --editor data/maps/Finnish_Lakes.wmf --view 640,640,1.0 --shot /tmp/out.png

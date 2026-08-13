@@ -137,15 +137,25 @@ Grow the harness against real need rather than speculatively.
 Phase 1 (value-only layered simplex in `terrain.fp`/`dither.fp`) landed 2026-08-13 and was retuned
 the same day after review — the first octave weighting left the 1-field repeat untouched. Design,
 parameter values and measured results in `TERRAIN_NOISE.md`; read §14 (review and retune) before
-§13, whose numbers predate both the retune and the build-help fix. Open sub-items:
+§13, whose numbers predate both the retune and the build-help fix.
 
-- [ ] **Amplitude decision** — `kValueAmplitude` is 0.07, which is near the threshold of
-      perception; 0.12 was tested and reads well. One-line change in both shaders, aesthetic call.
-- [ ] **1b** — shared `data/shaders/noise.glsl` plus a single-level `#include` expansion in
+Phase 1b **closed 2026-08-13**: the noise block now lives once in `data/shaders/terrain_variation.glsl`,
+included by both `terrain.fp` and `dither.fp` via a single-level `#include` expansion in
+`Program::build` — verified a rendering no-op by byte-identical captures — and the warm/cool tint
+axis is in (§6). Note: the shared file is named `terrain_variation.glsl`, not `noise.glsl`; the
+generic/terrain-specific split is deferred until a second consumer of `snoise` exists. Open
+sub-items:
+
+- [x] **Amplitude decision** — resolved by the §16 ladder: `kValueAmplitude = 0.40` (was 0.07).
+- [x] **1b** — shared `terrain_variation.glsl` plus the single-level `#include` expansion in
       `Program::build` (`gl/utils.cc`); removes the temporary duplicate in `dither.fp`. Also the
-      warm/cool tint axis.
+      warm/cool tint axis (`kTintAmplitude = 1.5`, tuned by capture).
 - [ ] **2** — config toggle and amplitudes as uniforms; needs `scale` plumbed into
       `TerrainProgram::draw` (`render_queue.cc`).
 - [ ] **3** — per-terrain amplitude, only if the captures ask for it. Evidence so far: water takes
       the full amplitude (measured on Finnish Lakes), which may read as dirt; snow/lava/meadow
-      will likely want different values.
+      will likely want different values. The shared single-entry-point structure makes this a
+      one-file change when it comes.
+- [ ] **Domain warping** — the only route at the repetition defect itself (§16). Perturb
+      `var_texture_position` before the `fract()` in both shaders; single-entry-point structure
+      keeps it a one-file change. **Next** after 2/3 settle amplitudes.
