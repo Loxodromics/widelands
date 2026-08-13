@@ -273,6 +273,49 @@ site. Cheaper: a separate `log_render(...)` macro family for the subsystems in p
 
 ---
 
+## State of play: where the harness is weak
+
+Written after milestone 1 landed and before renderer work started, so the honest assessment does
+not get lost. The mechanism works; what follows is about its *fitness for purpose*, not its
+correctness.
+
+### The only scene we have is nearly empty
+
+Everything so far has been verified against `test/maps/plain.wmf` at one viewpoint: grass, one
+headquarters, a rock face. That exercises almost none of the renderer — no water or terrain
+transition edges, no dense animation, no roads or waterways, no zoom extremes, no minimap, no
+workarea overlays. A diff against this scene would miss most of what a renderer change touches.
+
+This is the harness's biggest limitation today, and closing it needs no code at all — only picking
+scenes and viewpoints (`backlog.md` 1.7). Until it is closed, a green `--compare` means much less
+than it appears to.
+
+### Byte identity is a weak answer
+
+`wl.py --compare` reports identical or not identical, nothing more. For renderer work the useful
+question is *what changed and where*.
+
+This is not speculative: during the milestone-1 review, byte identity established only that
+something varied, and an ad-hoc script computing the differing pixel count and bounding box is what
+localized the variation to rows 652-709 — the info panel — which in turn produced the finding that
+the chrome had to be hidden by default. The throwaway script did the work that `--compare` could
+not. Making it a first-class command is small (`backlog.md` 1.4).
+
+### The capture loop is slow enough to notice
+
+About 7 s per capture on the default Debug + ASan build. With a six-scene catalog that is roughly
+45 s per comparison cycle, which is enough to discourage running it. A `RelWithDebInfo` build
+directory would cut it substantially (`backlog.md` 0.2). Not urgent while there is one scene.
+
+### What the harness deliberately does not do
+
+No log filtering (`1.9`) and no Lua-driven game control (`1.10`). Both were judged tertiary and
+neither has been missed yet. They should be built when a task actually demands them rather than
+speculatively — the same reasoning that made the Lua screenshot binding (`1.2`) unnecessary once
+the capture turned out to be better done in C++.
+
+---
+
 ## Open questions
 
 - Whether a fixed small resolution changes any rendering path in a way that would make captures

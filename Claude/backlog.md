@@ -72,14 +72,20 @@ exists.
       advance, which the fixed timestep pins. The simulation is then frozen at an exact tick from
       the logic thread (G2 in `DEV_HARNESS.md`).
 - [ ] **1.4 Image diffing** — diff PNG plus pixel statistics. `wl.py --compare` does the
-      byte-identity check; the diff image still to come.
+      byte-identity check; the diff image still to come. **Second priority of the open items:**
+      byte identity only says *whether* something changed. Localizing a difference is what produced
+      the chrome finding in milestone 1, via a throwaway script — see "State of play" in
+      `DEV_HARNESS.md`. Small, roughly 30 lines.
 - [x] **1.5 Viewpoint and zoom from Lua** — superseded by `--capture-view`, applied with
       `Transition::Jump` from C++ (G3 in `DEV_HARNESS.md`).
 - [x] **1.6 Hide the GUI** — via `InteractiveBase::set_chrome_visible` (G4 in `DEV_HARNESS.md`).
       Hiding is the *default* in capture mode: the info panel draws real-time dependent content, so
       a capture including the chrome is not reproducible. `--capture-show-ui` opts out and warns.
 - [ ] **1.7 Scene catalog** — 4–6 committed savegames with fixed viewpoints covering the renderer
-      surface. Determinism is in place, the scenes still need choosing.
+      surface. Determinism is in place, the scenes still need choosing. **Highest priority of the
+      open items, and needs no code:** everything so far is verified against `plain.wmf` alone,
+      which exercises almost none of the renderer, so a green `--compare` currently means less than
+      it looks like. See "State of play" in `DEV_HARNESS.md`.
 - [ ] **1.8 Render statistics to the log** — instrument `RenderQueue::draw()`, the single choke
       point for all screen drawing.
 - [ ] **1.9 Log tags and filtering** — deferred; a separate `log_render(...)` family plus
@@ -106,3 +112,22 @@ Resolved during milestone 1:
 
 Tracked separately in `RENDERER.md` and `RENDERER_CODE_REVIEW.md`. Items graduate from there into
 this backlog once we decide to act on them.
+
+### Sequencing note: the first renderer items are not screenshot-shaped
+
+Worth recording before we start, because it cuts against the instinct to finish the harness first.
+The top three entries on the prioritized fix list in `RENDERER_CODE_REVIEW.md` are correctness bugs:
+
+1. **C2** — `TextureAtlas::pack` can hang startup on an un-fittable block
+2. **C3** — `FieldsToDraw::reset` writes out of bounds on the capped-resize path
+3. **C1** — spritesheet playercolor validation compares a value to itself
+
+None of these are diagnosed by comparing screenshots. A unit test, a targeted run, or the ASan
+build we already have is the right tool, and item 7 on that list (pure-math tests for
+`RenderTarget` clipping and `RenderQueue` sort keys) needs no harness whatsoever.
+
+The harness earns its keep on the items that change pixels — the `Workareas` triple-copy, the
+`Item`/`Program` modernization, anything touching batching. **Suggested order:** start on C3 and C2
+with the existing build; add 1.7 and 1.4 when the work reaches something that moves pixels; fold in
+1.8 (render statistics) alongside the `RenderQueue` changes, since we will be in that file anyway.
+Grow the harness against real need rather than speculatively.
