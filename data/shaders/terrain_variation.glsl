@@ -63,6 +63,26 @@ vec2 terrain_fields(vec2 p) {
 	return vec2(value, tint);
 }
 
+// Domain warp, applied to var_texture_position before the fract() in both
+// shaders so the sampled texel moves instead of its brightness. See
+// Claude/TERRAIN_NOISE.md §17.
+//
+// Warp frequency follows the same antiphase rule as octave 3 (§5): to differ
+// most between two points one field apart, the wavelength wants to be two
+// fields, i.e. ~0.5 cycles per field.
+const float kWarpFrequency = 0.55;
+const float kWarpAmplitude = 0.05;    // in fields; the knob to sweep
+
+// Offset in texture coordinates. Two dedicated snoise calls so the x and y
+// displacements are independent; reusing the existing octaves would couple
+// the warp to the colour variation and make it anisotropic, because those
+// are single scalars at fixed frequencies chosen for a different job.
+vec2 terrain_warp(vec2 world_pos) {
+	return kWarpAmplitude * vec2(
+		snoise(world_pos * kWarpFrequency + vec2(17.3, 5.1)),
+		snoise(world_pos * kWarpFrequency + vec2(-9.7, 23.4)));
+}
+
 const float kValueAmplitude = 0.40;
 const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // Chosen by capture over two ladders. Hue swing scales linearly; as mean

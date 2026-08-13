@@ -17,7 +17,7 @@ varying vec2 var_texture_offset;
 
 void main() {
 	vec2 texture_fract = clamp(
-			fract(var_texture_position),
+			fract(var_texture_position + terrain_warp(var_texture_position)),
 			vec2(MARGIN, MARGIN),
 			vec2(1. - MARGIN, 1. - MARGIN));
 	vec4 clr = texture2D(u_terrain_texture, var_texture_offset + u_texture_dimensions * texture_fract);
