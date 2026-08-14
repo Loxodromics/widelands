@@ -36,6 +36,13 @@ RoadProgram::RoadProgram() {
 
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
+
+	gl_array_buffer_.bind();
+	vao_.define_attributes({
+	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	   {attr_brightness_, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
+	});
 }
 
 void RoadProgram::add_road(const int renderbuffer_width,
@@ -187,17 +194,10 @@ void RoadProgram::draw(const int renderbuffer_width,
 	glUseProgram(gl_program_.object());
 
 	auto& gl_state = Gl::State::instance();
-	gl_state.enable_vertex_attrib_array({attr_position_, attr_texture_position_, attr_brightness_});
 
 	gl_array_buffer_.bind();
 	gl_array_buffer_.update(vertices_);
-
-	Gl::vertex_attrib_pointer(
-	   attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-	Gl::vertex_attrib_pointer(
-	   attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x));
-	Gl::vertex_attrib_pointer(
-	   attr_brightness_, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness));
+	vao_.bind();
 
 	gl_state.bind(GL_TEXTURE0, gl_texture);
 	glUniform1i(u_texture_, 0);

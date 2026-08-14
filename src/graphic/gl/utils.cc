@@ -17,12 +17,15 @@
 
 #include "graphic/gl/utils.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <memory>
+#include <unordered_set>
 
 #include "base/multithreading.h"
 #include "base/wexception.h"
+#include "graphic/gl/initialize.h"
 #include "io/fileread.h"
 #include "io/filesystem/layered_filesystem.h"
 
@@ -255,6 +258,76 @@ void Program::build(const std::string& program_name) {
 	}
 }
 
+namespace {
+
+// Legacy 2.1 backend only: which vertex attrib arrays are currently enabled.
+// Without VAOs the enable/disable state is global, so the per-draw replay must
+// track it both to skip redundant calls and to disable arrays a previous
+// program left enabled.
+std::unordered_set<GLint>& enabled_attrib_arrays() {
+	static std::unordered_set<GLint> arrays;
+	return arrays;
+}
+
+}  // namespace
+
+VertexArray::VertexArray() {
+	if (backend() == Backend::kOpenGLCore) {
+		glGenVertexArrays(1, &vao_);
+		if (vao_ == 0u) {
+			throw wexception("Could not create GL vertex array object.");
+		}
+	}
+}
+
+VertexArray::~VertexArray() {
+	if (vao_ != 0u) {
+		glDeleteVertexArrays(1, &vao_);
+	}
+}
+
+void VertexArray::define_attributes(const std::vector<VertexAttribute>& attributes) {
+	attributes_ = attributes;
+	if (backend() != Backend::kOpenGLCore) {
+		return;
+	}
+	glBindVertexArray(vao_);
+	for (const VertexAttribute& attribute : attributes) {
+		glEnableVertexAttribArray(attribute.location);
+		vertex_attrib_pointer(attribute.location, attribute.num_items, attribute.stride, attribute.offset);
+	}
+}
+
+void VertexArray::bind() const {
+	if (backend() == Backend::kOpenGLCore) {
+		glBindVertexArray(vao_);
+		return;
+	}
+
+	// Legacy replay: mirror the old State::enable_vertex_attrib_array plus the
+	// per-attribute vertex_attrib_pointer calls.
+	auto& enabled = enabled_attrib_arrays();
+	for (const VertexAttribute& attribute : attributes_) {
+		if (enabled.count(attribute.location) == 0u) {
+			glEnableVertexAttribArray(attribute.location);
+			enabled.insert(attribute.location);
+		}
+	}
+	for (auto it = enabled.begin(); it != enabled.end();) {
+		if (std::none_of(attributes_.begin(), attributes_.end(), [it](const VertexAttribute& attribute) {
+			    return attribute.location == *it;
+		    })) {
+			glDisableVertexAttribArray(*it);
+			it = enabled.erase(it);
+		} else {
+			++it;
+		}
+	}
+	for (const VertexAttribute& attribute : attributes_) {
+		vertex_attrib_pointer(attribute.location, attribute.num_items, attribute.stride, attribute.offset);
+	}
+}
+
 State::State() : last_active_texture_(NONE) {
 }
 
@@ -318,20 +391,6 @@ void State::bind_framebuffer(const GLuint framebuffer, const GLuint texture) {
 	}
 	current_framebuffer_ = framebuffer;
 	current_framebuffer_texture_ = texture;
-}
-
-void State::enable_vertex_attrib_array(std::unordered_set<GLint> entries) {
-	for (const auto e : entries) {
-		if (enabled_attrib_arrays_.count(e) == 0u) {
-			glEnableVertexAttribArray(e);
-		}
-	}
-	for (const auto e : enabled_attrib_arrays_) {
-		if (entries.count(e) == 0u) {
-			glDisableVertexAttribArray(e);
-		}
-	}
-	enabled_attrib_arrays_ = entries;
 }
 
 // static

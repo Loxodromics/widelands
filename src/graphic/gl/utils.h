@@ -94,6 +94,45 @@ private:
 	DISALLOW_COPY_AND_ASSIGN(Buffer);
 };
 
+// Describes one vertex attribute in a VertexArray: which location it feeds,
+// how many float components it has, and where it lives in the vertex struct.
+struct VertexAttribute {
+	GLint location;
+	GLint num_items;
+	GLsizei stride;
+	size_t offset;
+};
+
+// Wrapper around a vertex array object (VAO), which captures a program's
+// attribute layout once so that drawing only has to bind it. On the core
+// backend this is a real VAO; on the legacy 2.1 backend (which must not depend
+// on ARB_vertex_array_object) define_attributes() only records the layout and
+// bind() replays the glVertexAttribPointer calls, i.e. what the code used to do
+// on every frame before VAOs existed.
+class VertexArray {
+public:
+	VertexArray();
+	~VertexArray();
+
+	// Captures the attribute layout. The GL_ARRAY_BUFFER that 'attributes'
+	// refer to must already be bound. On the core backend this binds the VAO,
+	// enables every attribute and records its pointer; on the legacy backend it
+	// only stores the descriptors for bind().
+	void define_attributes(const std::vector<VertexAttribute>& attributes);
+
+	// Makes this vertex array active for drawing. On the core backend this is a
+	// single glBindVertexArray call; on the legacy backend it enables the
+	// attributes and replays glVertexAttribPointer (the GL_ARRAY_BUFFER must
+	// already be bound by the caller).
+	void bind() const;
+
+private:
+	GLuint vao_{0U};
+	std::vector<VertexAttribute> attributes_;
+
+	DISALLOW_COPY_AND_ASSIGN(VertexArray);
+};
+
 // Some GL drivers do not remember the current pipeline state. If you rebind a
 // texture that has already bound to the same target, they will happily stall
 // the pipeline. We therefore cache the state of the GL driver in this class
@@ -116,14 +155,9 @@ public:
 
 	void delete_texture(GLuint texture);
 
-	// Calls glEnableVertexAttribArray on all 'entries' and disables all others
-	// that are activated. 'entries' is taken by value on purpose.
-	void enable_vertex_attrib_array(std::unordered_set<GLint> entries);
-
 private:
 	std::unordered_map<GLenum, GLuint> target_to_texture_;
 	std::unordered_map<GLuint, GLenum> texture_to_target_;
-	std::unordered_set<GLint> enabled_attrib_arrays_;
 	GLenum last_active_texture_;
 	GLuint current_framebuffer_{0U};
 	GLuint current_framebuffer_texture_{0U};

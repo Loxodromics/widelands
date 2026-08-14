@@ -33,6 +33,12 @@ FillRectProgram::FillRectProgram() {
 
 	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
 	attr_color_ = glGetAttribLocation(gl_program_.object(), "attr_color");
+
+	gl_array_buffer_.bind();
+	vao_.define_attributes({
+	   {attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {attr_color_, 4, sizeof(PerVertexData), offsetof(PerVertexData, r)},
+	});
 }
 
 std::vector<FillRectProgram::Arguments>
@@ -173,12 +179,7 @@ void FillRectProgram::draw(const std::vector<Arguments>& arguments) {
 		glUseProgram(gl_program_.object());
 
 		gl_array_buffer_.bind();
-
-		auto& gl_state = Gl::State::instance();
-		gl_state.enable_vertex_attrib_array({
-		   attr_position_,
-		   attr_color_,
-		});
+		vao_.bind();
 
 		// Batch common rectangles up.
 		while (i < arguments.size()) {
@@ -196,10 +197,6 @@ void FillRectProgram::draw(const std::vector<Arguments>& arguments) {
 		}
 
 		gl_array_buffer_.update(vertices_);
-
-		Gl::vertex_attrib_pointer(
-		   attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-		Gl::vertex_attrib_pointer(attr_color_, 4, sizeof(PerVertexData), offsetof(PerVertexData, r));
 
 		glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 

@@ -32,23 +32,19 @@ DrawLineProgram::DrawLineProgram() {
 
 	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
 	attr_color_ = glGetAttribLocation(gl_program_.object(), "attr_color");
+
+	gl_array_buffer_.bind();
+	vao_.define_attributes({
+	   {attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {attr_color_, 4, sizeof(PerVertexData), offsetof(PerVertexData, color_r)},
+	});
 }
 
 void DrawLineProgram::draw(std::vector<Arguments> arguments) {
 	glUseProgram(gl_program_.object());
 
-	auto& gl_state = Gl::State::instance();
-	gl_state.enable_vertex_attrib_array({
-	   attr_position_,
-	   attr_color_,
-	});
-
 	gl_array_buffer_.bind();
-
-	Gl::vertex_attrib_pointer(
-	   attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-	Gl::vertex_attrib_pointer(
-	   attr_color_, 4, sizeof(PerVertexData), offsetof(PerVertexData, color_r));
+	vao_.bind();
 
 	vertices_.clear();
 

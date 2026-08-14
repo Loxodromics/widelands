@@ -31,6 +31,12 @@ GridProgram::GridProgram() {
 	attr_color_ = glGetAttribLocation(gl_program_.object(), "attr_color");
 
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+
+	gl_array_buffer_.bind();
+	vao_.define_attributes({
+	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {attr_color_, 3, sizeof(PerVertexData), offsetof(PerVertexData, col_r)},
+	});
 }
 
 void GridProgram::gl_draw(int gl_texture, float z_value) {
@@ -40,10 +46,7 @@ void GridProgram::gl_draw(int gl_texture, float z_value) {
 
 	gl_array_buffer_.bind();
 	gl_array_buffer_.update(vertices_);
-
-	Gl::vertex_attrib_pointer(
-	   attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-	Gl::vertex_attrib_pointer(attr_color_, 3, sizeof(PerVertexData), offsetof(PerVertexData, col_r));
+	vao_.bind();
 
 	gl_state.bind(GL_TEXTURE0, gl_texture);
 

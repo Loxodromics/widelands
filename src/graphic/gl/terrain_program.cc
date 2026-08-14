@@ -40,26 +40,24 @@ TerrainProgram::TerrainProgram() {
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
 	u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+
+	gl_array_buffer_.bind();
+	vao_.define_attributes({
+	   {attr_brightness_, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
+	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {attr_texture_offset_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_offset_x)},
+	   {attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	});
 }
 
 void TerrainProgram::gl_draw(int gl_texture, float texture_w, float texture_h, float z_value) {
 	glUseProgram(gl_program_.object());
 
 	auto& gl_state = Gl::State::instance();
-	gl_state.enable_vertex_attrib_array(
-	   {attr_brightness_, attr_position_, attr_texture_offset_, attr_texture_position_});
 
 	gl_array_buffer_.bind();
 	gl_array_buffer_.update(vertices_);
-
-	Gl::vertex_attrib_pointer(
-	   attr_brightness_, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness));
-	Gl::vertex_attrib_pointer(
-	   attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-	Gl::vertex_attrib_pointer(
-	   attr_texture_offset_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_offset_x));
-	Gl::vertex_attrib_pointer(
-	   attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x));
+	vao_.bind();
 
 	gl_state.bind(GL_TEXTURE0, gl_texture);
 

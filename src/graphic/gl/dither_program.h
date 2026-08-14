@@ -89,6 +89,9 @@ private:
 	// The buffer that contains the data to be rendered.
 	Gl::Buffer<PerVertexData> gl_array_buffer_;
 
+	// The vertex array object capturing the attribute layout of this program.
+	Gl::VertexArray vao_;
+
 	// Attributes.
 	GLint attr_brightness_;
 	GLint attr_dither_texture_position_;
