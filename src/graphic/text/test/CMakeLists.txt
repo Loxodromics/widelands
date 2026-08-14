@@ -11,6 +11,7 @@ wl_binary(wl_render_richtext
   USES_SDL2_TTF
   DEPENDS
     graphic
+    graphic_gl_utils
     graphic_image_io
     graphic_surface
     graphic_text

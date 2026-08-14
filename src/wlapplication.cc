@@ -53,6 +53,7 @@
 #include "dev_harness/options.h"
 #include "graphic/default_resolution.h"
 #include "graphic/font_handler.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/graphic.h"
 #include "graphic/graphic_functions.h"
 #include "graphic/mouse_cursor.h"
@@ -422,7 +423,8 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 	   get_config_bool("debug_gl_trace", false) ? Graphic::TraceGl::kYes : Graphic::TraceGl::kNo,
 	   get_config_int("display", -1), get_config_int("xres", kDefaultResolutionW),
 	   get_config_int("yres", kDefaultResolutionH), get_config_bool("fullscreen", false),
-	   get_config_bool("maximized", false));
+	   get_config_bool("maximized", false),
+	   Gl::backend_from_string(renderer_).value_or(Gl::Backend::kOpenGL21));
 
 	{
 		// The window manager may resize the window on creation, so we have to handle resize events
@@ -2046,6 +2048,22 @@ void WLApplication::handle_commandline_parameters() {
 				set_config_string("yres", *yres);
 			}
 		}
+	}
+
+	// Rendering backend selection (WP-3 of the renderer modernization plan,
+	// Claude/RENDERER_MODERNIZATION_PLAN.md). CLI-only on purpose: it is not
+	// written to the config file, so a backend that fails to initialize cannot
+	// linger there and break the next launch.
+	if (OptionalParameter renderer = get_commandline_option_value("renderer");
+	    renderer.has_value()) {
+		if (!Gl::backend_from_string(*renderer).has_value()) {
+			throw ParameterError(
+			   CmdLineVerbosity::None,
+			   format(_("Invalid value for command line parameter --renderer=%s: expected 'gl21' "
+			            "or 'glcore'."),
+			          renderer.value()));
+		}
+		renderer_ = *renderer;
 	}
 
 	// If it hasn't been handled yet it's probably an attempt to

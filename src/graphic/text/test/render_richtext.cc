@@ -30,6 +30,7 @@
 #undef main  // No, we do not want SDL_main
 
 #include "config.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/graphic.h"
 #include "graphic/image_io.h"
 #include "graphic/rendertarget.h"
@@ -101,7 +102,7 @@ void initialize() {
 	g_fs->add_file_system(&FileSystem::create(INSTALL_DATADIR));
 
 	g_gr = new Graphic();
-	g_gr->initialize(Graphic::TraceGl::kNo, 1, 1, false);
+	g_gr->initialize(Graphic::TraceGl::kNo, 1, 1, false, false, Gl::Backend::kOpenGL21);
 }
 
 }  // namespace
