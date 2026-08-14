@@ -30,8 +30,8 @@ namespace Gl {
 
 // The rendering backend the game was started with. WP-3 of the renderer
 // modernization plan (Claude/RENDERER_MODERNIZATION_PLAN.md) selects it via
-// --renderer; only kOpenGL21 exists for real so far (kOpenGLCore is a no-op
-// alias until WP-4 requests a core profile).
+// --renderer; WP-4 requests a real GL 3.3 core context for kOpenGLCore and
+// falls back to kOpenGL21 if the driver cannot provide one.
 enum class Backend {
 	kOpenGL21,
 	kOpenGLCore,
