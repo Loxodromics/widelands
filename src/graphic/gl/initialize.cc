@@ -18,14 +18,12 @@
 
 #include "graphic/gl/initialize.h"
 
-#include <csignal>
 #include <regex>
 
 #include <SDL_messagebox.h>
 
 #include "base/i18n.h"
 #include "base/log.h"
-#include "base/macros.h"
 #include "graphic/gl/utils.h"
 #include "graphic/text/bidi.h"
 
@@ -34,6 +32,38 @@ namespace Gl {
 namespace {
 
 Backend g_obtained_backend = Backend::kOpenGL21;
+
+// Adapts SDL's loader signature to glad2's GLADloadfunc, which returns a
+// GLADapiproc function pointer rather than void*.
+GLADapiproc glad_get_proc_address(const char* name) {
+	return reinterpret_cast<GLADapiproc>(SDL_GL_GetProcAddress(name));
+}
+
+// The undocumented command line argument --debug_gl_trace sets Trace::kYes,
+// which installs these as glad2's per-call debug hooks (see initialize()
+// below). Together they log every OpenGL call made, with its name and the
+// glGetError() result after it returns. glad2's variadic debug callback does
+// not carry per-argument type information (unlike glbinding's old reflection
+// API), so argument values are not decoded here.
+//
+// glad2's --debug wraps every GL function, including glGetError itself, so
+// calling the glGetError() macro from inside this callback would recurse
+// into its own wrapper and stack-overflow. glad_glGetError is the raw,
+// unwrapped function pointer glad2 always exposes alongside the wrapper;
+// calling it directly is the glad2 equivalent of the exclusion glbinding's
+// old trace code did with setCallbackMaskExcept(..., {"glGetError"}).
+void gl_trace_pre_callback(const char* name, GLADapiproc /* apiproc */, int /* len_args */, ...) {
+	log_dbg("%s(", name);
+}
+
+void gl_trace_post_callback(void* /* ret */,
+                            const char* /* name */,
+                            GLADapiproc /* apiproc */,
+                            int /* len_args */,
+                            ...) {
+	const auto error = glad_glGetError();
+	log_dbg(") [%s]\n", gl_error_to_string(error));
+}
 
 }  // namespace
 
@@ -61,15 +91,10 @@ Backend backend() {
 	return g_obtained_backend;
 }
 
-SDL_GLContext initialize(
-#ifdef USE_GLBINDING
-   const Trace& trace,
-#else
-   const Trace& /* trace */,
-#endif
-   SDL_Window* sdl_window,
-   GLint* max_texture_size,
-   Backend requested_backend) {
+SDL_GLContext initialize(const Trace& trace,
+                         SDL_Window* sdl_window,
+                         GLint* max_texture_size,
+                         Backend requested_backend) {
 	// Request an OpenGL 2 context with double buffering.
 	SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
@@ -82,100 +107,25 @@ SDL_GLContext initialize(
 
 	SDL_GL_SetSwapInterval(0);
 
-#ifdef USE_GLBINDING
-#ifndef GLBINDING3
-	glbinding::Binding::initialize();
+	if (gladLoadGL(glad_get_proc_address) == 0) {
+		log_err("gladLoadGL failed\nYour OpenGL installation must be __very__ broken.\n");
+		throw wexception("gladLoadGL failed: Broken OpenGL installation.");
+	}
 
-	// The undocumented command line argument --debug_gl_trace will set
-	// Trace::kYes. This will log every OpenGL call that is made, together with
-	// arguments, return values and glError status. This requires that Widelands
-	// is built using -DOPTION_USE_GLBINDING:BOOL=ON. It is a NoOp for GLEW.
+	// The undocumented command line argument --debug_gl_trace sets Trace::kYes,
+	// which logs every OpenGL call made, together with the glGetError() result
+	// after it returns (gl_trace_pre_callback/gl_trace_post_callback above).
+	// glad2's debug wrapper is live by default as soon as it is generated with
+	// --debug (its default callbacks already call glGetError() after every
+	// call), so gladUninstallGLDebug() is required in the untraced case to get
+	// a build with no per-call overhead, matching a non-debug build exactly.
 	if (trace == Trace::kYes) {
-		setCallbackMaskExcept(
-		   glbinding::CallbackMask::After | glbinding::CallbackMask::ParametersAndReturnValue,
-		   {"glGetError"});
-		glbinding::setAfterCallback([](const glbinding::FunctionCall& call) {
-			log_dbg("%s(", call.function->name());
-			for (size_t i = 0; i < call.parameters.size(); ++i) {
-				log_dbg("%s", call.parameters[i]->asString().c_str());
-				if (i < call.parameters.size() - 1)
-					log_dbg(", ");
-			}
-			log_dbg(")");
-			if (call.returnValue) {
-				log_dbg(" -> %s", call.returnValue->asString().c_str());
-			}
-			const auto error = glGetError();
-			log_dbg(" [%s]\n", gl_error_to_string(error));
-			// The next few lines will terminate Widelands if there was any OpenGL
-			// error. This is useful for super aggressive debugging, but probably
-			// not for regular builds. Comment it in if you need to understand
-			// OpenGL problems.
-			// if (error != GL_NO_ERROR) {
-			// std::raise(SIGINT);
-			// }
-		});
+		gladSetGLPreCallback(gl_trace_pre_callback);
+		gladSetGLPostCallback(gl_trace_post_callback);
+		gladInstallGLDebug();
+	} else {
+		gladUninstallGLDebug();
 	}
-#else
-	const glbinding::GetProcAddress get_proc_address = [](const char* name) {
-		return reinterpret_cast<glbinding::ProcAddress>(SDL_GL_GetProcAddress(name));
-	};
-	glbinding::Binding::initialize(get_proc_address, true);
-
-	// The undocumented command line argument --debug_gl_trace will set
-	// Trace::kYes. This will log every OpenGL call that is made, together with
-	// arguments, return values and glError status. This requires that Widelands
-	// is built using -DOPTION_USE_GLBINDING:BOOL=ON. It is a NoOp for GLEW.
-	if (trace == Trace::kYes) {
-		glbinding::setCallbackMaskExcept(
-		   glbinding::CallbackMask::After | glbinding::CallbackMask::ParametersAndReturnValue,
-		   {"glGetError"});
-		glbinding::setAfterCallback([](const glbinding::FunctionCall& call) {
-			log_dbg("%s(", call.function->name());
-			for (size_t i = 0; i < call.parameters.size(); ++i) {
-				FORMAT_WARNINGS_OFF
-				log_dbg("%p", call.parameters[i].get());
-				FORMAT_WARNINGS_ON
-				if (i < call.parameters.size() - 1)
-					log_dbg(", ");
-			}
-			log_dbg(")");
-			if (call.returnValue) {
-				FORMAT_WARNINGS_OFF
-				log_dbg(" -> %p", call.returnValue.get());
-				FORMAT_WARNINGS_ON
-			}
-			const auto error = glGetError();
-			log_dbg(" [%s]\n", gl_error_to_string(error));
-			// The next few lines will terminate Widelands if there was any OpenGL
-			// error. This is useful for super aggressive debugging, but probably
-			// not for regular builds. Comment it in if you need to understand
-			// OpenGL problems.
-			// if (error != GL_NO_ERROR) {
-			// std::raise(SIGINT);
-			// }
-		});
-	}
-#endif
-#else
-	// See graphic/gl/system_headers.h for an explanation of the next line.
-	glewExperimental = GL_TRUE;
-	GLenum err = glewInit();
-
-#ifdef GLEW_ERROR_NO_GLX_DISPLAY
-	// err == GLEW_ERROR_NO_GLX_DISPLAY is a workaround for crash on wayland
-	// https://github.com/nigels-com/glew/issues/172
-	if (err == GLEW_ERROR_NO_GLX_DISPLAY &&
-	    std::strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0) {
-		log_info("Using glewInit workaround for Wayland\n");
-	} else
-#endif
-	   if (err != GLEW_OK) {
-		log_err("glewInit returns %u\nYour OpenGL installation must be __very__ broken. %s\n", err,
-		        glewGetErrorString(err));
-		throw wexception("glewInit returns %u: Broken OpenGL installation.", err);
-	}
-#endif
 
 	// Show a basic SDL window with an error message, and log it too, then exit 1. Since font support
 	// does not exist for all languages, we show both the original and a localized text.

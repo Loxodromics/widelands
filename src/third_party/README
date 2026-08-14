@@ -21,3 +21,27 @@ libmd:
 - Included some of the files that are normally generated semi-automatically.
 - Removed file input functions specific to POSIX.
 - Removed support for MD2, MD4, and RipeMD160.
+
+glad2:
+- Generated 2026-08-14 with glad2 2.0.8 (https://github.com/Dav1dde/glad), replacing GLEW/glbinding
+  as the renderer's sole GL loader (renderer modernization WP-1, `Claude/RENDERER_MODERNIZATION_PLAN.md`).
+- Command: `python -m glad --api "gl:compatibility=3.3,gles2=3.0" --merge --out-path . --reproducible c --debug`
+- Desktop GL is generated as **compatibility profile**, not core, even though the eventual core
+  backend (WP-4+) only needs core: the still-active legacy GL 2.1 path uploads the dither mask with
+  `GL_INTENSITY` (`src/graphic/texture.cc`), a token core-profile headers omit entirely. Compatibility
+  is a superset header, safe to compile against regardless of which profile the runtime context ends
+  up requesting; only the token's removal (WP-7) requires core-profile behavior, not the header.
+- GLES 3.0 is generated in the same merged output because the loader must support it, not because
+  anything renders with ES yet (decision 9 of the plan: ES is a constraint, kept reachable, not a
+  deliverable). `gladLoadGL()`/`gladLoadGLES2()` share the same `gl*` call surface either way.
+- `--debug` generates a per-call pre/post callback wrapper (`gladSetGLPreCallback`/
+  `gladSetGLPostCallback`, installed/removed via `gladInstallGLDebug`/`gladUninstallGLDebug`) used to
+  implement `--debug_gl_trace`. The wrapper is live by default immediately after `gladLoadGL()` (with
+  a default callback that calls `glGetError()` after every GL call) — `gladUninstallGLDebug()` must be
+  called explicitly when tracing is not requested to get parity with a non-debug build; once called,
+  the `gl*` macros resolve through exactly one function-pointer indirection, identical to a build
+  without `--debug`.
+- `--reproducible` only suppresses the embedded generation timestamp for a deterministic diff; it does
+  not pin the upstream `KhronosGroup/OpenGL-Registry` XML to a commit, so regenerating later may pick
+  up newer extensions. All 836 extensions available for the requested API/version pair are included
+  (no `--extensions` filter), matching GLEW's behavior of exposing everything the driver reports.

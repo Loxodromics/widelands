@@ -6,8 +6,6 @@ message(STATUS "Using CMake version ${CMAKE_VERSION}")
 
 # Detailed help is in README.md
 # Please update it if you change anything here
-option(OPTION_USE_GLBINDING "Use glbinding instead of GLEW" OFF)
-option(OPTION_GLEW_STATIC "Use static GLEW Library" OFF)
 option(OPTION_BUILD_WEBSITE_TOOLS "Build website-related tools" ON)
 option(OPTION_BUILD_TESTS "Build tests" ON)
 option(OPTION_BUILD_CODECHECK "Build codecheck" ON)
@@ -106,8 +104,7 @@ if (WIN32)
   link_libraries(wsock32 ws2_32 bcrypt)
 endif()
 if (OPTION_BUILD_WINSTATIC)
-  add_definitions(-DGLBINDING_STATIC_DEFINE -DNGHTTP2_STATICLIB -DU_STATIC_IMPLEMENTATION)
-  set (OPTION_GLEW_STATIC ON)
+  add_definitions(-DNGHTTP2_STATICLIB -DU_STATIC_IMPLEMENTATION)
   if(MSVC)
     set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib")
   else()
@@ -139,11 +136,6 @@ find_package(SDL2_mixer REQUIRED)
 find_package(SDL2_ttf REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(ICU REQUIRED COMPONENTS uc dt)
-if(OPTION_USE_GLBINDING)
-  find_package(glbinding REQUIRED)
-else()
-  find_package(GLEW REQUIRED)
-endif()
 
 # Check that Asio is installed. Asio does not have (or need) a Find… CMake Module, so we "only" need to check if the header exists.
 if(NOT asio_location OR asio_location STREQUAL "")
@@ -227,7 +219,7 @@ if(OPTION_ASAN)
   # See https://clang.llvm.org/docs/AddressSanitizer.html
   wl_add_flag(WL_COMPILE_DIAGNOSTICS "-fsanitize=address")
   if(MSVC)
-    # Disabling annotations macros to be able to link glbindingd, icuucd and tinygettext
+    # Disabling annotations macros to be able to link icuucd and tinygettext
     # https://learn.microsoft.com/en-us/cpp/sanitizers/error-container-overflow?view=msvc-170
     add_compile_definitions(_DISABLE_STRING_ANNOTATION)
     add_compile_definitions(_DISABLE_VECTOR_ANNOTATION)
