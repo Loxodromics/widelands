@@ -3,7 +3,6 @@ cmake
 g++
 gcc
 libasio-dev
-libglew-dev
 libpng-dev
 libsdl2-dev
 libsdl2-image-dev

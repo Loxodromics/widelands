@@ -1,3 +1,13 @@
+wl_library(third_party_glad2
+  THIRD_PARTY
+  C_LIBRARY
+  SRCS
+    glad2/include/glad/gl.h
+    glad2/include/KHR/khrplatform.h
+    glad2/src/gl.c
+)
+wl_include_system_directories(third_party_glad2 ${CMAKE_CURRENT_SOURCE_DIR}/glad2/include)
+
 if (NOT MINIZIP_STATIC_LIBRARIES)
   wl_library(third_party_minizip
     THIRD_PARTY

@@ -38,7 +38,8 @@ You will need to install the following dependencies:
 *  [libpng](http://www.libpng.org/pub/png/libpng.html)
 *  [Asio](https://think-async.com/Asio/)
 *  [Python](https://www.python.org) >= 1.5.2
-*  [libglew](http://glew.sourceforge.net) or [glbinding](https://glbinding.org/)
+
+The OpenGL loader (glad2) is vendored in `src/third_party/glad2` and needs no system package.
 
 
 ### Compiling with our convenience script
@@ -111,8 +112,6 @@ Note that CMake options are prefixed with `-D`. These are the available options:
 | `WL_VERSION` | A version string | Autodetected from git/bzr, or set by adding a `VERSION` file | Define the Widelands version |
 | `USE_FLTO_IF_AVAILABLE` | `ON`/`OFF` | Autodetected | Use link-time optimization |
 | `USE_XDG` | `ON`/`OFF` | `ON` | Follow XDG-Basedir specification. Only available on Linux. |
-| `OPTION_USE_GLBINDING` | `ON`/`OFF` | `OFF` | Use glbinding instead of GLEW |
-| `OPTION_GLEW_STATIC` | `ON`/`OFF` | `OFF` | Use static GLEW Library |
 | `OPTION_BUILD_WINSTATIC` | `ON`/`OFF` | `OFF` | Build a static linked .exe on windows |
 | `OPTION_FORCE_EMBEDDED_MINIZIP` | `ON`/`OFF` | `OFF` | Used embedded minizip sources (skip checking for installed minizip library) |
 | `NEEDS_EXTERNAL_FILESYSTEM` | `ON`/`OFF` | Autodetected from compiler version | Whether `std::filesystem` needs to be linked against an extra library |
