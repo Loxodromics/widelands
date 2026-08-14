@@ -102,12 +102,13 @@ def extract_uses_includes(srcdir, source):
 class Target(object):
     """Container for data for a cmake target."""
 
-    def __init__(self, type, name, defined_at, srcs, depends):
+    def __init__(self, type, name, defined_at, srcs, depends, third_party=False):
         self.type = type
         self.name = name
         self.defined_at = defined_at
         self.srcs = srcs
         self.depends = depends
+        self.third_party = third_party
 
     def __repr__(self):
         return '%s(%s, nsrcs:%s, %s)' % (self.type, self.name, len(self.srcs), self.depends)
@@ -162,8 +163,9 @@ def extract_targets(cmake_file):
             d = _parse_content(content)
             srcs = set(path.realpath(path.join(dirname, src))
                        for src in d['SRCS'])
+            third_party = 'THIRD_PARTY' in d or 'THIRD_PARTY_WITH_INCLUDES' in d
             targets.append(Target(match.group(1), match.group(2), (line_idx, cmake_file),
-                                  srcs, d['DEPENDS'] + d['USES']))
+                                  srcs, d['DEPENDS'] + d['USES'], third_party))
     return targets
 
 
@@ -273,7 +275,23 @@ def main():
     target_list = []
     for cmake_file in cmake_files:
         target_list.extend(extract_targets(cmake_file))
-    targets = {l.name: l for l in target_list}
+    # A target name can legitimately appear more than once: a wl_library(...)
+    # followed by a wl_include_system_directories(...) (or wl_include_directories)
+    # on the same name is parsed by extract_targets as a second record with the
+    # same name and no SRCS. A plain dict comprehension would let that second
+    # record overwrite the library record, hiding its sources. Merge instead:
+    # keep the first record's defined_at, union the sources and extend the
+    # depends, so the include-directories call augments rather than shadows the
+    # library it belongs to.
+    targets = {}
+    for target in target_list:
+        if target.name in targets:
+            existing = targets[target.name]
+            existing.srcs.update(target.srcs)
+            existing.depends.extend(target.depends)
+            existing.third_party = existing.third_party or target.third_party
+        else:
+            targets[target.name] = target
 
     owners_of_src = {}
     for lib in targets.values():
@@ -286,6 +304,12 @@ def main():
         return 1
 
     for t in targets.values():
+        if t.third_party:
+            # Vendored code declares its own build wiring and does not follow
+            # our include conventions (angle-bracketed self-includes, quoted
+            # headers behind ifdefs), so the heuristics above misreport it.
+            # Skip it, consistent with wl_run_codecheck skipping THIRD_PARTY.
+            continue
         report_unmentioned_or_unnecessary_dependencies(
             srcdir, t, includes_by_src, uses_includes_by_src, owners_of_src)
 
