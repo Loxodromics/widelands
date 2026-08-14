@@ -330,6 +330,18 @@ SDL_GLContext initialize(const Trace& trace,
 		handle_unreadable_opengl_version();
 	}
 	log_info("Graphics: OpenGL: Version \"%s\"\n", opengl_version_string);
+
+	// Which physical driver is answering, so a capture's provenance is in the
+	// log rather than inferred from the version string or the session it ran
+	// in. The SDL video driver is logged separately by graphic.cc.
+	const char* const opengl_renderer_string =
+	   reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+	log_info("Graphics: OpenGL: Renderer: \"%s\"\n",
+	         opengl_renderer_string == nullptr ? "unknown" : opengl_renderer_string);
+	const char* const opengl_vendor_string = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+	log_info("Graphics: OpenGL: Vendor: \"%s\"\n",
+	         opengl_vendor_string == nullptr ? "unknown" : opengl_vendor_string);
+
 	const int required_major_version = obtained_backend == Backend::kOpenGLCore ? 3 : 2;
 	const int required_minor_version = obtained_backend == Backend::kOpenGLCore ? 3 : 1;
 	check_version(opengl_version_string, "OpenGL", _("OpenGL"), required_major_version,
