@@ -169,6 +169,11 @@ void RenderQueue::set_dither_mask(const std::string& filepath) {
 	dither_program_->set_dither_mask(filepath);
 }
 
+void RenderQueue::set_terrain_noise_strength(const float strength) {
+	terrain_program_->set_noise_strength(strength);
+	dither_program_->set_noise_strength(strength);
+}
+
 void RenderQueue::enqueue(const Item& given_item) {
 	Item* item;
 	uint32_t extra_value = 0;

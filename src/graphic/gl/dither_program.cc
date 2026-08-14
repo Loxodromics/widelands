@@ -21,6 +21,8 @@
 #include "base/wexception.h"
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/initialize.h"
+#include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/image_io.h"
 #include "graphic/texture.h"
@@ -32,8 +34,15 @@ DitherProgram::DitherProgram() {
 
 	u_dither_texture_ = glGetUniformLocation(gl_program_.object(), "u_dither_texture");
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
-	u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
-	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		gl_program_.bind_uniform_block("per_program_state", Gl::kPerProgramStateBindingPoint);
+	} else {
+		u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
+		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+		u_value_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_value_amplitude");
+		u_tint_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_tint_amplitude");
+		u_warp_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_warp_amplitude");
+	}
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -137,10 +146,26 @@ void DitherProgram::gl_draw(int gl_texture, float texture_w, float texture_h, co
 	gl_state.bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
 	gl_state.bind(GL_TEXTURE1, gl_texture);
 
-	glUniform1f(u_z_value_, z_value);
 	glUniform1i(u_dither_texture_, 0);
 	glUniform1i(u_terrain_texture_, 1);
-	glUniform2f(u_texture_dimensions_, texture_w, texture_h);
+
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Gl::PerProgramState state{};
+		state.z_value = z_value;
+		state.value_amplitude = kValueAmplitude * noise_strength_;
+		state.tint_amplitude = kTintAmplitude * noise_strength_;
+		state.warp_amplitude = kWarpAmplitude * noise_strength_;
+		state.texture_w = texture_w;
+		state.texture_h = texture_h;
+		uniform_buffer_.update(&state, sizeof(state));
+		uniform_buffer_.bind_base(Gl::kPerProgramStateBindingPoint);
+	} else {
+		glUniform1f(u_z_value_, z_value);
+		glUniform2f(u_texture_dimensions_, texture_w, texture_h);
+		glUniform1f(u_value_amplitude_, kValueAmplitude * noise_strength_);
+		glUniform1f(u_tint_amplitude_, kTintAmplitude * noise_strength_);
+		glUniform1f(u_warp_amplitude_, kWarpAmplitude * noise_strength_);
+	}
 
 	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 }

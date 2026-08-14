@@ -22,6 +22,7 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
 #include "graphic/texture.h"
 #include "logic/player.h"
@@ -30,8 +31,12 @@
 RoadProgram::RoadProgram() {
 	gl_program_.build("road");
 
-	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		gl_program_.bind_uniform_block("per_program_state", Gl::kPerProgramStateBindingPoint);
+	} else {
+		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+	}
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -197,7 +202,15 @@ void RoadProgram::draw(const int renderbuffer_width,
 
 	gl_state.bind(GL_TEXTURE0, gl_texture);
 	glUniform1i(u_texture_, 0);
-	glUniform1f(u_z_value_, z_value);
+
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Gl::PerProgramState state{};
+		state.z_value = z_value;
+		uniform_buffer_.update(&state, sizeof(state));
+		uniform_buffer_.bind_base(Gl::kPerProgramStateBindingPoint);
+	} else {
+		glUniform1f(u_z_value_, z_value);
+	}
 
 	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 }

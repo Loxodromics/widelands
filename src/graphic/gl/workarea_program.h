@@ -64,12 +64,16 @@ private:
 	// The vertex array object capturing the attribute layout of this program.
 	Gl::VertexArray vao_;
 
+	// The uniform buffer carrying the per-program z-value on the core backend.
+	Gl::UniformBuffer uniform_buffer_;
+
 	// Attribute locations, mirroring the layout(location=N) qualifiers in
 	// data/shaders/workarea.vp (see blit_program.h for the binding story).
 	static constexpr GLint kAttrPosition = 0;
 	static constexpr GLint kAttrOverlay = 1;
 
-	// Uniforms.
+	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
+	// reads these from the uniform block instead).
 	GLint u_z_value_;
 
 	// Objects below are kept around to avoid memory allocations on each frame.

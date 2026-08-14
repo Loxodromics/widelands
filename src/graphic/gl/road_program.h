@@ -66,6 +66,9 @@ private:
 	// The vertex array object capturing the attribute layout of this program.
 	Gl::VertexArray vao_;
 
+	// The uniform buffer carrying the per-program z-value on the core backend.
+	Gl::UniformBuffer uniform_buffer_;
+
 	// The program used for drawing the roads.
 	Gl::Program gl_program_;
 
@@ -75,7 +78,8 @@ private:
 	static constexpr GLint kAttrTexturePosition = 1;
 	static constexpr GLint kAttrBrightness = 2;
 
-	// Uniforms.
+	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
+	// reads these from the uniform block instead).
 	GLint u_texture_;
 	GLint u_z_value_;
 

@@ -123,4 +123,69 @@ TESTCASE(vertex_without_layout_throws) {
 	});
 }
 
+TESTCASE(vertex_120_uniform_block) {
+	const std::string input = "#version 150\n"
+	                          "layout(std140) uniform per_program_state {\n"
+	                          "\tfloat u_z_value;\n"
+	                          "\tvec2 u_texture_dimensions;\n"
+	                          "};\n"
+	                          "void main() {\n"
+	                          "}\n";
+	const EmittedShader out =
+	   emit_dialect(input, ShaderStage::kVertex, ShaderDialect::kGLSL120, "test");
+	check_equal(out.source, "#version 120\n"
+	                        "uniform float u_z_value;\n"
+	                        "uniform vec2 u_texture_dimensions;\n"
+	                        "void main() {\n"
+	                        "}\n");
+	check_equal(out.attributes.size(), 0u);
+}
+
+TESTCASE(vertex_330_uniform_block_passthrough) {
+	const std::string input = "#version 330\n"
+	                          "layout(std140) uniform per_program_state {\n"
+	                          "\tfloat u_z_value;\n"
+	                          "};\n";
+	const EmittedShader out =
+	   emit_dialect(input, ShaderStage::kVertex, ShaderDialect::kGLSL330, "test");
+	check_equal(out.source, "#version 330\n"
+	                        "layout(std140) uniform per_program_state {\n"
+	                        "\tfloat u_z_value;\n"
+	                        "};\n");
+	check_equal(out.attributes.size(), 0u);
+}
+
+TESTCASE(fragment_300es_uniform_block) {
+	const std::string input = "#version 150\n"
+	                          "layout(std140) uniform per_program_state {\n"
+	                          "\tfloat u_value_amplitude;\n"
+	                          "\tvec2 u_texture_dimensions;\n"
+	                          "};\n"
+	                          "out vec4 frag_color;\n"
+	                          "void main() {\n"
+	                          "\tfrag_color = vec4(1.0);\n"
+	                          "}\n";
+	const EmittedShader out =
+	   emit_dialect(input, ShaderStage::kFragment, ShaderDialect::kGLSL300es, "test");
+	check_equal(out.source, "#version 300 es\n"
+	                        "precision mediump float;\n"
+	                        "layout(std140) uniform per_program_state {\n"
+	                        "\tfloat u_value_amplitude;\n"
+	                        "\tvec2 u_texture_dimensions;\n"
+	                        "};\n"
+	                        "out vec4 frag_color;\n"
+	                        "void main() {\n"
+	                        "\tfrag_color = vec4(1.0);\n"
+	                        "}\n");
+	check_equal(out.attributes.size(), 0u);
+}
+
+TESTCASE(unterminated_uniform_block_throws) {
+	check_error(WException, "Unterminated uniform block", [] {
+		emit_dialect(
+		   "#version 150\nlayout(std140) uniform per_program_state {\n\tfloat u_z_value;\n",
+		   ShaderStage::kVertex, ShaderDialect::kGLSL120, "test");
+	});
+}
+
 TESTSUITE_END()

@@ -180,6 +180,19 @@ std::string trim(const std::string& s) {
 	return s.substr(begin, end - begin);
 }
 
+// A uniform block opens with `layout(std140) uniform <name> {`. The "uniform"
+// keyword is what distinguishes it from the attribute `layout(location=N) in`
+// declarations the vertex stage also uses.
+bool is_uniform_block_open(const std::string& trimmed) {
+	return trimmed.rfind("layout", 0) == 0 && trimmed.find("uniform") != std::string::npos &&
+	       trimmed.find("location") == std::string::npos && !trimmed.empty() &&
+	       trimmed.back() == '{';
+}
+
+bool is_uniform_block_close(const std::string& trimmed) {
+	return trimmed == "};";
+}
+
 // Returns a readable string for a GL_*_SHADER 'type' for debug output.
 std::string shader_to_string(GLenum type) {
 	if (type == GL_VERTEX_SHADER) {
@@ -213,6 +226,7 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 	EmittedShader result;
 	std::string fragment_output_name;
 	std::vector<std::string> output_lines;
+	bool in_uniform_block = false;
 
 	size_t pos = 0;
 	while (pos < expanded_source.size()) {
@@ -224,7 +238,21 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 		std::string emitted = line;
 		const std::string trimmed = trim(line);
 
-		if (trimmed.rfind("#version", 0) == 0) {
+		if (in_uniform_block) {
+			// Inside a `layout(std140) uniform ... { ... };` block. The 120
+			// dialect has no uniform blocks, so lower each member to a loose
+			// `uniform <type> <name>;` declaration and drop the block braces;
+			// 330 and 300 es pass the whole block through unchanged.
+			if (is_uniform_block_close(trimmed)) {
+				in_uniform_block = false;
+				drop_line = dialect == ShaderDialect::kGLSL120;
+			} else if (dialect == ShaderDialect::kGLSL120 && !trimmed.empty()) {
+				emitted = "uniform " + trimmed;
+			}
+		} else if (is_uniform_block_open(trimmed)) {
+			in_uniform_block = true;
+			drop_line = dialect == ShaderDialect::kGLSL120;
+		} else if (trimmed.rfind("#version", 0) == 0) {
 			emitted = version_line;
 			// GLSL ES 3.00 fragment shaders have no default float precision, so
 			// the 300 es dialect injects the mandatory default precision
@@ -308,6 +336,10 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 			break;
 		}
 		pos = line_end + 1;
+	}
+
+	if (in_uniform_block) {
+		throw wexception("Unterminated uniform block in shader program '%s'", program_name.c_str());
 	}
 
 	for (const std::string& output_line : output_lines) {
@@ -467,6 +499,14 @@ void Program::build(const std::string& program_name) {
 	}
 }
 
+void Program::bind_uniform_block(const std::string& name, const GLuint binding_point) const {
+	const GLuint block_index = glGetUniformBlockIndex(program_object_, name.c_str());
+	if (block_index == GL_INVALID_INDEX) {
+		throw wexception("Uniform block '%s' not found in program.", name.c_str());
+	}
+	glUniformBlockBinding(program_object_, block_index, binding_point);
+}
+
 namespace {
 
 // Legacy 2.1 backend only: which vertex attrib arrays are currently enabled.
@@ -535,6 +575,37 @@ void VertexArray::bind() const {
 	for (const VertexAttribute& attribute : attributes_) {
 		vertex_attrib_pointer(attribute.location, attribute.num_items, attribute.stride, attribute.offset);
 	}
+}
+
+UniformBuffer::UniformBuffer() {
+	if (backend() != Backend::kOpenGLCore) {
+		return;
+	}
+	glGenBuffers(1, &object_);
+	if (object_ == 0u) {
+		throw wexception("Could not create GL uniform buffer.");
+	}
+}
+
+UniformBuffer::~UniformBuffer() {
+	if (object_ != 0u) {
+		glDeleteBuffers(1, &object_);
+	}
+}
+
+void UniformBuffer::update(const void* data, const size_t size) const {
+	if (object_ == 0u) {
+		return;
+	}
+	glBindBuffer(GL_UNIFORM_BUFFER, object_);
+	glBufferData(GL_UNIFORM_BUFFER, size, data, GL_DYNAMIC_DRAW);
+}
+
+void UniformBuffer::bind_base(const GLuint binding_point) const {
+	if (object_ == 0u) {
+		return;
+	}
+	glBindBufferBase(GL_UNIFORM_BUFFER, binding_point, object_);
 }
 
 State::State() : last_active_texture_(NONE) {

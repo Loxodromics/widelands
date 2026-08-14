@@ -243,6 +243,7 @@ wl_library(graphic_terrain_programs
     gl/road_program.h
     gl/terrain_program.cc
     gl/terrain_program.h
+    gl/terrain_noise.h
     gl/dither_program.cc
     gl/dither_program.h
     gl/workarea_program.cc

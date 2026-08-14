@@ -20,6 +20,7 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
 #include "ui/wui/mapviewpixelconstants.h"
 
@@ -37,7 +38,11 @@ template <> struct hash<Widelands::TCoords<>> {
 WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
 	gl_program_.build("workarea");
 
-	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		gl_program_.bind_uniform_block("per_program_state", Gl::kPerProgramStateBindingPoint);
+	} else {
+		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+	}
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -49,22 +54,29 @@ WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
 void WorkareaProgram::gl_draw(int gl_texture, float z_value) {
 	glUseProgram(gl_program_.object());
 
+	auto& gl_state = Gl::State::instance();
+
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Gl::PerProgramState state{};
+		state.z_value = z_value;
+		uniform_buffer_.update(&state, sizeof(state));
+		uniform_buffer_.bind_base(Gl::kPerProgramStateBindingPoint);
+	} else {
+		glUniform1f(u_z_value_, z_value);
+	}
+
 	{
-		auto& gl_state = Gl::State::instance();
 		gl_array_buffer_.bind();
 		gl_array_buffer_.update(vertices_);
 		vao_.bind();
 		gl_state.bind(GL_TEXTURE0, gl_texture);
-		glUniform1f(u_z_value_, z_value);
 		glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 	}
 	{
-		auto& gl_state = Gl::State::instance();
 		gl_array_buffer_.bind();
 		gl_array_buffer_.update(outer_vertices_);
 		vao_.bind();
 		gl_state.bind(GL_TEXTURE0, gl_texture);
-		glUniform1f(u_z_value_, z_value);
 		glDrawArrays(GL_TRIANGLES, 0, outer_vertices_.size());
 	}
 }
