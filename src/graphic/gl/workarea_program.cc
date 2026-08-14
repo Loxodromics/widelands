@@ -41,6 +41,12 @@ WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
 	attr_overlay_ = glGetAttribLocation(gl_program_.object(), "attr_overlay");
 
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+
+	gl_array_buffer_.bind();
+	vao_.define_attributes({
+	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {attr_overlay_, 4, sizeof(PerVertexData), offsetof(PerVertexData, overlay_r)},
+	});
 }
 
 void WorkareaProgram::gl_draw(int gl_texture, float z_value) {
@@ -48,26 +54,18 @@ void WorkareaProgram::gl_draw(int gl_texture, float z_value) {
 
 	{
 		auto& gl_state = Gl::State::instance();
-		gl_state.enable_vertex_attrib_array({attr_position_, attr_overlay_});
 		gl_array_buffer_.bind();
 		gl_array_buffer_.update(vertices_);
-		Gl::vertex_attrib_pointer(
-		   attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-		Gl::vertex_attrib_pointer(
-		   attr_overlay_, 4, sizeof(PerVertexData), offsetof(PerVertexData, overlay_r));
+		vao_.bind();
 		gl_state.bind(GL_TEXTURE0, gl_texture);
 		glUniform1f(u_z_value_, z_value);
 		glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 	}
 	{
 		auto& gl_state = Gl::State::instance();
-		gl_state.enable_vertex_attrib_array({attr_position_, attr_overlay_});
 		gl_array_buffer_.bind();
 		gl_array_buffer_.update(outer_vertices_);
-		Gl::vertex_attrib_pointer(
-		   attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-		Gl::vertex_attrib_pointer(
-		   attr_overlay_, 4, sizeof(PerVertexData), offsetof(PerVertexData, overlay_r));
+		vao_.bind();
 		gl_state.bind(GL_TEXTURE0, gl_texture);
 		glUniform1f(u_z_value_, z_value);
 		glDrawArrays(GL_TRIANGLES, 0, outer_vertices_.size());

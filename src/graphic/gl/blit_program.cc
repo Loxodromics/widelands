@@ -51,6 +51,15 @@ BlitProgram::BlitProgram() {
 
 	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
 	u_mask_ = glGetUniformLocation(gl_program_.object(), "u_mask");
+
+	gl_array_buffer_.bind();
+	vao_.define_attributes({
+	   {attr_blend_, 4, sizeof(PerVertexData), offsetof(PerVertexData, blend_r)},
+	   {attr_mask_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, mask_texture_x)},
+	   {attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	   {attr_program_flavor_, 1, sizeof(PerVertexData), offsetof(PerVertexData, program_flavor)},
+	});
 }
 
 void BlitProgram::draw(const std::vector<Arguments>& arguments) {
@@ -58,21 +67,8 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 
 	auto& gl_state = Gl::State::instance();
 
-	gl_state.enable_vertex_attrib_array({attr_blend_, attr_mask_texture_position_, attr_position_,
-	                                     attr_texture_position_, attr_program_flavor_});
-
 	gl_array_buffer_.bind();
-
-	Gl::vertex_attrib_pointer(
-	   attr_blend_, 4, sizeof(PerVertexData), offsetof(PerVertexData, blend_r));
-	Gl::vertex_attrib_pointer(attr_mask_texture_position_, 2, sizeof(PerVertexData),
-	                          offsetof(PerVertexData, mask_texture_x));
-	Gl::vertex_attrib_pointer(
-	   attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x));
-	Gl::vertex_attrib_pointer(
-	   attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x));
-	Gl::vertex_attrib_pointer(
-	   attr_program_flavor_, 1, sizeof(PerVertexData), offsetof(PerVertexData, program_flavor));
+	vao_.bind();
 
 	glUniform1i(u_texture_, 0);
 	glUniform1i(u_mask_, 1);

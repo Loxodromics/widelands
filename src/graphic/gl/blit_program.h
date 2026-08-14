@@ -109,6 +109,9 @@ private:
 	// The buffer that will contain the quad for rendering.
 	Gl::Buffer<PerVertexData> gl_array_buffer_;
 
+	// The vertex array object capturing the attribute layout of this program.
+	Gl::VertexArray vao_;
+
 	// The program.
 	Gl::Program gl_program_;
 

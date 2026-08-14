@@ -62,6 +62,9 @@ private:
 	// The buffer that contains the vertices for rendering.
 	Gl::Buffer<PerVertexData> gl_array_buffer_;
 
+	// The vertex array object capturing the attribute layout of this program.
+	Gl::VertexArray vao_;
+
 	// The program.
 	Gl::Program gl_program_;
 
