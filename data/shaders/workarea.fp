@@ -1,7 +1,9 @@
-#version 120
+#version 330
 
-varying vec4 var_overlay;
+in vec4 var_overlay;
+
+out vec4 frag_color;
 
 void main() {
-	gl_FragColor = var_overlay;
+	frag_color = var_overlay;
 }

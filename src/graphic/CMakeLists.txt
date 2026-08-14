@@ -1,4 +1,5 @@
 add_subdirectory(animation)
+add_subdirectory(gl/test)
 add_subdirectory(styles)
 add_subdirectory(text)
 

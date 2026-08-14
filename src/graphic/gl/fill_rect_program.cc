@@ -31,13 +31,10 @@ FillRectProgram& FillRectProgram::instance() {
 FillRectProgram::FillRectProgram() {
 	gl_program_.build("fill_rect");
 
-	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
-	attr_color_ = glGetAttribLocation(gl_program_.object(), "attr_color");
-
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {attr_color_, 4, sizeof(PerVertexData), offsetof(PerVertexData, r)},
+	   {kAttrPosition, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {kAttrColor, 4, sizeof(PerVertexData), offsetof(PerVertexData, r)},
 	});
 }
 

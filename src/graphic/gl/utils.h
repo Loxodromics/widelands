@@ -19,6 +19,7 @@
 #define WL_GRAPHIC_GL_UTILS_H
 
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -33,6 +34,51 @@ class Shader;
 
 // Returns the name of the 'error'.
 const char* gl_error_to_string(GLenum error);
+
+// Which stage a shader source file feeds. The dialect emitter needs to know
+// this because vertex and fragment shaders share the `in`/`out` keywords but
+// mean different things by them.
+enum class ShaderStage {
+	kVertex,
+	kFragment,
+};
+
+// The GLSL dialects the in-tree preprocessor emits from one authored source.
+// WP-6 of the renderer modernization plan (Claude/RENDERER_MODERNIZATION_PLAN.md):
+// 120 for the frozen legacy 2.1 path, 330 for the core profile, 300 es for a
+// future GLES backend (emitted but not yet consumed, decision 9). The core
+// dialect is 330 rather than the plan's "150": `layout(location=N)` (decision 5)
+// was introduced in GLSL 3.30, so 150 would need GL_ARB_explicit_attrib_location.
+enum class ShaderDialect {
+	kGLSL120,
+	kGLSL330,
+	kGLSL300es,
+};
+
+// A (location, name) pair recorded from a `layout(location=N) in T name;`
+// declaration. The legacy 120 path feeds these to glBindAttribLocation before
+// linking, since GLSL 1.20 has no layout qualifier (decision 5).
+struct AttributeBinding {
+	GLint location;
+	std::string name;
+};
+
+// The result of emitting one shader for a target dialect: the transformed
+// source, plus the attribute bindings parsed from the vertex stage (empty for
+// fragment shaders).
+struct EmittedShader {
+	std::string source;
+	std::vector<AttributeBinding> attributes;
+};
+
+// Rewrites an already include-expanded shader source into the given dialect.
+// 'source' must be authored in GLSL 150 style: `layout(location=N) in` for
+// vertex inputs, `in`/`out` for varyings, `out vec4` for the fragment output,
+// and `texture(...)` for sampling. Throws on malformed declarations.
+EmittedShader emit_dialect(const std::string& expanded_source,
+                           ShaderStage stage,
+                           ShaderDialect dialect,
+                           const std::string& program_name);
 
 // Thin wrapper around a OpenGL program object to ensure proper cleanup. Throws
 // on all errors.

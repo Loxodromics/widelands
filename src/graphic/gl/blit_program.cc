@@ -42,23 +42,16 @@ struct DrawBatch {
 BlitProgram::BlitProgram() {
 	gl_program_.build("blit");
 
-	attr_blend_ = glGetAttribLocation(gl_program_.object(), "attr_blend");
-	attr_mask_texture_position_ =
-	   glGetAttribLocation(gl_program_.object(), "attr_mask_texture_position");
-	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
-	attr_texture_position_ = glGetAttribLocation(gl_program_.object(), "attr_texture_position");
-	attr_program_flavor_ = glGetAttribLocation(gl_program_.object(), "attr_program_flavor");
-
 	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
 	u_mask_ = glGetUniformLocation(gl_program_.object(), "u_mask");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {attr_blend_, 4, sizeof(PerVertexData), offsetof(PerVertexData, blend_r)},
-	   {attr_mask_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, mask_texture_x)},
-	   {attr_position_, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
-	   {attr_program_flavor_, 1, sizeof(PerVertexData), offsetof(PerVertexData, program_flavor)},
+	   {kAttrBlend, 4, sizeof(PerVertexData), offsetof(PerVertexData, blend_r)},
+	   {kAttrMaskTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, mask_texture_x)},
+	   {kAttrPosition, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {kAttrTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	   {kAttrProgramFlavor, 1, sizeof(PerVertexData), offsetof(PerVertexData, program_flavor)},
 	});
 }
 

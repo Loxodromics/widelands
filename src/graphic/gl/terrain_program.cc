@@ -32,21 +32,16 @@
 TerrainProgram::TerrainProgram() {
 	gl_program_.build("terrain");
 
-	attr_brightness_ = glGetAttribLocation(gl_program_.object(), "attr_brightness");
-	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
-	attr_texture_offset_ = glGetAttribLocation(gl_program_.object(), "attr_texture_offset");
-	attr_texture_position_ = glGetAttribLocation(gl_program_.object(), "attr_texture_position");
-
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
 	u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {attr_brightness_, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
-	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {attr_texture_offset_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_offset_x)},
-	   {attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	   {kAttrBrightness, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
+	   {kAttrPosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {kAttrTextureOffset, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_offset_x)},
+	   {kAttrTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
 	});
 }
 

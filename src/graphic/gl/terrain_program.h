@@ -63,11 +63,12 @@ private:
 	// The vertex array object capturing the attribute layout of this program.
 	Gl::VertexArray vao_;
 
-	// Attributes.
-	GLint attr_brightness_;
-	GLint attr_position_;
-	GLint attr_texture_offset_;
-	GLint attr_texture_position_;
+	// Attribute locations, mirroring the layout(location=N) qualifiers in
+	// data/shaders/terrain.vp (see blit_program.h for the binding story).
+	static constexpr GLint kAttrBrightness = 0;
+	static constexpr GLint kAttrPosition = 1;
+	static constexpr GLint kAttrTextureOffset = 2;
+	static constexpr GLint kAttrTexturePosition = 3;
 
 	// Uniforms.
 	GLint u_terrain_texture_;

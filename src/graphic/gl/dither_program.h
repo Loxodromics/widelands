@@ -92,12 +92,13 @@ private:
 	// The vertex array object capturing the attribute layout of this program.
 	Gl::VertexArray vao_;
 
-	// Attributes.
-	GLint attr_brightness_;
-	GLint attr_dither_texture_position_;
-	GLint attr_position_;
-	GLint attr_texture_offset_;
-	GLint attr_texture_position_;
+	// Attribute locations, mirroring the layout(location=N) qualifiers in
+	// data/shaders/dither.vp (see blit_program.h for the binding story).
+	static constexpr GLint kAttrBrightness = 0;
+	static constexpr GLint kAttrDitherTexturePosition = 1;
+	static constexpr GLint kAttrPosition = 2;
+	static constexpr GLint kAttrTextureOffset = 3;
+	static constexpr GLint kAttrTexturePosition = 4;
 
 	// Uniforms.
 	GLint u_dither_texture_;
