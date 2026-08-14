@@ -471,9 +471,9 @@ the whole point of the shared file (§8).
 
 | Knob | `terrain_variation.glsl` | Current | What it does |
 |---|---|---|---|
-| Value strength | `:66` `kValueAmplitude` | `0.40` | Peak brightness swing as a fraction. The only knob that changes how loud the *value* effect is. |
-| Tint strength | `:74` `kTintAmplitude` | `3.0` | Peak warm/cool swing per unit tint field. Chosen by ladder capture; see §6. Water shows roughly twice the land swing, so judge it on a coastal view. |
-| Tint colour | `:67` `kWarmTint` | `vec3(1.06, 1.00, 0.92)` | The warm endpoint of the mix; the cool endpoint is `vec3(1.0)` extrapolated past it. |
+| Value strength | `:86` `kValueAmplitude` | `0.40` | Peak brightness swing as a fraction. The only knob that changes how loud the *value* effect is. |
+| Tint strength | `:94` `kTintAmplitude` | `3.0` | Peak warm/cool swing per unit tint field. Chosen by ladder capture; see §6. Water shows roughly twice the land swing, so judge it on a coastal view. |
+| Tint colour | `:87` `kWarmTint` | `vec3(1.06, 1.00, 0.92)` | The warm endpoint of the mix; the cool endpoint is `vec3(1.0)` extrapolated past it. |
 | Octave 1 frequency | `:54` `snoise(p * 0.09)` | `0.09` | Regional patches, ~11 fields across. Lower = broader. |
 | Octave 2 | `:56` `0.50 * snoise(p * 0.21)` | amp `0.50`, f `0.21` | Mid-scale mottling, ~4.8 fields. |
 | Octave 3 | `:58` `1.20 * snoise(p * 0.55)` | amp `1.20`, f `0.55` | The one aimed at the 1-field repeat. Do not raise its *frequency* — see the antiphase rule in §5. |
