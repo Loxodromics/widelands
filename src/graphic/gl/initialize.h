@@ -54,8 +54,9 @@ Backend backend();
 // 'requested_backend' is what --renderer asked for; what was actually created
 // is available via backend() afterwards.
 // If 'trace' is kYes, sets up tracing for OpenGL and outputs every single
-// OpenGL call made, together with its arguments, return value and the result
-// from glGetError (via glad2's per-call debug hook).
+// OpenGL call made, together with the result from glGetError (via glad2's
+// per-call debug hook). Argument and return values are deliberately not
+// decoded: glad2's debug callback carries no per-argument type information.
 enum class Trace {
 	kYes,
 	kNo,
