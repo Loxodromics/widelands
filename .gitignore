@@ -50,3 +50,6 @@ gmon.out
 
 # Third-party reference screenshots (copyrighted; must not be committed)
 /referenceImages/
+
+# Agent files
+Claude/
