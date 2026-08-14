@@ -115,16 +115,6 @@ private:
 	// The program.
 	Gl::Program gl_program_;
 
-	// Attribute locations, mirroring the layout(location=N) qualifiers in
-	// data/shaders/blit.vp. The 120 dialect binds these names to these
-	// locations via glBindAttribLocation; the 150 dialect declares them in
-	// source.
-	static constexpr GLint kAttrBlend = 3;
-	static constexpr GLint kAttrMaskTexturePosition = 0;
-	static constexpr GLint kAttrPosition = 2;
-	static constexpr GLint kAttrTexturePosition = 1;
-	static constexpr GLint kAttrProgramFlavor = 4;
-
 	// Uniforms.
 	GLint u_texture_;
 	GLint u_mask_;

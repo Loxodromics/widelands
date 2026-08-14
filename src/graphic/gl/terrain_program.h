@@ -73,13 +73,6 @@ private:
 	// dimensions, noise amplitudes) on the core backend.
 	Gl::UniformBuffer uniform_buffer_;
 
-	// Attribute locations, mirroring the layout(location=N) qualifiers in
-	// data/shaders/terrain.vp (see blit_program.h for the binding story).
-	static constexpr GLint kAttrBrightness = 0;
-	static constexpr GLint kAttrPosition = 1;
-	static constexpr GLint kAttrTextureOffset = 2;
-	static constexpr GLint kAttrTexturePosition = 3;
-
 	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
 	// reads these from the uniform block instead).
 	GLint u_terrain_texture_;

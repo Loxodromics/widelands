@@ -60,11 +60,6 @@ private:
 	// The uniform buffer carrying the per-program z-value on the core backend.
 	Gl::UniformBuffer uniform_buffer_;
 
-	// Attribute locations, mirroring the layout(location=N) qualifiers in
-	// data/shaders/grid.vp (see blit_program.h for the binding story).
-	static constexpr GLint kAttrPosition = 0;
-	static constexpr GLint kAttrColor = 1;
-
 	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
 	// reads these from the uniform block instead).
 	GLint u_z_value_;

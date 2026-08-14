@@ -35,7 +35,8 @@ DitherProgram::DitherProgram() {
 	u_dither_texture_ = glGetUniformLocation(gl_program_.object(), "u_dither_texture");
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
 	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		gl_program_.bind_uniform_block("per_program_state", Gl::kPerProgramStateBindingPoint);
+		gl_program_.bind_uniform_block(
+		   "per_program_state", Gl::kPerProgramStateBindingPoint, sizeof(Gl::PerProgramState));
 	} else {
 		u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
 		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
@@ -46,12 +47,16 @@ DitherProgram::DitherProgram() {
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {kAttrBrightness, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
-	   {kAttrDitherTexturePosition, 2, sizeof(PerVertexData),
+	   {gl_program_.attribute_location("attr_brightness"), 1, sizeof(PerVertexData),
+	    offsetof(PerVertexData, brightness)},
+	   {gl_program_.attribute_location("attr_dither_texture_position"), 2, sizeof(PerVertexData),
 	    offsetof(PerVertexData, dither_texture_x)},
-	   {kAttrPosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {kAttrTextureOffset, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_offset_x)},
-	   {kAttrTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	   {gl_program_.attribute_location("attr_position"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, gl_x)},
+	   {gl_program_.attribute_location("attr_texture_offset"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, texture_offset_x)},
+	   {gl_program_.attribute_location("attr_texture_position"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, texture_x)},
 	});
 }
 
