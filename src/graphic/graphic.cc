@@ -79,7 +79,8 @@ void Graphic::initialize(const TraceGl& trace_gl,
                          int window_mode_w,
                          int window_mode_h,
                          bool init_fullscreen,
-                         bool init_maximized) {
+                         bool init_maximized,
+                         Gl::Backend requested_backend) {
 	window_mode_width_ = window_mode_w;
 	window_mode_height_ = window_mode_h;
 
@@ -112,7 +113,8 @@ void Graphic::initialize(const TraceGl& trace_gl,
 
 	GLint max;
 	gl_context_ = Gl::initialize(
-	   trace_gl == TraceGl::kYes ? Gl::Trace::kYes : Gl::Trace::kNo, sdl_window_, &max);
+	   trace_gl == TraceGl::kYes ? Gl::Trace::kYes : Gl::Trace::kNo, sdl_window_, &max,
+	   requested_backend);
 
 	max_texture_size_ = static_cast<int>(max);
 

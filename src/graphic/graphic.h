@@ -32,6 +32,10 @@
 class RenderTarget;
 class Screen;
 
+namespace Gl {
+enum class Backend;
+}
+
 // A graphics card must at least support this size for texture for Widelands to
 // run.
 constexpr int kMinimumSizeForTextures = 2048;
@@ -50,14 +54,17 @@ public:
 
 	// Initializes with the given resolution if fullscreen is false, otherwise a
 	// window that fills the screen. The 'trace_gl' parameter gets passed on to
-	// 'Gl::initialize'.
+	// 'Gl::initialize'. 'requested_backend' is the --renderer selection (WP-3
+	// of the renderer modernization plan); what was actually created can be
+	// queried via Gl::backend() afterwards.
 	enum class TraceGl { kNo, kYes };
 	void initialize(const TraceGl& trace_gl,
 	                int display,
 	                int window_mode_w,
 	                int window_mode_height,
 	                bool fullscreen,
-	                bool maximized);
+	                bool maximized,
+	                Gl::Backend requested_backend);
 	void rebuild_texture_atlas() const;
 
 	// Gets and sets the resolution.

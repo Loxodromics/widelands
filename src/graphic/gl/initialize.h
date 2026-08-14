@@ -19,15 +19,40 @@
 #ifndef WL_GRAPHIC_GL_INITIALIZE_H
 #define WL_GRAPHIC_GL_INITIALIZE_H
 
+#include <optional>
+#include <string>
+
 #include <SDL_video.h>
 
 #include "graphic/gl/system_headers.h"
 
 namespace Gl {
 
+// The rendering backend the game was started with. WP-3 of the renderer
+// modernization plan (Claude/RENDERER_MODERNIZATION_PLAN.md) selects it via
+// --renderer; only kOpenGL21 exists for real so far (kOpenGLCore is a no-op
+// alias until WP-4 requests a core profile).
+enum class Backend {
+	kOpenGL21,
+	kOpenGLCore,
+};
+
+/// Maps the --renderer command line value ("gl21", "glcore") to a Backend.
+/// Returns std::nullopt for unknown names.
+std::optional<Backend> backend_from_string(const std::string& name);
+/// The --renderer name of a backend, for logging and the dev harness.
+const char* backend_name(Backend backend);
+
+/// The backend that was actually created, i.e. after any fallback. Recorded by
+/// initialize(); the harness reads it from the log line, the rest of the code
+/// branches on it.
+Backend backend();
+
 // Initializes OpenGL. Creates a context for 'window' using SDL and loads the
 // GL library. Fills in 'max_texture_size' and returns the created SDL_Context
 // which must be closed by the caller.
+// 'requested_backend' is what --renderer asked for; what was actually created
+// is available via backend() afterwards.
 // If we are built against glbinding, 'trace' will set up tracing for
 // OpenGL and output every single opengl call ever made, together with it's
 // arguments, return values and the result from glGetError.
@@ -35,7 +60,10 @@ enum class Trace {
 	kYes,
 	kNo,
 };
-SDL_GLContext initialize(const Trace& trace, SDL_Window* window, GLint* max_texture_size);
+SDL_GLContext initialize(const Trace& trace,
+                         SDL_Window* window,
+                         GLint* max_texture_size,
+                         Backend requested_backend);
 
 }  // namespace Gl
 

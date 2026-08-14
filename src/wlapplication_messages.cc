@@ -280,6 +280,11 @@ void fill_parameter_vector() {
 	    true},
 	   {"", "theme", _("DIRNAME"),
 	    _("The path to the active UI theme, relative to the Widelands home directory."), false},
+	   {"", "renderer", _("[gl21*|glcore]"),
+	    _("Select the rendering backend. 'gl21' is the legacy OpenGL 2.1 path; 'glcore' selects "
+	      "the modern core-profile path. Falls back to 'gl21' when unavailable. Mainly for "
+	      "development."),
+	    false},
 	   /// Window options
 	   {_("Options for the internal window manager:"), "animate_map_panning", _("[true*|false]"),
 	    _("Whether automatic map movements should be animated."), true},

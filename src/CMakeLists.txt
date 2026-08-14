@@ -126,6 +126,7 @@ wl_library(widelands_ball_of_mud
     graphic
     graphic_fonthandler
     graphic_functions
+    graphic_gl_utils
     graphic_mouse_cursor
     graphic_text
     io_filesystem

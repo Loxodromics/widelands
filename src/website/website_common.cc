@@ -24,6 +24,7 @@
 #include "base/log.h"
 #include "base/multithreading.h"
 #include "base/wexception.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/graphic.h"
 #include "io/filesystem/filesystem.h"
 #include "io/filesystem/layered_filesystem.h"
@@ -50,9 +51,11 @@ void initialize() {
 	i18n::grab_textdomain("widelands", i18n::get_localedir());
 
 	// We don't really need graphics here, but we will get error messages
-	// when they aren't initialized
+	// when they aren't initialized. The website tools have no command line,
+	// so they always use the legacy backend.
 	g_gr = new Graphic();
-	g_gr->initialize(Graphic::TraceGl::kNo, 0, 1, 1, false, false);
+	g_gr->initialize(
+	   Graphic::TraceGl::kNo, 0, 1, 1, false, false, Gl::Backend::kOpenGL21);
 }
 
 // Cleanup before program end
