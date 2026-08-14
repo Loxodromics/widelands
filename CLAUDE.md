@@ -87,6 +87,20 @@ built `widelands` binary via the top-level script.
   (`cmake/codecheck/run_tests.py`) and a Ninja/Make target: `ninja codecheck` / `make codecheck`.
 - `clang-tidy` is run via `utils/run-clang-tidy.py` against a build configured with
   `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`; to check one rule: `python3 utils/run-clang-tidy.py -checks=-*,my-check-prefix*`.
+- `///` for short comments, `/* */` block style for anything longer than ~3 lines — already the
+    codebase's own convention (e.g. `src/logic/map_objects/tribes/building.h`).
+- Comments explain WHY (business decision, non-obvious constraint), not WHAT.
+- Write comments as "we", not "I" or passive voice.
+- `kPascalCase` for constants — already used (`k100PercentAsInt` in `src/base/math.h`).
+- `const`/`constexpr` wherever applicable.
+- Prefer `std::unique_ptr` by default; `std::shared_ptr` only for genuine shared ownership —
+  already the codebase's ratio (roughly 5:1 unique:shared in `src/logic`).
+- `[[nodiscard]]` for validation/resource-acquisition functions where ignoring the result is a
+  bug; skip it on simple getters — already used ~1900 times in the tree.
+- Pointer-to-type spacing (`Type* ptr`) — matches `.clang-format`'s `PointerBindsToType: true`.
+- Descriptive names; discourage `auto` except where it genuinely helps readability.
+- Log sparingly, at key decision points and error conditions, with an appropriate level.
+- Header/cpp side-by-side under `src/` — already how the tree is laid out.
 
 ## Architecture
 
