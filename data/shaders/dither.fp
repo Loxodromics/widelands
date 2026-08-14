@@ -27,5 +27,5 @@ void main() {
 	vec4 clr = texture(u_terrain_texture, var_texture_offset + u_texture_dimensions * texture_fract);
 	frag_color = vec4(
 	   clr.rgb * var_brightness * terrain_variation(var_texture_position),
-	   1. - texture(u_dither_texture, var_dither_texture_position).a);
+	   1. - texture(u_dither_texture, var_dither_texture_position).r);
 }
