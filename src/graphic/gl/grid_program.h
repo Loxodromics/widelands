@@ -57,9 +57,10 @@ private:
 	// The vertex array object capturing the attribute layout of this program.
 	Gl::VertexArray vao_;
 
-	// Attributes.
-	GLint attr_position_;
-	GLint attr_color_;
+	// Attribute locations, mirroring the layout(location=N) qualifiers in
+	// data/shaders/grid.vp (see blit_program.h for the binding story).
+	static constexpr GLint kAttrPosition = 0;
+	static constexpr GLint kAttrColor = 1;
 
 	// Uniforms.
 	GLint u_z_value_;

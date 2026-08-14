@@ -30,18 +30,14 @@
 RoadProgram::RoadProgram() {
 	gl_program_.build("road");
 
-	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
-	attr_texture_position_ = glGetAttribLocation(gl_program_.object(), "attr_texture_position");
-	attr_brightness_ = glGetAttribLocation(gl_program_.object(), "attr_brightness");
-
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {attr_texture_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
-	   {attr_brightness_, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
+	   {kAttrPosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {kAttrTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	   {kAttrBrightness, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
 	});
 }
 

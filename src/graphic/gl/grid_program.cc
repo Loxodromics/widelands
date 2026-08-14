@@ -27,15 +27,12 @@
 GridProgram::GridProgram() {
 	gl_program_.build("grid");
 
-	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
-	attr_color_ = glGetAttribLocation(gl_program_.object(), "attr_color");
-
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {attr_color_, 3, sizeof(PerVertexData), offsetof(PerVertexData, col_r)},
+	   {kAttrPosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {kAttrColor, 3, sizeof(PerVertexData), offsetof(PerVertexData, col_r)},
 	});
 }
 

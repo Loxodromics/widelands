@@ -37,15 +37,12 @@ template <> struct hash<Widelands::TCoords<>> {
 WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
 	gl_program_.build("workarea");
 
-	attr_position_ = glGetAttribLocation(gl_program_.object(), "attr_position");
-	attr_overlay_ = glGetAttribLocation(gl_program_.object(), "attr_overlay");
-
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {attr_position_, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {attr_overlay_, 4, sizeof(PerVertexData), offsetof(PerVertexData, overlay_r)},
+	   {kAttrPosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
+	   {kAttrOverlay, 4, sizeof(PerVertexData), offsetof(PerVertexData, overlay_r)},
 	});
 }
 
