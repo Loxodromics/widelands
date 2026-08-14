@@ -32,6 +32,7 @@ wl_library(base
     io_filesystem
     logic_filesystem_constants
     notifications
+    tinygettext
 )
 
 wl_library(base_macros

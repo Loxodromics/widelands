@@ -2,6 +2,7 @@ wl_library(dev_harness_options
   SRCS
     options.cc
     options.h
+  USES_ATOMIC
   DEPENDS
     base_geometry
     base_math

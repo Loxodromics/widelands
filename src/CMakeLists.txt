@@ -128,6 +128,7 @@ wl_library(widelands_ball_of_mud
     graphic_functions
     graphic_gl_utils
     graphic_mouse_cursor
+    graphic_render_queue
     graphic_text
     io_filesystem
     logic

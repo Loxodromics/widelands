@@ -53,6 +53,7 @@ wl_library(ui_editor
     base_random
     base_scoped_timer
     build_info
+    dev_harness_options
     editor
     graphic
     graphic_color_palette
