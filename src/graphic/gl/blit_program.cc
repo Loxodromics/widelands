@@ -47,11 +47,16 @@ BlitProgram::BlitProgram() {
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {kAttrBlend, 4, sizeof(PerVertexData), offsetof(PerVertexData, blend_r)},
-	   {kAttrMaskTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, mask_texture_x)},
-	   {kAttrPosition, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {kAttrTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
-	   {kAttrProgramFlavor, 1, sizeof(PerVertexData), offsetof(PerVertexData, program_flavor)},
+	   {gl_program_.attribute_location("attr_blend"), 4, sizeof(PerVertexData),
+	    offsetof(PerVertexData, blend_r)},
+	   {gl_program_.attribute_location("attr_mask_texture_position"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, mask_texture_x)},
+	   {gl_program_.attribute_location("attr_position"), 3, sizeof(PerVertexData),
+	    offsetof(PerVertexData, gl_x)},
+	   {gl_program_.attribute_location("attr_texture_position"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, texture_x)},
+	   {gl_program_.attribute_location("attr_program_flavor"), 1, sizeof(PerVertexData),
+	    offsetof(PerVertexData, program_flavor)},
 	});
 }
 

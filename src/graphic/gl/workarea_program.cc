@@ -39,15 +39,18 @@ WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
 	gl_program_.build("workarea");
 
 	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		gl_program_.bind_uniform_block("per_program_state", Gl::kPerProgramStateBindingPoint);
+		gl_program_.bind_uniform_block(
+		   "per_program_state", Gl::kPerProgramStateBindingPoint, Gl::kZValueOnlyBlockSize);
 	} else {
 		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 	}
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {kAttrPosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {kAttrOverlay, 4, sizeof(PerVertexData), offsetof(PerVertexData, overlay_r)},
+	   {gl_program_.attribute_location("attr_position"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, gl_x)},
+	   {gl_program_.attribute_location("attr_overlay"), 4, sizeof(PerVertexData),
+	    offsetof(PerVertexData, overlay_r)},
 	});
 }
 

@@ -32,8 +32,10 @@ DrawLineProgram::DrawLineProgram() {
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {kAttrPosition, 3, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {kAttrColor, 4, sizeof(PerVertexData), offsetof(PerVertexData, color_r)},
+	   {gl_program_.attribute_location("attr_position"), 3, sizeof(PerVertexData),
+	    offsetof(PerVertexData, gl_x)},
+	   {gl_program_.attribute_location("attr_color"), 4, sizeof(PerVertexData),
+	    offsetof(PerVertexData, color_r)},
 	});
 }
 

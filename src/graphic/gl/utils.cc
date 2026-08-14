@@ -480,6 +480,11 @@ void Program::build(const std::string& program_name) {
 	   expand_includes(read_file("shaders/" + program_name + ".vp"), program_name),
 	   ShaderStage::kVertex, dialect, program_name);
 
+	// Keep the parsed (name, location) pairs: they are the single source of
+	// truth for the attribute layout, and the programs read them back through
+	// attribute_location() rather than duplicating kAttr* constants.
+	attributes_ = vertex_shader.attributes;
+
 	vertex_shader_.reset(new Shader(GL_VERTEX_SHADER));
 	vertex_shader_->compile(vertex_shader.source.c_str(), program_name);
 	glAttachShader(program_object_, vertex_shader_->object());
@@ -520,12 +525,32 @@ void Program::build(const std::string& program_name) {
 	}
 }
 
-void Program::bind_uniform_block(const std::string& name, const GLuint binding_point) const {
+void Program::bind_uniform_block(const std::string& name,
+                                 const GLuint binding_point,
+                                 const size_t expected_size) const {
 	const GLuint block_index = glGetUniformBlockIndex(program_object_, name.c_str());
 	if (block_index == GL_INVALID_INDEX) {
 		throw wexception("Uniform block '%s' not found in program.", name.c_str());
 	}
+	GLint block_size = 0;
+	glGetActiveUniformBlockiv(program_object_, block_index, GL_UNIFORM_BLOCK_DATA_SIZE, &block_size);
+	if (static_cast<size_t>(block_size) != expected_size) {
+		throw wexception("Uniform block '%s' has std140 data size %d, expected %" PRIuS
+		                 " — the C++ struct and the shader block have drifted.",
+		                 name.c_str(), block_size, expected_size);
+	}
 	glUniformBlockBinding(program_object_, block_index, binding_point);
+}
+
+GLint Program::attribute_location(const std::string& name) const {
+	for (const AttributeBinding& binding : attributes_) {
+		if (binding.name == name) {
+			return binding.location;
+		}
+	}
+	throw wexception(
+	   "Attribute '%s' not found in program — the shader source and the VAO layout drifted.",
+	   name.c_str());
 }
 
 namespace {

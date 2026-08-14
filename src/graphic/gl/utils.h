@@ -95,15 +95,23 @@ public:
 	// then links them into the program.
 	void build(const std::string& program_name);
 
-	// Binds the uniform block 'name' to 'binding_point'. Only meaningful on the
-	// core backend, where the block exists in the shader source; callers guard
-	// on Gl::backend().
-	void bind_uniform_block(const std::string& name, GLuint binding_point) const;
+	// Binds the uniform block 'name' to 'binding_point', verifying that the
+	// block's std140 data size matches 'expected_size' (the sizeof of the C++
+	// struct that fills it). Only meaningful on the core backend, where the
+	// block exists in the shader source; callers guard on Gl::backend().
+	void bind_uniform_block(const std::string& name, GLuint binding_point, size_t expected_size) const;
+
+	// Returns the location recorded for attribute 'name' by the shader source's
+	// layout(location=N) qualifier, parsed during build(). Throws if the name
+	// is absent, so a renamed or renumbered attribute becomes a startup
+	// exception naming the program rather than a silently mismatched VAO.
+	[[nodiscard]] GLint attribute_location(const std::string& name) const;
 
 private:
 	const GLuint program_object_;
 	std::unique_ptr<Shader> vertex_shader_;
 	std::unique_ptr<Shader> fragment_shader_;
+	std::vector<AttributeBinding> attributes_;
 
 	DISALLOW_COPY_AND_ASSIGN(Program);
 };
@@ -187,7 +195,12 @@ private:
 // The std140 layout of the "per_program_state" uniform block shared by the
 // terrain, dither, road, grid and workarea programs (renderer modernization
 // plan WP-8, Claude/RENDERER_MODERNIZATION_PLAN.md). Floats come first so the
-// vec2 lands on its 8-byte alignment without padding: total size 24.
+// vec2 lands on its 8-byte alignment without internal padding. std140 rounds a
+// uniform block up to a multiple of 16 bytes, so the 24 bytes of real data are
+// followed by 8 bytes of explicit padding and the struct is 32 bytes — binding
+// a shorter buffer to a longer block leaves shader results undefined per spec,
+// so Program::bind_uniform_block() asserts sizeof(*this) against the block's
+// reported GL_UNIFORM_BLOCK_DATA_SIZE.
 struct PerProgramState {
 	float z_value;          // offset 0
 	float value_amplitude;  // offset 4  (terrain noise; terrain/dither only)
@@ -195,12 +208,20 @@ struct PerProgramState {
 	float warp_amplitude;   // offset 12 (terrain noise; terrain/dither only)
 	float texture_w;        // offset 16 (vec2; terrain/dither only)
 	float texture_h;        // offset 20
+	float padding_0;        // offset 24 (std140 rounds the block up to 32)
+	float padding_1;        // offset 28
 };
-static_assert(sizeof(PerProgramState) == 24, "std140 layout of per_program_state");
+static_assert(sizeof(PerProgramState) == 32, "std140 layout of per_program_state");
 
 // The GL_UNIFORM_BUFFER binding point every per-program-state block uses. Only
 // one program draws at a time, so a single shared binding point is enough.
 constexpr GLuint kPerProgramStateBindingPoint = 0;
+
+// The road, grid and workarea programs declare only `float u_z_value;` in
+// their per_program_state block, so its std140 data size is 16 bytes (a single
+// float rounded up to the vec4 alignment), not sizeof(PerProgramState). The
+// terrain and dither blocks carry the full struct instead.
+constexpr size_t kZValueOnlyBlockSize = 16;
 
 // Wrapper around a uniform buffer object (UBO), the core-profile replacement
 // for per-frame glUniform* calls on per-program scalar state (WP-8). On the

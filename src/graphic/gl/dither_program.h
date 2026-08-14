@@ -102,14 +102,6 @@ private:
 	// dimensions, noise amplitudes) on the core backend.
 	Gl::UniformBuffer uniform_buffer_;
 
-	// Attribute locations, mirroring the layout(location=N) qualifiers in
-	// data/shaders/dither.vp (see blit_program.h for the binding story).
-	static constexpr GLint kAttrBrightness = 0;
-	static constexpr GLint kAttrDitherTexturePosition = 1;
-	static constexpr GLint kAttrPosition = 2;
-	static constexpr GLint kAttrTextureOffset = 3;
-	static constexpr GLint kAttrTexturePosition = 4;
-
 	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
 	// reads these from the uniform block instead).
 	GLint u_dither_texture_;

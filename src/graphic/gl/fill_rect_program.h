@@ -96,11 +96,6 @@ private:
 	// The program.
 	Gl::Program gl_program_;
 
-	// Attribute locations, mirroring the layout(location=N) qualifiers in
-	// data/shaders/fill_rect.vp (see blit_program.h for the binding story).
-	static constexpr GLint kAttrPosition = 0;
-	static constexpr GLint kAttrColor = 1;
-
 	DISALLOW_COPY_AND_ASSIGN(FillRectProgram);
 };
 

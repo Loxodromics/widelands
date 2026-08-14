@@ -28,15 +28,15 @@
 #include "graphic/texture.h"
 #include "logic/player.h"
 
-// Full specification:
-// https://www.khronos.org/registry/OpenGL/specs/gl/GLSLangSpec.1.20.pdf
-// We target OpenGL 2.1 for the desktop here.
+// The shader is authored in GLSL 330 and emitted to the 120/330/300 es
+// dialects by Gl::emit_dialect (see data/shaders/terrain.vp and .fp).
 TerrainProgram::TerrainProgram() {
 	gl_program_.build("terrain");
 
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
 	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		gl_program_.bind_uniform_block("per_program_state", Gl::kPerProgramStateBindingPoint);
+		gl_program_.bind_uniform_block(
+		   "per_program_state", Gl::kPerProgramStateBindingPoint, sizeof(Gl::PerProgramState));
 	} else {
 		u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
 		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
@@ -47,10 +47,14 @@ TerrainProgram::TerrainProgram() {
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
-	   {kAttrBrightness, 1, sizeof(PerVertexData), offsetof(PerVertexData, brightness)},
-	   {kAttrPosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, gl_x)},
-	   {kAttrTextureOffset, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_offset_x)},
-	   {kAttrTexturePosition, 2, sizeof(PerVertexData), offsetof(PerVertexData, texture_x)},
+	   {gl_program_.attribute_location("attr_brightness"), 1, sizeof(PerVertexData),
+	    offsetof(PerVertexData, brightness)},
+	   {gl_program_.attribute_location("attr_position"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, gl_x)},
+	   {gl_program_.attribute_location("attr_texture_offset"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, texture_offset_x)},
+	   {gl_program_.attribute_location("attr_texture_position"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, texture_x)},
 	});
 }
 

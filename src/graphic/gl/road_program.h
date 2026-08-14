@@ -72,12 +72,6 @@ private:
 	// The program used for drawing the roads.
 	Gl::Program gl_program_;
 
-	// Attribute locations, mirroring the layout(location=N) qualifiers in
-	// data/shaders/road.vp (see blit_program.h for the binding story).
-	static constexpr GLint kAttrPosition = 0;
-	static constexpr GLint kAttrTexturePosition = 1;
-	static constexpr GLint kAttrBrightness = 2;
-
 	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
 	// reads these from the uniform block instead).
 	GLint u_texture_;
