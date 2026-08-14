@@ -5,7 +5,9 @@ layout(location = 0) in vec2 attr_position;
 layout(location = 1) in vec2 attr_texture_position;
 layout(location = 2) in float attr_brightness;
 
-uniform float u_z_value;
+layout(std140) uniform per_program_state {
+	float u_z_value;
+};
 
 // Outputs.
 out vec2 out_texture_position;

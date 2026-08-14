@@ -41,6 +41,12 @@ public:
 
 	void set_dither_mask(const std::string& filepath);
 
+	// Sets the terrain-noise strength multiplier (0 disables, 1 is the default
+	// look). Backlog item 2 / WP-8 of the renderer modernization plan.
+	void set_noise_strength(float strength) {
+		noise_strength_ = strength;
+	}
+
 private:
 	enum class TrianglePoint {
 		kTopLeft,
@@ -92,6 +98,10 @@ private:
 	// The vertex array object capturing the attribute layout of this program.
 	Gl::VertexArray vao_;
 
+	// The uniform buffer carrying the per-program scalars (z-value, texture
+	// dimensions, noise amplitudes) on the core backend.
+	Gl::UniformBuffer uniform_buffer_;
+
 	// Attribute locations, mirroring the layout(location=N) qualifiers in
 	// data/shaders/dither.vp (see blit_program.h for the binding story).
 	static constexpr GLint kAttrBrightness = 0;
@@ -100,14 +110,21 @@ private:
 	static constexpr GLint kAttrTextureOffset = 3;
 	static constexpr GLint kAttrTexturePosition = 4;
 
-	// Uniforms.
+	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
+	// reads these from the uniform block instead).
 	GLint u_dither_texture_;
 	GLint u_terrain_texture_;
 	GLint u_texture_dimensions_;
 	GLint u_z_value_;
+	GLint u_value_amplitude_;
+	GLint u_tint_amplitude_;
+	GLint u_warp_amplitude_;
 
 	// The texture mask for the dithering step.
 	std::unique_ptr<Texture> dither_mask_;
+
+	// The terrain-noise strength multiplier, see set_noise_strength().
+	float noise_strength_ = 1.0f;
 
 	// Objects below are here to avoid memory allocations on each frame, they
 	// could theoretically also always be recreated.

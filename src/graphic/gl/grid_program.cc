@@ -22,12 +22,17 @@
 #include <cstdlib>
 
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
 
 GridProgram::GridProgram() {
 	gl_program_.build("grid");
 
-	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		gl_program_.bind_uniform_block("per_program_state", Gl::kPerProgramStateBindingPoint);
+	} else {
+		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+	}
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -47,7 +52,14 @@ void GridProgram::gl_draw(int gl_texture, float z_value) {
 
 	gl_state.bind(GL_TEXTURE0, gl_texture);
 
-	glUniform1f(u_z_value_, z_value);
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Gl::PerProgramState state{};
+		state.z_value = z_value;
+		uniform_buffer_.update(&state, sizeof(state));
+		uniform_buffer_.bind_base(Gl::kPerProgramStateBindingPoint);
+	} else {
+		glUniform1f(u_z_value_, z_value);
+	}
 
 	glDrawArrays(GL_LINES, 0, vertices_.size());
 }

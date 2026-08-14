@@ -95,6 +95,11 @@ public:
 	// then links them into the program.
 	void build(const std::string& program_name);
 
+	// Binds the uniform block 'name' to 'binding_point'. Only meaningful on the
+	// core backend, where the block exists in the shader source; callers guard
+	// on Gl::backend().
+	void bind_uniform_block(const std::string& name, GLuint binding_point) const;
+
 private:
 	const GLuint program_object_;
 	std::unique_ptr<Shader> vertex_shader_;
@@ -177,6 +182,45 @@ private:
 	std::vector<VertexAttribute> attributes_;
 
 	DISALLOW_COPY_AND_ASSIGN(VertexArray);
+};
+
+// The std140 layout of the "per_program_state" uniform block shared by the
+// terrain, dither, road, grid and workarea programs (renderer modernization
+// plan WP-8, Claude/RENDERER_MODERNIZATION_PLAN.md). Floats come first so the
+// vec2 lands on its 8-byte alignment without padding: total size 24.
+struct PerProgramState {
+	float z_value;          // offset 0
+	float value_amplitude;  // offset 4  (terrain noise; terrain/dither only)
+	float tint_amplitude;   // offset 8  (terrain noise; terrain/dither only)
+	float warp_amplitude;   // offset 12 (terrain noise; terrain/dither only)
+	float texture_w;        // offset 16 (vec2; terrain/dither only)
+	float texture_h;        // offset 20
+};
+static_assert(sizeof(PerProgramState) == 24, "std140 layout of per_program_state");
+
+// The GL_UNIFORM_BUFFER binding point every per-program-state block uses. Only
+// one program draws at a time, so a single shared binding point is enough.
+constexpr GLuint kPerProgramStateBindingPoint = 0;
+
+// Wrapper around a uniform buffer object (UBO), the core-profile replacement
+// for per-frame glUniform* calls on per-program scalar state (WP-8). On the
+// legacy 2.1 backend there are no UBOs, so the object is never created and
+// update()/bind_base() are no-ops (mirrors VertexArray).
+class UniformBuffer {
+public:
+	UniformBuffer();
+	~UniformBuffer();
+
+	// Uploads 'size' bytes from 'data' as the whole buffer contents.
+	void update(const void* data, size_t size) const;
+
+	// Binds the buffer to 'binding_point' for reading by shader uniform blocks.
+	void bind_base(GLuint binding_point) const;
+
+private:
+	GLuint object_{0U};
+
+	DISALLOW_COPY_AND_ASSIGN(UniformBuffer);
 };
 
 // Some GL drivers do not remember the current pipeline state. If you rebind a

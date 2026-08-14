@@ -48,6 +48,11 @@ float snoise(vec2 v) {
 // extra snoise calls. The tint weighting is orthogonal to the value weighting
 // (their dot product is 1.00 + 0.20 - 1.20 = 0), which keeps value and hue from
 // trending together.
+//
+// The value, tint and warp amplitudes (u_value_amplitude, u_tint_amplitude,
+// u_warp_amplitude) are uniforms, fed from C++ as members of the
+// "per_program_state" block declared in terrain.fp/dither.fp. They scale with
+// the terrain_noise_strength config option (see Claude/TERRAIN_NOISE.md).
 vec2 terrain_fields(vec2 p) {
 	// Rotate between octaves so the simplex lattice axes never line up.
 	mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
@@ -71,19 +76,17 @@ vec2 terrain_fields(vec2 p) {
 // most between two points one field apart, the wavelength wants to be two
 // fields, i.e. ~0.5 cycles per field.
 const float kWarpFrequency = 0.55;
-const float kWarpAmplitude = 0.05;    // in fields; the knob to sweep
 
 // Offset in texture coordinates. Two dedicated snoise calls so the x and y
 // displacements are independent; reusing the existing octaves would couple
 // the warp to the colour variation and make it anisotropic, because those
 // are single scalars at fixed frequencies chosen for a different job.
 vec2 terrain_warp(vec2 world_pos) {
-	return kWarpAmplitude * vec2(
+	return u_warp_amplitude * vec2(
 		snoise(world_pos * kWarpFrequency + vec2(17.3, 5.1)),
 		snoise(world_pos * kWarpFrequency + vec2(-9.7, 23.4)));
 }
 
-const float kValueAmplitude = 0.40;
 const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // Chosen by capture over two ladders. Hue swing scales linearly; as mean
 // |d(R-B)| in 8-bit codes, land / water: 1.5 -> 1.9/3.8, 3.0 -> 3.7/7.6,
@@ -91,12 +94,12 @@ const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // sat near the quantization floor on land. Water takes roughly twice the land
 // swing because it is heavily blue-weighted, which is what sets the ceiling.
 // Clipping is not a constraint anywhere in that range (+0.24 points at worst).
-const float kTintAmplitude = 3.0;
 
 // Multiplier applied to the terrain texture colour, keyed on world position
 // in field units (var_texture_position). The mix extrapolates for negative
 // tint, giving a cool shift on one side and a warm shift on the other.
 vec3 terrain_variation(vec2 world_pos) {
 	vec2 fields = terrain_fields(world_pos);
-	return (1.0 + kValueAmplitude * fields.x) * mix(vec3(1.0), kWarmTint, kTintAmplitude * fields.y);
+	return (1.0 + u_value_amplitude * fields.x) *
+	       mix(vec3(1.0), kWarmTint, u_tint_amplitude * fields.y);
 }

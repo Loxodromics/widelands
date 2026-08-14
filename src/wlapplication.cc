@@ -57,6 +57,7 @@
 #include "graphic/graphic.h"
 #include "graphic/graphic_functions.h"
 #include "graphic/mouse_cursor.h"
+#include "graphic/render_queue.h"
 #include "graphic/style_manager.h"
 #include "graphic/text/font_set.h"
 #include "io/filesystem/disk_filesystem.h"
@@ -483,6 +484,15 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 
 	set_template_dir("");
 	verb_log_info("Loaded default styles");
+
+	// Terrain-noise strength, as a percent (100 = the default look, 0 = off).
+	// Read here and pushed into the render queue because the graphic layer does
+	// not depend on the config (backlog item 2 / renderer WP-8). This must run
+	// after set_template_dir(), whose set_dither_mask() first constructs the
+	// render queue; constructing it any earlier would destroy Gl::State before
+	// the render queue at shutdown (static destruction order).
+	RenderQueue::instance().set_terrain_noise_strength(
+	   get_config_int("terrain_noise_strength", 100) / 100.f);
 	/*
 	 * End of text rendering dependencies
 	 *****/

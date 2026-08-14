@@ -1,7 +1,14 @@
 #version 330
 
 uniform sampler2D u_terrain_texture;
-uniform vec2 u_texture_dimensions;
+
+layout(std140) uniform per_program_state {
+	float u_z_value;
+	float u_value_amplitude;
+	float u_tint_amplitude;
+	float u_warp_amplitude;
+	vec2 u_texture_dimensions;
+};
 
 in float var_brightness;
 in vec2 var_texture_position;
