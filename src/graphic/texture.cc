@@ -137,8 +137,8 @@ Texture::Texture(SDL_Surface* surface, bool intensity) : owns_texture_(false) {
 
 	Gl::swap_rows(width(), height(), surface->pitch, bpp, static_cast<uint8_t*>(surface->pixels));
 
-	glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(intensity ? GL_INTENSITY : GL_RGBA), width(),
-	             height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, surface->pixels);
+	glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(intensity ? GL_R8 : GL_RGBA), width(),
+	             height(), 0, intensity ? GL_RED : GL_RGBA, GL_UNSIGNED_BYTE, surface->pixels);
 
 	SDL_UnlockSurface(surface);
 	SDL_FreeSurface(surface);
@@ -216,8 +216,8 @@ void Texture::lock() {
 
 	pixels_.reset(new uint8_t[4ULL * width() * height()]);
 
-	Gl::State::instance().bind(GL_TEXTURE0, blit_data_.texture_id);
-	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels_.get());
+	setup_gl();
+	glReadPixels(0, 0, width(), height(), GL_RGBA, GL_UNSIGNED_BYTE, pixels_.get());
 }
 
 void Texture::unlock(UnlockMode mode) {

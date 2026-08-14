@@ -27,10 +27,11 @@ glad2:
   as the renderer's sole GL loader (renderer modernization WP-1, `Claude/RENDERER_MODERNIZATION_PLAN.md`).
 - Command: `python -m glad --api "gl:compatibility=3.3,gles2=3.0" --merge --out-path . --reproducible c --debug`
 - Desktop GL is generated as **compatibility profile**, not core, even though the eventual core
-  backend (WP-4+) only needs core: the still-active legacy GL 2.1 path uploads the dither mask with
-  `GL_INTENSITY` (`src/graphic/texture.cc`), a token core-profile headers omit entirely. Compatibility
-  is a superset header, safe to compile against regardless of which profile the runtime context ends
-  up requesting; only the token's removal (WP-7) requires core-profile behavior, not the header.
+  backend (WP-4+) only needs core: at generation time the still-active legacy GL 2.1 path uploaded
+  the dither mask with `GL_INTENSITY` (`src/graphic/texture.cc`), a token core-profile headers omit
+  entirely. Compatibility is a superset header, safe to compile against regardless of which profile
+  the runtime context ends up requesting. That token was removed in WP-7 (`GL_R8` now), but the
+  compatibility header is kept as a harmless superset rather than regenerating the loader.
 - GLES 3.0 is generated in the same merged output because the loader must support it, not because
   anything renders with ES yet (decision 9 of the plan: ES is a constraint, kept reachable, not a
   deliverable). `gladLoadGL()`/`gladLoadGLES2()` share the same `gl*` call surface either way.

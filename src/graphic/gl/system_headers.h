@@ -25,8 +25,10 @@
 // The loader is glad2 (src/third_party/glad2), vendored and generated for GL 3.3
 // compatibility profile + GLES 3.0 in one merged config (renderer modernization
 // WP-1, Claude/RENDERER_MODERNIZATION_PLAN.md). Compatibility profile, not core,
-// because the legacy GL 2.1 path still uses GL_INTENSITY (texture.cc), a token
-// core-profile headers omit; see src/third_party/README for the full rationale.
+// because the legacy GL 2.1 path uploaded the dither mask with GL_INTENSITY
+// (texture.cc), a token core-profile headers omit; that token was removed in
+// WP-7, but the compatibility header is retained as a harmless superset. See
+// src/third_party/README for the full rationale.
 #include <glad/gl.h>
 
 #endif  // end of include guard: WL_GRAPHIC_GL_SYSTEM_HEADERS_H

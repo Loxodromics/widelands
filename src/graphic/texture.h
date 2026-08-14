@@ -28,8 +28,9 @@ struct SDL_Surface;
 
 class Texture : public Surface, public Image {
 public:
-	// Create a new surface from an SDL_Surface. If intensity is true, an GL_INTENSITY texture
-	// is created. Ownership is taken.
+	// Create a new surface from an SDL_Surface. If intensity is true, a
+	// single-channel GL_R8 texture is created (from the surface's red channel).
+	// Ownership is taken.
 	explicit Texture(SDL_Surface* surface, bool intensity = false);
 
 	// Create a new empty (that is randomly filled) Surface with the given
