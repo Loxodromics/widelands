@@ -99,6 +99,36 @@ TESTCASE(fragment_300es_precision) {
 	check_equal(out.attributes.size(), 0u);
 }
 
+TESTCASE(fragment_300es_hoists_precision) {
+	// A trailing precision statement is hoisted above the uniform block and the
+	// input declaration: GLSL ES fixes a variable's precision at its
+	// declaration, so the statement only takes effect for what follows it.
+	const std::string input = "#version 150\n"
+	                          "layout(std140) uniform per_program_state {\n"
+	                          "\tfloat u_value_amplitude;\n"
+	                          "};\n"
+	                          "in vec2 var_tex;\n"
+	                          "out vec4 frag_color;\n"
+	                          "precision highp float;\n"
+	                          "void main() {\n"
+	                          "\tfrag_color = vec4(1.0);\n"
+	                          "}\n";
+	const EmittedShader out =
+	   emit_dialect(input, ShaderStage::kFragment, ShaderDialect::kGLSL300es, "test");
+	check_equal(out.source, "#version 300 es\n"
+	                        "precision mediump float;\n"
+	                        "precision highp float;\n"
+	                        "layout(std140) uniform per_program_state {\n"
+	                        "\tfloat u_value_amplitude;\n"
+	                        "};\n"
+	                        "in vec2 var_tex;\n"
+	                        "out vec4 frag_color;\n"
+	                        "void main() {\n"
+	                        "\tfrag_color = vec4(1.0);\n"
+	                        "}\n");
+	check_equal(out.attributes.size(), 0u);
+}
+
 TESTCASE(fragment_330_drops_precision) {
 	const std::string input = "#version 330\n"
 	                          "precision highp float;\n"

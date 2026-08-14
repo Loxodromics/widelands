@@ -18,6 +18,7 @@ in vec2 var_texture_offset;
 // terrain texture. This is a common problem with OpenGL and texture atlases.
 #define MARGIN 1e-2
 
+// The 300 es emitter hoists this above every declaration; do not move it up.
 precision highp float;
 
 #include "terrain_variation.glsl"

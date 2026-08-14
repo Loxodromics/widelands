@@ -226,6 +226,7 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 	EmittedShader result;
 	std::string fragment_output_name;
 	std::vector<std::string> output_lines;
+	std::vector<std::string> precision_lines;
 	bool in_uniform_block = false;
 
 	size_t pos = 0;
@@ -263,11 +264,15 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 				emitted += "\nprecision mediump float;";
 			}
 		} else if (trimmed.rfind("precision", 0) == 0) {
-			// Precision statements are a GLSL ES concept. Keep them for 300 es,
-			// drop them for the desktop dialects, which do not support them.
-			if (dialect != ShaderDialect::kGLSL300es) {
-				drop_line = true;
+			// Precision statements are a GLSL ES concept; the desktop dialects
+			// drop them. The 300 es dialect hoists them to just after the
+			// version line (and the injected default) — GLSL ES fixes a
+			// variable's precision at its declaration, so a precision statement
+			// is only meaningful above the declarations it applies to.
+			if (dialect == ShaderDialect::kGLSL300es) {
+				precision_lines.push_back(trimmed);
 			}
+			drop_line = true;
 		} else {
 			const std::vector<std::string> tokens = tokenize_declaration(trimmed);
 			if (!tokens.empty()) {
@@ -340,6 +345,22 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 
 	if (in_uniform_block) {
 		throw wexception("Unterminated uniform block in shader program '%s'", program_name.c_str());
+	}
+
+	// Hoist authored precision statements to just after the emitted #version
+	// line (which, for a 300 es fragment, already carries the injected default
+	// `precision mediump float;`). They keep source order, so an authored
+	// `precision highp float;` still overrides the default for everything that
+	// follows it.
+	if (!precision_lines.empty()) {
+		const auto version_it =
+		   std::find_if(output_lines.begin(), output_lines.end(),
+		                [](const std::string& line) { return line.rfind("#version", 0) == 0; });
+		if (version_it == output_lines.end()) {
+			output_lines.insert(output_lines.begin(), precision_lines.begin(), precision_lines.end());
+		} else {
+			output_lines.insert(version_it + 1, precision_lines.begin(), precision_lines.end());
+		}
 	}
 
 	for (const std::string& output_line : output_lines) {
