@@ -125,3 +125,6 @@ network sync and replays (`logic/replay.h`).
 
 Two independent serialization layers: `map_io` (the map itself — terrain, tribes placement, etc.,
 used by both the editor and the game) and `game_io` (full running-game state — savegames).
+
+### Misc
+The dirctory "Claude" is its own repo
