@@ -72,7 +72,7 @@ struct EmittedShader {
 };
 
 // Rewrites an already include-expanded shader source into the given dialect.
-// 'source' must be authored in GLSL 150 style: `layout(location=N) in` for
+// 'source' must be authored in GLSL 330 style: `layout(location=N) in` for
 // vertex inputs, `in`/`out` for varyings, `out vec4` for the fragment output,
 // and `texture(...)` for sampling. Throws on malformed declarations.
 EmittedShader emit_dialect(const std::string& expanded_source,

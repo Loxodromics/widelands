@@ -486,13 +486,15 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 	verb_log_info("Loaded default styles");
 
 	// Terrain-noise strength, as a percent (100 = the default look, 0 = off).
-	// Read here and pushed into the render queue because the graphic layer does
-	// not depend on the config (backlog item 2 / renderer WP-8). This must run
-	// after set_template_dir(), whose set_dither_mask() first constructs the
-	// render queue; constructing it any earlier would destroy Gl::State before
-	// the render queue at shutdown (static destruction order).
+	// Clamped to a sane range: a negative value would invert the noise, and
+	// beyond 400 it saturates. Read here and pushed into the render queue
+	// because the graphic layer does not depend on the config (backlog item 2 /
+	// renderer WP-8). This must run after set_template_dir(), whose
+	// set_dither_mask() first constructs the render queue; constructing it any
+	// earlier would destroy Gl::State before the render queue at shutdown
+	// (static destruction order).
 	RenderQueue::instance().set_terrain_noise_strength(
-	   get_config_int("terrain_noise_strength", 100) / 100.f);
+	   math::clamp(get_config_int("terrain_noise_strength", 100), 0, 400) / 100.f);
 	/*
 	 * End of text rendering dependencies
 	 *****/
