@@ -20,9 +20,8 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 #include "ui/wui/mapviewpixelconstants.h"
 
 namespace std {
@@ -37,7 +36,7 @@ template <> struct hash<Widelands::TCoords<>> {
 }  // namespace std
 
 WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "workarea";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -52,8 +51,7 @@ WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
 		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
 		pipeline_ = Rhi::device().create_pipeline(desc);
 		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
-		vertex_buffer_ =
-		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		uniform_rhi_buffer_ =
 		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
 		return;
@@ -73,7 +71,7 @@ WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
 }
 
 void WorkareaProgram::gl_draw(const BlitData& texture, const float z_value) {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Gl::PerProgramState state{};
 		state.z_value = z_value;
 		uniform_rhi_buffer_->update(&state, sizeof(state));

@@ -5,11 +5,17 @@ add_subdirectory(text)
 
 # The render hardware interface (RHI): the backend-neutral drawing contract
 # behind which the GL-core and Vulkan backends live (renderer modernization
-# plan, WP-9). Header-only; the implementations arrive in later work packages.
+# plan, WP-9). device.{h,cc} holds the backend-neutral device registry; the
+# per-backend implementations (gl/..., vulkan/...) arrive in their own work
+# packages.
 wl_library(graphic_rhi
   SRCS
+    rhi/device.cc
+    rhi/device.h
     rhi/rhi.h
+  USES_ATOMIC
   DEPENDS
+    base_exceptions
     base_geometry
     base_macros
 )
@@ -135,6 +141,7 @@ wl_library(graphic_gl_utils
     base_exceptions
     base_geometry
     base_macros
+    graphic_rhi
     graphic_text
     io_fileread
     io_filesystem
@@ -159,6 +166,7 @@ wl_library(graphic_surface
     graphic_draw_programs
     graphic_gl_utils
     graphic_render_queue
+    graphic_rhi
     graphic_rhi_gl
     graphic_sdl_utils
 )
@@ -192,7 +200,6 @@ wl_library(graphic_draw_programs
     graphic_gl_utils
     graphic_color
     graphic_rhi
-    graphic_rhi_gl
 )
 
 
@@ -210,7 +217,7 @@ wl_library(graphic_render_queue
     graphic_draw_programs
     graphic_fields_to_draw
     graphic_gl_utils
-    graphic_rhi_gl
+    graphic_rhi
     graphic_terrain_programs
     logic_map_objects
     logic_map_objects_description_maintainer
@@ -285,7 +292,6 @@ wl_library(graphic_terrain_programs
     graphic_gl_utils
     graphic_image_io
     graphic_rhi
-    graphic_rhi_gl
     graphic_surface
     io_filesystem
     logic

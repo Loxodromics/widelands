@@ -21,17 +21,16 @@
 #include "base/wexception.h"
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/image_io.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 #include "graphic/texture.h"
 #include "io/filesystem/layered_filesystem.h"
 #include "logic/player.h"
 
 DitherProgram::DitherProgram() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "dither";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -53,8 +52,7 @@ DitherProgram::DitherProgram() {
 		   0, "per_program_state", sizeof(Gl::PerProgramState)};
 		pipeline_ = Rhi::device().create_pipeline(desc);
 		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
-		vertex_buffer_ =
-		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		uniform_rhi_buffer_ =
 		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
 		return;
@@ -88,7 +86,13 @@ DitherProgram::DitherProgram() {
 void DitherProgram::set_dither_mask(const std::string& filepath) {
 	dither_mask_.reset(new Texture(load_image_as_sdl_surface(filepath, g_fs), true));
 
-	if (Gl::backend() != Gl::Backend::kOpenGLCore) {
+	// The glTexParameteri block below is skipped on the core path because the
+	// RHI descriptor-set binding handles the texture as-is. It is redundant on
+	// *both* paths: Texture::init (texture.cc) already sets wrap=clamp-to-edge
+	// and filter=linear for every texture it creates, including this mask. It
+	// stays on the legacy path because decision 4 freezes that path; do not
+	// delete it (Phase C review, C12).
+	if (!Rhi::has_device()) {
 		Gl::State::instance().bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_CLAMP_TO_EDGE));
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_CLAMP_TO_EDGE));
@@ -170,7 +174,7 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
                             const float z_value) {
 	assert(dither_mask_ != nullptr);
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
 		Gl::PerProgramState state{};

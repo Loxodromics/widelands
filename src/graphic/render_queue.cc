@@ -28,20 +28,13 @@
 #include "graphic/gl/draw_line_program.h"
 #include "graphic/gl/fill_rect_program.h"
 #include "graphic/gl/grid_program.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/road_program.h"
 #include "graphic/gl/terrain_program.h"
+#include "graphic/gl/utils.h"
 #include "graphic/gl/workarea_program.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 
 namespace {
-
-constexpr int kMaximumZValue = std::numeric_limits<uint16_t>::max();
-
-// Maps [0, kMaximumZValue] linearly to [1., -1.] for use in vertex shaders.
-inline float to_opengl_z(const int z) {
-	return -(2.f * z) / kMaximumZValue + 1.f;
-}
 
 // The key defines in which order we render things.
 //
@@ -144,7 +137,7 @@ private:
 };
 
 ScopedScissor::ScopedScissor(const Rectf& rect) {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::command_buffer().set_scissor(Recti(static_cast<int>(rect.x), static_cast<int>(rect.y),
 		                                        static_cast<int>(rect.w), static_cast<int>(rect.h)));
 	} else {
@@ -154,7 +147,7 @@ ScopedScissor::ScopedScissor(const Rectf& rect) {
 }
 
 ScopedScissor::~ScopedScissor() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::command_buffer().disable_scissor();
 	} else {
 		glDisable(GL_SCISSOR_TEST);
@@ -192,7 +185,7 @@ void RenderQueue::enqueue(const Item& given_item) {
 
 	switch (given_item.program_id) {
 	case Program::kBlit:
-		extra_value = given_item.blit_arguments.texture.texture_id;
+		extra_value = batch_id(given_item.blit_arguments.texture);
 		break;
 
 	case Program::kLine:
@@ -212,12 +205,12 @@ void RenderQueue::enqueue(const Item& given_item) {
 	if (given_item.blend_mode == BlendMode::Copy) {
 		opaque_items_.emplace_back(given_item);
 		item = &opaque_items_.back();
-		item->z_value = to_opengl_z(next_z_);
+		item->z_value = Rhi::logical_to_clip_depth(next_z_);
 		item->key = make_key_opaque(static_cast<uint64_t>(item->program_id), next_z_, extra_value);
 	} else {
 		blended_items_.emplace_back(given_item);
 		item = &blended_items_.back();
-		item->z_value = to_opengl_z(next_z_);
+		item->z_value = Rhi::logical_to_clip_depth(next_z_);
 		item->key = make_key_blended(static_cast<uint64_t>(item->program_id), next_z_, extra_value);
 	}
 	++next_z_;
@@ -229,15 +222,15 @@ void RenderQueue::clear() {
 }
 
 void RenderQueue::draw(const int screen_width, const int screen_height) {
-	// TODO(sirver): If next_z >= kMaximumZValue here, we ran out of z-layers to
-	// correctly order the drawing of our objects (see
+	// TODO(sirver): If next_z >= Rhi::kLogicalDepthMax here, we ran out of
+	// z-layers to correctly order the drawing of our objects (see
 	// https://bugs.launchpad.net/widelands/+bug/1658593). This is non-critical,
 	// but will look strange. We used to crash here in this case, but since it
 	// can happen on large zoom and huge screen resolution (> 3440 x 1400), we
 	// do not crash anymore. The linked bug contains a discussion how to fix the
 	// issue properly, but it was too much work to address at the time.
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		std::unique_ptr<Rhi::CommandBuffer> command_buffer = Rhi::device().begin_frame();
 		command_buffer->begin_pass(nullptr, Rhi::PassClear{true, 0.f, 0.f, 0.f, 0.f});
 		command_buffer->set_viewport(Recti(0, 0, screen_width, screen_height));

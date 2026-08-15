@@ -21,9 +21,8 @@
 #include "graphic/blit_mode.h"
 #include "graphic/gl/blit_data.h"
 #include "graphic/gl/coordinate_conversion.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 
 namespace {
 
@@ -43,7 +42,7 @@ struct DrawBatch {
 }  // namespace
 
 BlitProgram::BlitProgram() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "blit";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -60,13 +59,19 @@ BlitProgram::BlitProgram() {
 		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
 		desc.samplers = {{0, "u_texture"}, {1, "u_mask"}};
 
+		// One descriptor set per pipeline (C7): the layouts happen to be
+		// compatible, but a descriptor set belongs to a pipeline, and Vulkan
+		// enforces that. Each set is created from the pipeline it is paired
+		// with, right next to it, so the pairing is visible in one place.
 		desc.blend = Rhi::kBlendAlpha;
-		pipeline_alpha_ = Rhi::device().create_pipeline(desc);
-		desc.blend = Rhi::kBlendOpaque;
-		pipeline_opaque_ = Rhi::device().create_pipeline(desc);
+		alpha_.pipeline = Rhi::device().create_pipeline(desc);
+		alpha_.descriptor_set = Rhi::device().create_descriptor_set(*alpha_.pipeline);
 
-		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_alpha_);
-		vertex_buffer_ = Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		desc.blend = Rhi::kBlendOpaque;
+		opaque_.pipeline = Rhi::device().create_pipeline(desc);
+		opaque_.descriptor_set = Rhi::device().create_descriptor_set(*opaque_.pipeline);
+
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		return;
 	}
 
@@ -90,10 +95,13 @@ BlitProgram::BlitProgram() {
 	});
 }
 
-Rhi::Pipeline* BlitProgram::pipeline_for(const BlendMode blend_mode) const {
+const BlitProgram::Variant& BlitProgram::variant_for(const BlendMode blend_mode) const {
 	// blit uses ordinary alpha blending for Default/UseAlpha and overwrites the
-	// destination for Copy (Claude/RHI_INTERFACE.md §4).
-	return blend_mode == BlendMode::Copy ? pipeline_opaque_.get() : pipeline_alpha_.get();
+	// destination for Copy (Claude/RHI_INTERFACE.md §4). The pipeline and its
+	// descriptor set are chosen together, in one decision — picking them with
+	// two independent conditionals is how a set ends up bound under a pipeline
+	// it was not created for, which is what C7 was about.
+	return blend_mode == BlendMode::Copy ? opaque_ : alpha_;
 }
 
 void BlitProgram::draw(const std::vector<Arguments>& arguments) {
@@ -110,9 +118,9 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 		while (i < arguments.size()) {
 			const auto& current_args = arguments[i];
 			if (current_args.blend_mode != template_args.blend_mode ||
-			    current_args.texture.texture_id != template_args.texture.texture_id ||
-			    (current_args.mask.texture_id != 0 &&
-			     current_args.mask.texture_id != template_args.mask.texture_id)) {
+			    batch_id(current_args.texture) != batch_id(template_args.texture) ||
+			    (has_texture(current_args.mask) &&
+			     batch_id(current_args.mask) != batch_id(template_args.mask))) {
 				break;
 			}
 
@@ -175,16 +183,17 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 		offset = vertices_.size();
 	}
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
 		auto& command_buffer = Rhi::command_buffer();
 		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
 		for (const auto& draw_arg : draw_batches) {
-			descriptor_set_->set_texture(0, draw_arg.texture.texture);
-			descriptor_set_->set_texture(1, draw_arg.mask.texture);
-			command_buffer.bind_pipeline(pipeline_for(draw_arg.blend_mode));
-			command_buffer.bind_descriptor_set(descriptor_set_.get());
+			const Variant& variant = variant_for(draw_arg.blend_mode);
+			variant.descriptor_set->set_texture(0, draw_arg.texture.texture);
+			variant.descriptor_set->set_texture(1, draw_arg.mask.texture);
+			command_buffer.bind_pipeline(variant.pipeline.get());
+			command_buffer.bind_descriptor_set(variant.descriptor_set.get());
 			command_buffer.draw(draw_arg.offset, draw_arg.count);
 		}
 		return;
@@ -225,7 +234,7 @@ void BlitProgram::draw(const Rectf& gl_dest_rect,
                        const RGBAColor& blend,
                        const BlendMode& blend_mode) {
 	draw({Arguments{gl_dest_rect, z_value, texture, mask, blend, blend_mode,
-	                mask.texture_id != 0 ? BlitMode::kBlendedWithMask : BlitMode::kDirect}});
+	                has_texture(mask) ? BlitMode::kBlendedWithMask : BlitMode::kDirect}});
 }
 
 void BlitProgram::draw_monochrome(const Rectf& dest_rect,

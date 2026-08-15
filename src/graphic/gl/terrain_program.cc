@@ -22,17 +22,16 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 #include "graphic/texture.h"
 #include "logic/player.h"
 
 // The shader is authored in GLSL 330 and emitted to the 120/330/300 es
 // dialects by Gl::emit_dialect (see data/shaders/terrain.vp and .fp).
 TerrainProgram::TerrainProgram() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "terrain";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -52,8 +51,7 @@ TerrainProgram::TerrainProgram() {
 		   0, "per_program_state", sizeof(Gl::PerProgramState)};
 		pipeline_ = Rhi::device().create_pipeline(desc);
 		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
-		vertex_buffer_ =
-		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		uniform_rhi_buffer_ =
 		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
 		return;
@@ -85,7 +83,7 @@ void TerrainProgram::gl_draw(const BlitData& blit_data,
                              const float texture_w,
                              const float texture_h,
                              const float z_value) {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
 		Gl::PerProgramState state{};

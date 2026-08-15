@@ -56,7 +56,7 @@ void Capture::think(InteractiveBase& ibase) {
 
 	case State::kFreezing:
 		// Ensure the game stays stopped even if the logic thread was in the
-		// middle of a tick, then apply the camera and hide the chrome.
+		// middle of a tick, then apply the camera and configure the chrome.
 		if (Widelands::Game* game = ibase.get_game(); game != nullptr) {
 			game->game_controller()->set_desired_speed(0);
 		}
@@ -64,8 +64,9 @@ void Capture::think(InteractiveBase& ibase) {
 			ibase.map_view()->set_view(
 			   MapView::View(view->viewpoint, view->zoom), MapView::Transition::Jump);
 		}
-		ibase.set_chrome_visible(!capture_options().clean_ui);
-		if (capture_options().clean_ui) {
+		switch (capture_options().ui_mode) {
+		case UiMode::kHidden:
+			ibase.set_chrome_visible(false);
 			// The editor turns grid and resource overlays on in its constructor and
 			// the build help on in map_changed() (ui/editor/editorinteractive.cc),
 			// all of which would sit on top of whatever the capture is meant to
@@ -75,6 +76,24 @@ void Capture::think(InteractiveBase& ibase) {
 			ibase.set_display_flag(InteractiveBase::dfShowGrid, false);
 			ibase.set_display_flag(InteractiveBase::dfShowResources, false);
 			ibase.set_display_flag(InteractiveBase::dfShowBuildhelp, false);
+			break;
+
+		case UiMode::kStable:
+			// The info panel's readouts (fps, real-time clock, game speed) are
+			// all real-time-derived and cannot be made reproducible, and the
+			// toolbar is its child, so hide both. The minimap is the subject of
+			// the stable gate: it exercises the immediate render-to-texture path
+			// — fill_rect/blit into a Texture, and lock()/unlock(Unlock_Update)
+			// readback (C10).
+			ibase.set_chrome_visible(false);
+			if (ibase.minimap_registry_.window == nullptr) {
+				ibase.toggle_minimap();
+			}
+			break;
+
+		case UiMode::kAll:
+			ibase.set_chrome_visible(true);
+			break;
 		}
 		settle_frames_left_ = capture_options().settle_frames;
 		state_ = State::kSettling;

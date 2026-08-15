@@ -123,7 +123,7 @@ void Graphic::initialize(const TraceGl& trace_gl,
 	// without one. Must be created before any texture or program is built, which
 	// happens later in this function and in the first render pass.
 	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		rhi_device_.reset(new Rhi::GlCoreDevice(max));
+		rhi_device_.reset(new Rhi::GlCoreDevice());
 	}
 
 	set_fullscreen(init_fullscreen);

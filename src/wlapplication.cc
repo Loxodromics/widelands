@@ -1953,10 +1953,20 @@ void WLApplication::handle_commandline_parameters() {
 				          view.value()));
 			}
 		}
+		if (OptionalParameter ui = get_commandline_option_value("capture-ui"); ui.has_value()) {
+			if (!DevHarness::parse_capture_ui(*ui)) {
+				throw ParameterError(
+				   CmdLineVerbosity::None,
+				   format(_("Invalid value for command line parameter --capture-ui=%s: "
+				            "expected hidden, stable or all."),
+				          ui.value()));
+			}
+		}
 		if (check_commandline_flag("capture-show-ui")) {
-			// The info panel draws real-time-dependent content, so keeping the
-			// chrome makes the capture differ between runs. Allowed, but warn.
-			DevHarness::set_clean_ui(false);
+			// Alias for --capture-ui=all. The info panel draws real-time-dependent
+			// content, so keeping everything makes the capture differ between
+			// runs. Allowed, but warn.
+			DevHarness::parse_capture_ui("all");
 			log_warn("--capture-show-ui: captures including the toolbar and info panel are not "
 			         "reproducible between runs\n");
 		}
@@ -1977,6 +1987,11 @@ void WLApplication::handle_commandline_parameters() {
 		if (get_commandline_option_value("capture-view").has_value()) {
 			throw ParameterError(CmdLineVerbosity::None,
 			                     ("Command line parameter --capture-view can only be used with "
+			                      "--capture."));
+		}
+		if (get_commandline_option_value("capture-ui").has_value()) {
+			throw ParameterError(CmdLineVerbosity::None,
+			                     ("Command line parameter --capture-ui can only be used with "
 			                      "--capture."));
 		}
 		if (check_commandline_flag("capture-show-ui")) {

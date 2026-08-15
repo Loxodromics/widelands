@@ -19,6 +19,7 @@
 #ifndef WL_GRAPHIC_RHI_RHI_H
 #define WL_GRAPHIC_RHI_RHI_H
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -51,7 +52,8 @@
 //   branch on the backend.
 namespace Rhi {
 
-// Backends implementing this interface.
+// Backends implementing this interface. kVulkan is unused until WP-12; it is
+// declared now so the "which backend" value is not GL-specific.
 enum class Backend {
 	kOpenGLCore,
 	kVulkan,
@@ -59,19 +61,23 @@ enum class Backend {
 
 // Texture storage formats. The renderer uploads exactly two today
 // (src/graphic/texture.cc): RGBA8 for images, R8 for the single-channel
-// dither mask. Add formats only when a caller needs one.
+// dither mask. These enum values are not consumed until WP-16 (Vulkan texture
+// upload); the GL backend creates textures in graphic::Texture, not here.
+// Add formats only when a caller needs one.
 enum class TextureFormat {
 	kRGBA8,
 	kR8,
 };
 
 // Texture addressing mode. Every texture in the tree uses clamp-to-edge
-// (texture.cc); kept explicit so the contract does not assume it.
+// (texture.cc); kept explicit so the contract does not assume it. Consumed by
+// WP-16 (Vulkan sampler/upload); the GL backend always clamps.
 enum class TextureWrap {
 	kClampToEdge,
 };
 
 // Texture filtering. Every texture uses linear filtering (texture.cc:220).
+// Consumed by WP-16 (Vulkan sampler); the GL backend always filters linearly.
 enum class TextureFilter {
 	kLinear,
 	kNearest,
@@ -82,7 +88,9 @@ enum class TextureFilter {
 // first-class part of the interface is the point of the exercise: a GL-grown
 // interface would omit it and pay for the retrofit at every call site later
 // (plan WP-9, leak 1). A texture is kUndefined on creation and must be
-// transitioned before it is written or sampled.
+// transitioned before it is written or sampled. kUndefined is the initial
+// state (WP-16) and kPresentSource the swapchain-present state (WP-17); the GL
+// backend only ever observes kColorAttachment / kShaderReadOnly.
 enum class TextureLayout {
 	kUndefined,       // contents unspecified; the only valid destination
 	kColorAttachment, // being written as a render target
@@ -262,8 +270,19 @@ struct PipelineDescriptor {
 // are represented.
 class Texture {
 public:
-	Texture() = default;
+	Texture() : id_(next_id()) {
+	}
 	virtual ~Texture() = default;
+
+	// A dense, small, backend-neutral identity for this texture, assigned in
+	// creation order from an atomic counter (textures are created on both the
+	// initializer and the UI thread). This is what backend-neutral code keys
+	// batching and the render-queue sort key on, replacing the raw GL texture
+	// name; it fits the sort key's 44-bit extra-value field (a pointer would
+	// not). The backend still uses its own handle internally.
+	[[nodiscard]] uint32_t id() const {
+		return id_;
+	}
 
 	[[nodiscard]] virtual uint32_t width() const = 0;
 	[[nodiscard]] virtual uint32_t height() const = 0;
@@ -273,26 +292,48 @@ public:
 	// canonical row order (see the design notes). Callers that upload in
 	// row-reversed order (Gl::swap_rows today) are told which order by the
 	// contract; the backend compensates so that shader v=0 is the same texel
-	// row on every backend.
+	// row on every backend. Unused until WP-16: the GL backend creates and
+	// uploads textures in graphic::Texture (WP-10 moved only the draw path).
 	virtual void upload(const void* pixels) = 0;
 
 	// Reads the whole texture back into 'pixels', RGBA8, row-major, 4 *
 	// width() * height() bytes. Backends without direct readback copy through
 	// a host-visible buffer (WP-18). Reading a view reads the view's sub-rect.
+	// Unused until WP-18 (Texture::lock stays in graphic::Texture for now).
 	virtual void read_back(uint8_t* pixels) = 0;
 
 	DISALLOW_COPY_AND_ASSIGN(Texture);
+
+private:
+	static uint32_t next_id() {
+		static std::atomic<uint32_t> counter{0};
+		return counter.fetch_add(1);
+	}
+
+	uint32_t id_;
 };
 
-// A GPU buffer. Upload is whole-buffer (matching Gl::Buffer::update, which
-// always re-allocates with GL_DYNAMIC_DRAW because partial updates stall
-// drivers).
+// A GPU buffer.
+//
+// Transient-resource semantics (the bgfx transient-buffer model). update()
+// allocates a fresh region in the device's per-frame arena and re-points this
+// handle at it; the arena regions are only recycled at the next frame boundary.
+// A buffer may therefore be updated and drawn repeatedly *within one command
+// buffer*, and each recorded draw reads the region that was current when the
+// draw was recorded — which is exactly how the eight programs use it today
+// (one buffer, updated between draws). The GL backend implements this as a
+// whole-buffer glBufferData re-allocation, which is immediate and already
+// behaves correctly; the Vulkan backend (WP-15) must allocate from a ring
+// arena that is reset at end_frame / submit_offscreen. This is the property
+// that lets today's callers be correct under a recorded command-buffer model
+// without being rewritten.
 class Buffer {
 public:
 	Buffer() = default;
 	virtual ~Buffer() = default;
 
-	// Uploads 'size' bytes from 'data' as the whole buffer contents.
+	// Uploads 'size' bytes from 'data' as the whole buffer contents, into a
+	// fresh per-frame region (see above).
 	virtual void update(const void* data, uint32_t size) = 0;
 
 	DISALLOW_COPY_AND_ASSIGN(Buffer);
@@ -314,6 +355,14 @@ public:
 // specific Pipeline, whose shader is the single source of truth for which
 // bindings exist; binding indices are the shader's declared binding points
 // (explicit set/binding decorations in the Vulkan dialect, WP-13).
+//
+// The binding state is snapshotted at bind_descriptor_set, so a set may be
+// re-pointed (set_texture / set_uniform_buffer) and re-bound freely between
+// draws, and each recorded draw reads the bindings that were current when it
+// was recorded — which is how the eight programs use it today (one set,
+// re-pointed per draw). The Vulkan backend (WP-16) must allocate the set's
+// storage from a per-frame descriptor pool at bind time so that mutating the
+// set after a recorded draw does not disturb that draw.
 class DescriptorSet {
 public:
 	DescriptorSet() = default;
@@ -427,15 +476,37 @@ public:
 
 	// Factories. Resource creation may happen on the initializer thread (as
 	// texture creation does today); see the threading contract in the design
-	// notes.
+	// notes. create_texture / create_texture_view are unused until WP-16 (the
+	// GL backend creates textures in graphic::Texture and models sub-textures
+	// via BlitData), and read_back_swapchain until WP-18.
 	virtual std::unique_ptr<Texture> create_texture(const TextureDescriptor& desc) = 0;
 	virtual std::unique_ptr<Texture>
 	create_texture_view(Texture& parent, const Recti& subrect) = 0;
+	// 'size' is an initial capacity hint: the buffer is created with at least
+	// this much storage reserved so the first update() is not a surprise
+	// re-allocation. Under transient-resource semantics update() may still
+	// re-allocate a fresh region each frame, so the hint only avoids the first
+	// one. Pass the steady-state size when it is known (the per-program uniform
+	// blocks are exactly one struct), and **0 when it is not** — the per-frame
+	// vertex buffers size themselves from the scene, so any constant would be a
+	// guess that the first update() discards. Zero is a valid hint meaning
+	// "reserve nothing", not a missing argument.
 	virtual std::unique_ptr<Buffer> create_buffer(uint32_t size, BufferUsage usage) = 0;
 	virtual std::unique_ptr<Pipeline> create_pipeline(const PipelineDescriptor& desc) = 0;
 	virtual std::unique_ptr<DescriptorSet> create_descriptor_set(const Pipeline& pipeline) = 0;
 
+	// Internal registry plumbing, not part of the drawing contract. The device
+	// pushes/pops the command buffer it hands out from begin_frame /
+	// begin_offscreen, so a nested offscreen submit inside a frame restores the
+	// frame's buffer when it finishes. Rhi::command_buffer() reads the top.
+	CommandBuffer& current_command_buffer();
+	void push_command_buffer(CommandBuffer* command_buffer);
+	void pop_command_buffer();
+
 	DISALLOW_COPY_AND_ASSIGN(Device);
+
+private:
+	std::vector<CommandBuffer*> command_buffer_stack_;
 };
 
 // The upper bound of the RenderQueue's logical depth. The sort key is an

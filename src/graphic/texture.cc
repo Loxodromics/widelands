@@ -31,8 +31,8 @@
 #include "graphic/gl/blit_program.h"
 #include "graphic/gl/draw_line_program.h"
 #include "graphic/gl/fill_rect_program.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/device.h"
 #include "graphic/rhi/gl/gl_device.h"
 #include "graphic/sdl_utils.h"
 #include "graphic/surface.h"
@@ -103,7 +103,7 @@ bool is_bgr_surface(const SDL_PixelFormat& fmt) {
 Texture::Texture(int w, int h) : owns_texture_(false) {
 	init(w, h);
 
-	if (blit_data_.texture_id == 0) {
+	if (!has_texture(blit_data_)) {
 		return;
 	}
 
@@ -236,7 +236,7 @@ void Texture::init(uint16_t w, uint16_t h) {
 	// code (descriptor-set binding). It stays non-owning: the GL texture's
 	// lifecycle is managed here, not by the RHI (WP-10 moves the draw path, not
 	// texture creation).
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		rhi_texture_ = Rhi::wrap_gl_texture(blit_data_.texture_id, w, h);
 		blit_data_.texture = rhi_texture_.get();
 	}
@@ -245,7 +245,7 @@ void Texture::init(uint16_t w, uint16_t h) {
 void Texture::lock() {
 	assert(is_initializer_thread());
 
-	if (blit_data_.texture_id == 0) {
+	if (!has_texture(blit_data_)) {
 		return;
 	}
 
@@ -308,7 +308,7 @@ void Texture::setup_gl() const {
 }
 
 void Texture::draw_to_self(const std::function<void()>& draw) {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		std::unique_ptr<Rhi::CommandBuffer> command_buffer = Rhi::device().begin_offscreen();
 		command_buffer->transition(blit_data_.texture, Rhi::TextureLayout::kColorAttachment);
 		command_buffer->begin_pass(blit_data_.texture, Rhi::PassClear{false, 0.f, 0.f, 0.f, 0.f});
@@ -326,7 +326,7 @@ void Texture::do_blit(const Rectf& dst_rect,
                       const BlitData& texture,
                       float opacity,
                       BlendMode blend_mode) {
-	if (blit_data_.texture_id == 0) {
+	if (!has_texture(blit_data_)) {
 		return;
 	}
 	draw_to_self([&]() {
@@ -340,7 +340,7 @@ void Texture::do_blit_blended(const Rectf& dst_rect,
                               const BlitData& mask,
                               const RGBColor& blend) {
 
-	if (blit_data_.texture_id == 0) {
+	if (!has_texture(blit_data_)) {
 		return;
 	}
 	draw_to_self([&]() {
@@ -351,14 +351,14 @@ void Texture::do_blit_blended(const Rectf& dst_rect,
 void Texture::do_blit_monochrome(const Rectf& dst_rect,
                                  const BlitData& texture,
                                  const RGBAColor& blend) {
-	if (blit_data_.texture_id == 0) {
+	if (!has_texture(blit_data_)) {
 		return;
 	}
 	draw_to_self([&]() { BlitProgram::instance().draw_monochrome(dst_rect, 0.f, texture, blend); });
 }
 
 void Texture::do_draw_line_strip(std::vector<DrawLineProgram::PerVertexData> vertices) {
-	if (blit_data_.texture_id == 0) {
+	if (!has_texture(blit_data_)) {
 		return;
 	}
 	draw_to_self([&]() {
@@ -368,7 +368,7 @@ void Texture::do_draw_line_strip(std::vector<DrawLineProgram::PerVertexData> ver
 }
 
 void Texture::do_fill_rect(const Rectf& dst_rect, const RGBAColor& color, BlendMode blend_mode) {
-	if (blit_data_.texture_id == 0) {
+	if (!has_texture(blit_data_)) {
 		return;
 	}
 	draw_to_self(

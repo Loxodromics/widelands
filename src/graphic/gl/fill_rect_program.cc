@@ -21,8 +21,7 @@
 #include "base/macros.h"
 #include "base/math.h"
 #include "base/wexception.h"
-#include "graphic/gl/initialize.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 
 // static
 FillRectProgram& FillRectProgram::instance() {
@@ -31,7 +30,7 @@ FillRectProgram& FillRectProgram::instance() {
 }
 
 FillRectProgram::FillRectProgram() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "fill_rect";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -51,7 +50,7 @@ FillRectProgram::FillRectProgram() {
 		desc.blend = Rhi::kBlendOpaque;
 		pipeline_opaque_ = Rhi::device().create_pipeline(desc);
 
-		vertex_buffer_ = Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		return;
 	}
 
@@ -184,7 +183,7 @@ void FillRectProgram::draw(const std::vector<Arguments>& arguments) {
 		vertices_.clear();
 		const Arguments& template_args = arguments[i];
 
-		if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		if (Rhi::has_device()) {
 			// The RHI pipeline carries the blend state, so selecting the
 			// pipeline replaces the legacy glBlend* setup/restore below.
 			while (i < arguments.size()) {

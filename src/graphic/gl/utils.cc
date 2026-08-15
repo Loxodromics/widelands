@@ -232,8 +232,8 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 	size_t pos = 0;
 	while (pos < expanded_source.size()) {
 		const size_t line_end = expanded_source.find('\n', pos);
-		const std::string line =
-		   expanded_source.substr(pos, line_end == std::string::npos ? std::string::npos : line_end - pos);
+		const std::string line = expanded_source.substr(
+		   pos, line_end == std::string::npos ? std::string::npos : line_end - pos);
 
 		bool drop_line = false;
 		std::string emitted = line;
@@ -457,11 +457,7 @@ void Shader::compile(const char* source, const std::string& program_name) const 
 	}
 }
 
-Program::Program() : program_object_(glCreateProgram()) {
-	if (program_object_ == 0u) {
-		throw wexception("Could not create GL program.");
-	}
-}
+Program::Program() = default;
 
 Program::~Program() {
 	if (program_object_ != 0u) {
@@ -470,6 +466,14 @@ Program::~Program() {
 }
 
 void Program::build(const std::string& program_name) {
+	// The program object is created here, not in the constructor: on the core
+	// path a Program member is built through the RHI (GlCorePipeline) instead
+	// of via this method, so it must not leak a glCreateProgram (C9).
+	program_object_ = glCreateProgram();
+	if (program_object_ == 0u) {
+		throw wexception("Could not create GL program.");
+	}
+
 	const ShaderDialect dialect =
 	   backend() == Backend::kOpenGLCore ? ShaderDialect::kGLSL330 : ShaderDialect::kGLSL120;
 
@@ -566,15 +570,6 @@ std::unordered_set<GLint>& enabled_attrib_arrays() {
 
 }  // namespace
 
-VertexArray::VertexArray() {
-	if (backend() == Backend::kOpenGLCore) {
-		glGenVertexArrays(1, &vao_);
-		if (vao_ == 0u) {
-			throw wexception("Could not create GL vertex array object.");
-		}
-	}
-}
-
 VertexArray::~VertexArray() {
 	if (vao_ != 0u) {
 		glDeleteVertexArrays(1, &vao_);
@@ -586,10 +581,21 @@ void VertexArray::define_attributes(const std::vector<VertexAttribute>& attribut
 	if (backend() != Backend::kOpenGLCore) {
 		return;
 	}
+	// The VAO is created lazily here, not in the constructor: on the core path
+	// the programs draw through the RHI and never call define_attributes(), so
+	// a VertexArray member that sees no use must not leak a glGenVertexArrays
+	// (C9).
+	if (vao_ == 0u) {
+		glGenVertexArrays(1, &vao_);
+		if (vao_ == 0u) {
+			throw wexception("Could not create GL vertex array object.");
+		}
+	}
 	glBindVertexArray(vao_);
 	for (const VertexAttribute& attribute : attributes) {
 		glEnableVertexAttribArray(attribute.location);
-		vertex_attrib_pointer(attribute.location, attribute.num_items, attribute.stride, attribute.offset);
+		vertex_attrib_pointer(
+		   attribute.location, attribute.num_items, attribute.stride, attribute.offset);
 	}
 }
 
@@ -619,17 +625,8 @@ void VertexArray::bind() const {
 		}
 	}
 	for (const VertexAttribute& attribute : attributes_) {
-		vertex_attrib_pointer(attribute.location, attribute.num_items, attribute.stride, attribute.offset);
-	}
-}
-
-UniformBuffer::UniformBuffer() {
-	if (backend() != Backend::kOpenGLCore) {
-		return;
-	}
-	glGenBuffers(1, &object_);
-	if (object_ == 0u) {
-		throw wexception("Could not create GL uniform buffer.");
+		vertex_attrib_pointer(
+		   attribute.location, attribute.num_items, attribute.stride, attribute.offset);
 	}
 }
 
@@ -639,18 +636,30 @@ UniformBuffer::~UniformBuffer() {
 	}
 }
 
-void UniformBuffer::update(const void* data, const size_t size) const {
-	if (object_ == 0u) {
+void UniformBuffer::ensure_created() const {
+	if (object_ != 0u) {
 		return;
 	}
+	glGenBuffers(1, &object_);
+	if (object_ == 0u) {
+		throw wexception("Could not create GL uniform buffer.");
+	}
+}
+
+void UniformBuffer::update(const void* data, const size_t size) const {
+	if (backend() != Backend::kOpenGLCore) {
+		return;
+	}
+	ensure_created();
 	glBindBuffer(GL_UNIFORM_BUFFER, object_);
 	glBufferData(GL_UNIFORM_BUFFER, size, data, GL_DYNAMIC_DRAW);
 }
 
 void UniformBuffer::bind_base(const GLuint binding_point) const {
-	if (object_ == 0u) {
+	if (backend() != Backend::kOpenGLCore) {
 		return;
 	}
+	ensure_created();
 	glBindBufferBase(GL_UNIFORM_BUFFER, binding_point, object_);
 }
 
