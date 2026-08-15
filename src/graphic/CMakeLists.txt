@@ -385,6 +385,8 @@ wl_library(graphic
     hyperlink.h
     image_cache.cc
     image_cache.h
+    render_backend.cc
+    render_backend.h
     style_manager.cc
     style_manager.h
     rendertarget.cc

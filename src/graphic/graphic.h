@@ -25,16 +25,14 @@
 #include <SDL_version.h>
 #include <SDL_video.h>
 
+#include "graphic/render_backend.h"
+
 #if SDL_VERSION_ATLEAST(2, 0, 5)
 #define RESIZABLE_WINDOW
 #endif
 
 class RenderTarget;
 class Screen;
-
-namespace Gl {
-enum class Backend;
-}
 
 namespace Rhi {
 class Device;
@@ -60,7 +58,7 @@ public:
 	// window that fills the screen. The 'trace_gl' parameter gets passed on to
 	// 'Gl::initialize'. 'requested_backend' is the --renderer selection (WP-3
 	// of the renderer modernization plan); what was actually created can be
-	// queried via Gl::backend() afterwards.
+	// queried via obtained_render_backend() afterwards.
 	enum class TraceGl { kNo, kYes };
 	void initialize(const TraceGl& trace_gl,
 	                int display,
@@ -68,7 +66,7 @@ public:
 	                int window_mode_height,
 	                bool fullscreen,
 	                bool maximized,
-	                Gl::Backend requested_backend);
+	                RenderBackend requested_backend);
 	void rebuild_texture_atlas() const;
 
 	// Gets and sets the resolution.

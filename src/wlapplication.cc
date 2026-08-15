@@ -53,7 +53,6 @@
 #include "dev_harness/options.h"
 #include "graphic/default_resolution.h"
 #include "graphic/font_handler.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/graphic.h"
 #include "graphic/graphic_functions.h"
 #include "graphic/mouse_cursor.h"
@@ -425,7 +424,7 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 	   get_config_int("display", -1), get_config_int("xres", kDefaultResolutionW),
 	   get_config_int("yres", kDefaultResolutionH), get_config_bool("fullscreen", false),
 	   get_config_bool("maximized", false),
-	   Gl::backend_from_string(renderer_).value_or(Gl::Backend::kOpenGL21));
+	   render_backend_from_string(renderer_).value_or(RenderBackend::kOpenGL21));
 
 	{
 		// The window manager may resize the window on creation, so we have to handle resize events
@@ -2083,11 +2082,18 @@ void WLApplication::handle_commandline_parameters() {
 	// linger there and break the next launch.
 	if (OptionalParameter renderer = get_commandline_option_value("renderer");
 	    renderer.has_value()) {
-		if (!Gl::backend_from_string(*renderer).has_value()) {
+		const std::optional<RenderBackend> backend = render_backend_from_string(*renderer);
+		if (!backend.has_value()) {
 			throw ParameterError(
 			   CmdLineVerbosity::None,
-			   format(_("Invalid value for command line parameter --renderer=%s: expected 'gl21' "
-			            "or 'glcore'."),
+			   format(_("Invalid value for command line parameter --renderer=%s: expected 'gl21', "
+			            "'glcore' or 'vulkan'."),
+			          renderer.value()));
+		}
+		if (!render_backend_available(*backend)) {
+			throw ParameterError(
+			   CmdLineVerbosity::None,
+			   format(_("This build does not support --renderer=%s (built without Vulkan)."),
 			          renderer.value()));
 		}
 		renderer_ = *renderer;
