@@ -24,6 +24,7 @@
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 #include "logic/map_objects/tribes/workarea_info.h"
 
 class WorkareaProgram {
@@ -32,7 +33,7 @@ public:
 	WorkareaProgram();
 
 	// Draws the workarea overlay.
-	void draw(uint32_t texture_id, Workareas, const FieldsToDraw&, float z, Vector2f rendertarget);
+	void draw(const BlitData& texture, Workareas, const FieldsToDraw&, float z, Vector2f rendertarget);
 
 private:
 	struct PerVertexData {
@@ -45,7 +46,7 @@ private:
 	};
 	static_assert(sizeof(PerVertexData) == 24, "Wrong padding.");
 
-	void gl_draw(int gl_texture, float z_value);
+	void gl_draw(const BlitData& texture, float z_value);
 
 	// Adds a vertex to the end of vertices with data from 'field' in order to apply the specified
 	// 'overlay' and, if desired, at the specified offset.
@@ -70,6 +71,13 @@ private:
 	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
 	// reads these from the uniform block instead).
 	GLint u_z_value_;
+
+	// RHI resources for the core path. workarea binds a texture its shader
+	// never samples (see Claude/RHI_INTERFACE.md §6.1) and the z-only block.
+	std::unique_ptr<Rhi::Pipeline> pipeline_;
+	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
+	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
 
 	// Objects below are kept around to avoid memory allocations on each frame.
 	// They could theoretically also be recreated.

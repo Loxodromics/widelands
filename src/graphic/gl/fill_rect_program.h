@@ -19,11 +19,14 @@
 #ifndef WL_GRAPHIC_GL_FILL_RECT_PROGRAM_H
 #define WL_GRAPHIC_GL_FILL_RECT_PROGRAM_H
 
+#include <memory>
+
 #include "base/rect.h"
 #include "graphic/blend_mode.h"
 #include "graphic/color.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 
 class FillRectProgram {
 public:
@@ -95,6 +98,18 @@ private:
 
 	// The program.
 	Gl::Program gl_program_;
+
+	// RHI resources for the core path (the legacy members above are unused
+	// there). fill_rect interprets each BlendMode differently (see
+	// Claude/RHI_INTERFACE.md §4), so it owns one pipeline per blend state.
+	std::unique_ptr<Rhi::Pipeline> pipeline_alpha_;
+	std::unique_ptr<Rhi::Pipeline> pipeline_additive_;
+	std::unique_ptr<Rhi::Pipeline> pipeline_reverse_subtract_;
+	std::unique_ptr<Rhi::Pipeline> pipeline_opaque_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
+
+	// The pipeline to use for 'blend_mode' on the core path.
+	Rhi::Pipeline* pipeline_for(BlendMode blend_mode) const;
 
 	DISALLOW_COPY_AND_ASSIGN(FillRectProgram);
 };

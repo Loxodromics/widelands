@@ -24,6 +24,7 @@
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 #include "logic/map_objects/description_maintainer.h"
 #include "logic/map_objects/world/terrain_description.h"
 
@@ -87,7 +88,7 @@ private:
 	};
 
 	// Call through to GL.
-	void gl_draw(int gl_texture, float texture_w, float texture_h, float z_value);
+	void gl_draw(const BlitData& blit_data, float texture_w, float texture_h, float z_value);
 
 	// The program used for drawing the terrain.
 	Gl::Program gl_program_;
@@ -111,6 +112,14 @@ private:
 	GLint u_value_amplitude_;
 	GLint u_tint_amplitude_;
 	GLint u_warp_amplitude_;
+
+	// RHI resources for the core path (the legacy members above are unused
+	// there). dither reads two textures (u_dither_texture, u_terrain_texture)
+	// and the full per_program_state block.
+	std::unique_ptr<Rhi::Pipeline> pipeline_;
+	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
+	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
 
 	// The texture mask for the dithering step.
 	std::unique_ptr<Texture> dither_mask_;

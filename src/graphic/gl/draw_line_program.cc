@@ -21,6 +21,9 @@
 #include <cassert>
 #include <iterator>
 
+#include "graphic/gl/initialize.h"
+#include "graphic/rhi/gl/gl_device.h"
+
 // static
 DrawLineProgram& DrawLineProgram::instance() {
 	static DrawLineProgram draw_line_program;
@@ -28,6 +31,22 @@ DrawLineProgram& DrawLineProgram::instance() {
 }
 
 DrawLineProgram::DrawLineProgram() {
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::PipelineDescriptor desc;
+		desc.program_name = "draw_line";
+		desc.vertex_layout.stride = sizeof(PerVertexData);
+		desc.vertex_layout.attributes = {
+		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+		   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, color_r)},
+		};
+		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+		desc.blend = Rhi::kBlendAlpha;
+		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		pipeline_ = Rhi::device().create_pipeline(desc);
+		vertex_buffer_ = Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		return;
+	}
+
 	gl_program_.build("draw_line");
 
 	gl_array_buffer_.bind();
@@ -40,13 +59,7 @@ DrawLineProgram::DrawLineProgram() {
 }
 
 void DrawLineProgram::draw(std::vector<Arguments> arguments) {
-	glUseProgram(gl_program_.object());
-
-	gl_array_buffer_.bind();
-	vao_.bind();
-
 	vertices_.clear();
-
 	for (Arguments& current_args : arguments) {
 		// We do not support anything else for drawing lines, really.
 		assert(current_args.blend_mode == BlendMode::UseAlpha);
@@ -57,6 +70,19 @@ void DrawLineProgram::draw(std::vector<Arguments> arguments) {
 		std::move(
 		   current_args.vertices.begin(), current_args.vertices.end(), std::back_inserter(vertices_));
 	}
+
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+		auto& command_buffer = Rhi::command_buffer();
+		command_buffer.bind_pipeline(pipeline_.get());
+		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+		command_buffer.draw(0, vertices_.size());
+		return;
+	}
+
+	glUseProgram(gl_program_.object());
+	gl_array_buffer_.bind();
+	vao_.bind();
 	gl_array_buffer_.update(vertices_);
 	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 }

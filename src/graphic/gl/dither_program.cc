@@ -25,25 +25,50 @@
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/image_io.h"
+#include "graphic/rhi/gl/gl_device.h"
 #include "graphic/texture.h"
 #include "io/filesystem/layered_filesystem.h"
 #include "logic/player.h"
 
 DitherProgram::DitherProgram() {
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::PipelineDescriptor desc;
+		desc.program_name = "dither";
+		desc.vertex_layout.stride = sizeof(PerVertexData);
+		desc.vertex_layout.attributes = {
+		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
+		   {"attr_dither_texture_position", Rhi::VertexFormat::kVec2,
+		    offsetof(PerVertexData, dither_texture_x)},
+		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+		   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
+		    offsetof(PerVertexData, texture_offset_x)},
+		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
+		    offsetof(PerVertexData, texture_x)},
+		};
+		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+		desc.blend = Rhi::kBlendAlpha;
+		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		desc.samplers = {{0, "u_dither_texture"}, {1, "u_terrain_texture"}};
+		desc.uniform_block = Rhi::UniformBlockBinding{
+		   0, "per_program_state", sizeof(Gl::PerProgramState)};
+		pipeline_ = Rhi::device().create_pipeline(desc);
+		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
+		vertex_buffer_ =
+		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		uniform_rhi_buffer_ =
+		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
+		return;
+	}
+
 	gl_program_.build("dither");
 
 	u_dither_texture_ = glGetUniformLocation(gl_program_.object(), "u_dither_texture");
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		gl_program_.bind_uniform_block(
-		   "per_program_state", Gl::kPerProgramStateBindingPoint, sizeof(Gl::PerProgramState));
-	} else {
-		u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
-		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
-		u_value_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_value_amplitude");
-		u_tint_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_tint_amplitude");
-		u_warp_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_warp_amplitude");
-	}
+	u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
+	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
+	u_value_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_value_amplitude");
+	u_tint_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_tint_amplitude");
+	u_warp_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_warp_amplitude");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -63,11 +88,13 @@ DitherProgram::DitherProgram() {
 void DitherProgram::set_dither_mask(const std::string& filepath) {
 	dither_mask_.reset(new Texture(load_image_as_sdl_surface(filepath, g_fs), true));
 
-	Gl::State::instance().bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_CLAMP_TO_EDGE));
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_CLAMP_TO_EDGE));
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+	if (Gl::backend() != Gl::Backend::kOpenGLCore) {
+		Gl::State::instance().bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_CLAMP_TO_EDGE));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_CLAMP_TO_EDGE));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+	}
 }
 
 void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
@@ -137,8 +164,35 @@ void DitherProgram::maybe_add_dithering_triangle(
 	}
 }
 
-void DitherProgram::gl_draw(int gl_texture, float texture_w, float texture_h, const float z_value) {
+void DitherProgram::gl_draw(const BlitData& blit_data,
+                            const float texture_w,
+                            const float texture_h,
+                            const float z_value) {
 	assert(dither_mask_ != nullptr);
+
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+
+		Gl::PerProgramState state{};
+		state.z_value = z_value;
+		state.value_amplitude = kValueAmplitude * noise_strength_;
+		state.tint_amplitude = kTintAmplitude * noise_strength_;
+		state.warp_amplitude = kWarpAmplitude * noise_strength_;
+		state.texture_w = texture_w;
+		state.texture_h = texture_h;
+		uniform_rhi_buffer_->update(&state, sizeof(state));
+
+		descriptor_set_->set_texture(0, dither_mask_->blit_data().texture);
+		descriptor_set_->set_texture(1, blit_data.texture);
+		descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
+
+		auto& command_buffer = Rhi::command_buffer();
+		command_buffer.bind_pipeline(pipeline_.get());
+		command_buffer.bind_descriptor_set(descriptor_set_.get());
+		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+		command_buffer.draw(0, vertices_.size());
+		return;
+	}
 
 	glUseProgram(gl_program_.object());
 
@@ -149,28 +203,16 @@ void DitherProgram::gl_draw(int gl_texture, float texture_w, float texture_h, co
 	vao_.bind();
 
 	gl_state.bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
-	gl_state.bind(GL_TEXTURE1, gl_texture);
+	gl_state.bind(GL_TEXTURE1, blit_data.texture_id);
 
 	glUniform1i(u_dither_texture_, 0);
 	glUniform1i(u_terrain_texture_, 1);
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		Gl::PerProgramState state{};
-		state.z_value = z_value;
-		state.value_amplitude = kValueAmplitude * noise_strength_;
-		state.tint_amplitude = kTintAmplitude * noise_strength_;
-		state.warp_amplitude = kWarpAmplitude * noise_strength_;
-		state.texture_w = texture_w;
-		state.texture_h = texture_h;
-		uniform_buffer_.update(&state, sizeof(state));
-		uniform_buffer_.bind_base(Gl::kPerProgramStateBindingPoint);
-	} else {
-		glUniform1f(u_z_value_, z_value);
-		glUniform2f(u_texture_dimensions_, texture_w, texture_h);
-		glUniform1f(u_value_amplitude_, kValueAmplitude * noise_strength_);
-		glUniform1f(u_tint_amplitude_, kTintAmplitude * noise_strength_);
-		glUniform1f(u_warp_amplitude_, kWarpAmplitude * noise_strength_);
-	}
+	glUniform1f(u_z_value_, z_value);
+	glUniform2f(u_texture_dimensions_, texture_w, texture_h);
+	glUniform1f(u_value_amplitude_, kValueAmplitude * noise_strength_);
+	glUniform1f(u_tint_amplitude_, kTintAmplitude * noise_strength_);
+	glUniform1f(u_warp_amplitude_, kWarpAmplitude * noise_strength_);
 
 	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 }
@@ -259,5 +301,5 @@ void DitherProgram::draw(
 
 	const BlitData& blit_data = terrains.get(0).get_texture(0).blit_data();
 	const Rectf texture_coordinates = to_gl_texture(blit_data);
-	gl_draw(blit_data.texture_id, texture_coordinates.w, texture_coordinates.h, z_value);
+	gl_draw(blit_data, texture_coordinates.w, texture_coordinates.h, z_value);
 }

@@ -38,6 +38,7 @@
 #include "graphic/note_graphic_resolution_changed.h"
 #include "graphic/render_queue.h"
 #include "graphic/rendertarget.h"
+#include "graphic/rhi/gl/gl_device.h"
 #include "graphic/screen.h"
 #include "graphic/texture.h"
 #include "io/filesystem/layered_filesystem.h"
@@ -118,6 +119,13 @@ void Graphic::initialize(const TraceGl& trace_gl,
 
 	max_texture_size_ = static_cast<int>(max);
 
+	// Create the RHI device for the core path (WP-10). The legacy 2.1 path runs
+	// without one. Must be created before any texture or program is built, which
+	// happens later in this function and in the first render pass.
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		rhi_device_.reset(new Rhi::GlCoreDevice(max));
+	}
+
 	set_fullscreen(init_fullscreen);
 	if (init_maximized) {
 		set_maximized(true);
@@ -163,6 +171,9 @@ Graphic::~Graphic() {
 	g_animation_manager = nullptr;
 	delete g_image_cache;
 	g_image_cache = nullptr;
+	// Destroy the RHI device while the GL context is still current (it deletes
+	// its offscreen framebuffer).
+	rhi_device_.reset();
 	if (sdl_window_ != nullptr) {
 		SDL_DestroyWindow(sdl_window_);
 		sdl_window_ = nullptr;

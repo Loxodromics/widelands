@@ -21,6 +21,8 @@
 #include "base/macros.h"
 #include "base/math.h"
 #include "base/wexception.h"
+#include "graphic/gl/initialize.h"
+#include "graphic/rhi/gl/gl_device.h"
 
 // static
 FillRectProgram& FillRectProgram::instance() {
@@ -29,6 +31,30 @@ FillRectProgram& FillRectProgram::instance() {
 }
 
 FillRectProgram::FillRectProgram() {
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::PipelineDescriptor desc;
+		desc.program_name = "fill_rect";
+		desc.vertex_layout.stride = sizeof(PerVertexData);
+		desc.vertex_layout.attributes = {
+		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+		   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, r)},
+		};
+		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+
+		desc.blend = Rhi::kBlendAlpha;
+		pipeline_alpha_ = Rhi::device().create_pipeline(desc);
+		desc.blend = Rhi::kBlendAdditive;
+		pipeline_additive_ = Rhi::device().create_pipeline(desc);
+		desc.blend = Rhi::kBlendReverseSubtract;
+		pipeline_reverse_subtract_ = Rhi::device().create_pipeline(desc);
+		desc.blend = Rhi::kBlendOpaque;
+		pipeline_opaque_ = Rhi::device().create_pipeline(desc);
+
+		vertex_buffer_ = Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		return;
+	}
+
 	gl_program_.build("fill_rect");
 
 	gl_array_buffer_.bind();
@@ -38,6 +64,20 @@ FillRectProgram::FillRectProgram() {
 	   {gl_program_.attribute_location("attr_color"), 4, sizeof(PerVertexData),
 	    offsetof(PerVertexData, r)},
 	});
+}
+
+Rhi::Pipeline* FillRectProgram::pipeline_for(const BlendMode blend_mode) const {
+	switch (blend_mode) {
+	case BlendMode::Copy:
+		return pipeline_opaque_.get();
+	case BlendMode::Default:
+		return pipeline_alpha_.get();
+	case BlendMode::UseAlpha:
+		return pipeline_additive_.get();
+	case BlendMode::Subtract:
+		return pipeline_reverse_subtract_.get();
+	}
+	NEVER_HERE();
 }
 
 std::vector<FillRectProgram::Arguments>
@@ -143,6 +183,28 @@ void FillRectProgram::draw(const std::vector<Arguments>& arguments) {
 	while (i < arguments.size()) {
 		vertices_.clear();
 		const Arguments& template_args = arguments[i];
+
+		if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+			// The RHI pipeline carries the blend state, so selecting the
+			// pipeline replaces the legacy glBlend* setup/restore below.
+			while (i < arguments.size()) {
+				const Arguments& current_args = arguments[i];
+				if (current_args.blend_mode != template_args.blend_mode) {
+					break;
+				}
+				for (const Arguments::Vertex& vertex : current_args.triangle) {
+					vertices_.emplace_back(vertex.point.x, vertex.point.y, current_args.z_value,
+					                       vertex.color_r, vertex.color_g, vertex.color_b, vertex.color_a);
+				}
+				++i;
+			}
+			vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+			auto& command_buffer = Rhi::command_buffer();
+			command_buffer.bind_pipeline(pipeline_for(template_args.blend_mode));
+			command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+			command_buffer.draw(0, vertices_.size());
+			continue;
+		}
 
 		// This method does 3 things:
 		// - if blend_mode is Copy, we will copy color into the destination

@@ -14,6 +14,17 @@ wl_library(graphic_rhi
     base_macros
 )
 
+# The GL-core implementation of the RHI (WP-10).
+wl_library(graphic_rhi_gl
+  SRCS
+    rhi/gl/gl_device.cc
+    rhi/gl/gl_device.h
+  DEPENDS
+    base_exceptions
+    graphic_gl_utils
+    graphic_rhi
+)
+
 # TODO(sirver): Separate this directory into a base directory and one
 # that is Widelands aware (can include logic stuff).
 
@@ -148,6 +159,7 @@ wl_library(graphic_surface
     graphic_draw_programs
     graphic_gl_utils
     graphic_render_queue
+    graphic_rhi_gl
     graphic_sdl_utils
 )
 
@@ -179,6 +191,8 @@ wl_library(graphic_draw_programs
     graphic_fields_to_draw
     graphic_gl_utils
     graphic_color
+    graphic_rhi
+    graphic_rhi_gl
 )
 
 
@@ -195,6 +209,8 @@ wl_library(graphic_render_queue
     graphic_color
     graphic_draw_programs
     graphic_fields_to_draw
+    graphic_gl_utils
+    graphic_rhi_gl
     graphic_terrain_programs
     logic_map_objects
     logic_map_objects_description_maintainer
@@ -268,6 +284,8 @@ wl_library(graphic_terrain_programs
     graphic_fields_to_draw
     graphic_gl_utils
     graphic_image_io
+    graphic_rhi
+    graphic_rhi_gl
     graphic_surface
     io_filesystem
     logic
@@ -384,6 +402,7 @@ wl_library(graphic
     graphic_gl_utils
     graphic_image_io
     graphic_render_queue
+    graphic_rhi_gl
     graphic_styles
     graphic_surface
     io_filesystem

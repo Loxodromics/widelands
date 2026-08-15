@@ -36,6 +36,10 @@ namespace Gl {
 enum class Backend;
 }
 
+namespace Rhi {
+class Device;
+}
+
 // A graphics card must at least support this size for texture for Widelands to
 // run.
 constexpr int kMinimumSizeForTextures = 2048;
@@ -135,6 +139,11 @@ private:
 	/// the requested filename. On the next frame the screenshot will be written
 	/// out and this will be clear()ed again.
 	std::string screenshot_filename_;
+
+	/// The RHI device backing the core render path. Only created when the
+	/// obtained backend is GL core (WP-10 of the renderer modernization plan);
+	/// null on the frozen legacy 2.1 path.
+	std::unique_ptr<Rhi::Device> rhi_device_;
 };
 
 extern Graphic* g_gr;
