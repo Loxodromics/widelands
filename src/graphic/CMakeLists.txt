@@ -31,6 +31,27 @@ wl_library(graphic_rhi_gl
     graphic_rhi
 )
 
+# The Vulkan bootstrap (WP-12): instance, device, surface, swapchain and a
+# clear-colour present, nothing else. Not a Rhi::Device yet (WP-14/15 converts
+# it), so it does not depend on graphic_rhi beyond living in its directory.
+# The library exists in every configuration so 'graphic' can depend on it
+# unconditionally; without OPTION_BUILD_VULKAN the .cc compiles to a stub that
+# throws (see the WL_BUILD_VULKAN split in vulkan_device.cc), and only then is
+# volk linked.
+wl_library(graphic_rhi_vulkan
+  SRCS
+    rhi/vulkan/vulkan_device.cc
+    rhi/vulkan/vulkan_device.h
+  DEPENDS
+    base
+    base_exceptions
+    base_macros
+  USES_SDL2
+)
+if (OPTION_BUILD_VULKAN)
+  target_link_libraries(graphic_rhi_vulkan third_party_volk)
+endif()
+
 # TODO(sirver): Separate this directory into a base directory and one
 # that is Widelands aware (can include logic stuff).
 
@@ -411,6 +432,7 @@ wl_library(graphic
     graphic_image_io
     graphic_render_queue
     graphic_rhi_gl
+    graphic_rhi_vulkan
     graphic_styles
     graphic_surface
     io_filesystem

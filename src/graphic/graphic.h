@@ -36,6 +36,7 @@ class Screen;
 
 namespace Rhi {
 class Device;
+class VulkanDevice;
 }
 
 // A graphics card must at least support this size for texture for Widelands to
@@ -125,6 +126,10 @@ private:
 	/// opengl rendering as the SurfaceOpenGL does not use it. It allows
 	/// manipulation the screen context.
 	SDL_Window* sdl_window_ = nullptr;
+	/// Under --renderer=vulkan (WP-12): the hidden window the GL context lives
+	/// on, since SDL forbids GL and Vulkan on the same window. Null otherwise.
+	/// Sized to the visible window so the GL backbuffer matches the screen.
+	SDL_Window* gl_context_window_ = nullptr;
 	SDL_GLContext gl_context_;
 
 	/// The maximum width or height a texture can have.
@@ -142,6 +147,12 @@ private:
 	/// obtained backend is GL core (WP-10 of the renderer modernization plan);
 	/// null on the frozen legacy 2.1 path.
 	std::unique_ptr<Rhi::Device> rhi_device_;
+
+	/// The Vulkan bootstrap device (WP-12). Only created for
+	/// --renderer=vulkan; it owns the surface/swapchain and the per-frame
+	/// clear-colour present, while the GL context above keeps running as an
+	/// invisible stand-in. Must be destroyed before sdl_window_.
+	std::unique_ptr<Rhi::VulkanDevice> vulkan_device_;
 };
 
 extern Graphic* g_gr;
