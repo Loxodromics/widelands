@@ -36,6 +36,7 @@
 #include "graphic/image_cache.h"
 #include "graphic/image_io.h"
 #include "graphic/note_graphic_resolution_changed.h"
+#include "graphic/render_backend.h"
 #include "graphic/render_queue.h"
 #include "graphic/rendertarget.h"
 #include "graphic/rhi/gl/gl_device.h"
@@ -81,7 +82,15 @@ void Graphic::initialize(const TraceGl& trace_gl,
                          int window_mode_h,
                          bool init_fullscreen,
                          bool init_maximized,
-                         Gl::Backend requested_backend) {
+                         RenderBackend requested_backend) {
+	// WP-12 of the renderer modernization plan is the Vulkan bootstrap; until
+	// the Vulkan device exists (next step of that package), reject the request
+	// up front so the game never half-initializes a window it cannot present.
+	if (requested_backend == RenderBackend::kVulkan) {
+		throw wexception("The Vulkan renderer backend is not implemented yet (renderer "
+		                 "modernization WP-12 is in progress).");
+	}
+
 	window_mode_width_ = window_mode_w;
 	window_mode_height_ = window_mode_h;
 
@@ -112,10 +121,17 @@ void Graphic::initialize(const TraceGl& trace_gl,
 	                               window_mode_height_, window_flags);
 	SDL_SetWindowMinimumSize(sdl_window_, kMinimumResolutionW, kMinimumResolutionH);
 
+	// The GL context flavour behind the requested render backend. Vulkan (once
+	// implemented) keeps a legacy GL context as an invisible stand-in so the
+	// game machinery that uploads textures directly keeps working.
+	const Gl::Backend gl_requested =
+	   requested_backend == RenderBackend::kOpenGLCore ? Gl::Backend::kOpenGLCore :
+	                                                     Gl::Backend::kOpenGL21;
+
 	GLint max;
 	gl_context_ = Gl::initialize(
 	   trace_gl == TraceGl::kYes ? Gl::Trace::kYes : Gl::Trace::kNo, sdl_window_, &max,
-	   requested_backend);
+	   gl_requested);
 
 	max_texture_size_ = static_cast<int>(max);
 
@@ -125,6 +141,16 @@ void Graphic::initialize(const TraceGl& trace_gl,
 	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
 		rhi_device_.reset(new Rhi::GlCoreDevice());
 	}
+
+	// Record what was actually created, not what was requested (WP-3/WP-4 of
+	// the renderer modernization plan). The log line is what the dev harness
+	// (Claude/wl.py) greps for the obtained backend.
+	const RenderBackend obtained_backend =
+	   Gl::backend() == Gl::Backend::kOpenGLCore ? RenderBackend::kOpenGLCore :
+	                                               RenderBackend::kOpenGL21;
+	record_obtained_render_backend(obtained_backend);
+	verb_log_info("Graphics: Render backend requested: %s\n", render_backend_name(requested_backend));
+	log_info("Graphics: Render backend: %s\n", render_backend_name(obtained_backend));
 
 	set_fullscreen(init_fullscreen);
 	if (init_maximized) {

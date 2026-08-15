@@ -291,9 +291,9 @@ private:
 	/// Absolute path to the locale directory.
 	std::string localedir_;
 
-	/// The --renderer value ("gl21" or "glcore"), validated at parse time.
-	/// CLI-only on purpose: a backend that fails to initialize must not linger
-	/// in the config file (WP-3 of the renderer modernization plan).
+	/// The --renderer value ("gl21", "glcore" or "vulkan"), validated at parse
+	/// time. CLI-only on purpose: a backend that fails to initialize must not
+	/// linger in the config file (WP-3 of the renderer modernization plan).
 	std::string renderer_ = "gl21";
 
 	/// Prevent toggling fullscreen on and off from flickering

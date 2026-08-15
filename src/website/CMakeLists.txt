@@ -9,7 +9,6 @@ wl_library(website_common
     base
     base_exceptions
     graphic
-    graphic_gl_utils
     io_filesystem
 )
 

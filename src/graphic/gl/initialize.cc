@@ -69,26 +69,6 @@ void gl_trace_post_callback(void* /* ret */,
 
 }  // namespace
 
-std::optional<Backend> backend_from_string(const std::string& name) {
-	if (name == "gl21") {
-		return Backend::kOpenGL21;
-	}
-	if (name == "glcore") {
-		return Backend::kOpenGLCore;
-	}
-	return std::nullopt;
-}
-
-const char* backend_name(Backend backend) {
-	switch (backend) {
-	case Backend::kOpenGL21:
-		return "gl21";
-	case Backend::kOpenGLCore:
-		return "glcore";
-	}
-	return "?";
-}
-
 Backend backend() {
 	return g_obtained_backend;
 }
@@ -348,12 +328,10 @@ SDL_GLContext initialize(const Trace& trace,
 	              required_minor_version, handle_unreadable_opengl_version);
 
 	// Record what was actually created, not what was requested (WP-3/WP-4 of the
-	// renderer modernization plan). The log line is what the dev harness
-	// (Claude/wl.py) greps for the obtained backend.
+	// renderer modernization plan). The obtained render backend is logged by
+	// Graphic::initialize (graphic.cc) once it knows both the GL context flavour
+	// and whether a Vulkan device was created.
 	g_obtained_backend = obtained_backend;
-
-	verb_log_info("Graphics: Render backend requested: %s\n", backend_name(requested_backend));
-	log_info("Graphics: Render backend: %s\n", backend_name(g_obtained_backend));
 
 #define LOG_SDL_GL_ATTRIBUTE(x)                                                                    \
 	{                                                                                               \
