@@ -8,6 +8,19 @@ wl_library(third_party_glad2
 )
 wl_include_system_directories(third_party_glad2 ${CMAKE_CURRENT_SOURCE_DIR}/glad2/include)
 
+# volk: the Vulkan loader (renderer modernization WP-12, plan decision 3). It
+# loads libvulkan at runtime, so only the Vulkan headers are needed to build.
+if (OPTION_BUILD_VULKAN)
+  wl_library(third_party_volk
+    THIRD_PARTY
+    C_LIBRARY
+    SRCS
+      volk/volk.h
+      volk/volk.c
+  )
+  wl_include_system_directories(third_party_volk ${Vulkan_INCLUDE_DIRS})
+endif()
+
 if (NOT MINIZIP_STATIC_LIBRARIES)
   wl_library(third_party_minizip
     THIRD_PARTY

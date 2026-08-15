@@ -12,6 +12,15 @@ option(OPTION_BUILD_CODECHECK "Build codecheck" ON)
 option(OPTION_BUILD_WINSTATIC "Build a static linked .exe on windows" OFF)
 option(OPTION_TSAN "Build with ThreadSanitizer" OFF)
 option(OPTION_FORCE_EMBEDDED_MINIZIP "Use embedded minizip sources" OFF)
+# The Vulkan renderer backend (renderer modernization WP-12). Native Linux
+# only at this stage (Claude/RENDERER_MODERNIZATION_PLAN.md section 3); the
+# macOS/MoltenVK route is deliberately out of Phase D's critical path
+# (WP-18b). When OFF, --renderer=vulkan is rejected at startup.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  option(OPTION_BUILD_VULKAN "Build the Vulkan renderer backend" ON)
+else()
+  option(OPTION_BUILD_VULKAN "Build the Vulkan renderer backend" OFF)
+endif()
 option(USE_XDG "Follow XDG-Basedir specification" ON) # Enabled by default
 
 set(CMAKE_FIND_FRAMEWORK LAST)
@@ -127,6 +136,15 @@ endif()
 find_package(OpenGL REQUIRED)
 if(APPLE)
   set(CMAKE_FIND_FRAMEWORK LAST)
+endif()
+if (OPTION_BUILD_VULKAN)
+  # Headers only: volk (src/third_party/volk) loads libvulkan itself at
+  # runtime, so nothing is linked against it.
+  find_package(Vulkan REQUIRED)
+  add_compile_definitions(WL_BUILD_VULKAN)
+  message(STATUS "Building with Vulkan backend support")
+else()
+  message(STATUS "Building without Vulkan backend support (--renderer=vulkan disabled)")
 endif()
 find_package(PNG 1.6 REQUIRED)
 
