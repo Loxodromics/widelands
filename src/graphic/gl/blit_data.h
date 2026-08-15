@@ -22,10 +22,7 @@
 #include <cstdint>
 
 #include "base/rect.h"
-
-namespace Rhi {
-class Texture;
-}
+#include "graphic/rhi/rhi.h"
 
 // Information needed to properly blit this image. It is backend-neutral in
 // shape: 'texture' is the opaque parent texture on the RHI core path, and
@@ -54,5 +51,23 @@ struct BlitData {
 	// The subrect in the parent texture.
 	Rectf rect = Rectf();
 };
+
+// Backend-neutral texture identity for batching and the render-queue sort key:
+// the RHI texture's dense id on the core path, the raw GL name on the frozen
+// legacy path (where no RHI device exists and only texture_id is populated).
+// These two helpers are the only place the "which field is authoritative"
+// branch lives; callers key on batch_id() rather than reaching into either
+// field (C3).
+inline uint32_t batch_id(const BlitData& data) {
+	return data.texture != nullptr ? data.texture->id() : data.texture_id;
+}
+
+// True if this BlitData names a real texture (the backend-neutral form of
+// texture_id == 0). On the core path both fields are set together; on the
+// legacy path only texture_id is set and 'texture' stays null, so both fields
+// must be consulted.
+inline bool has_texture(const BlitData& data) {
+	return data.texture != nullptr || data.texture_id != 0;
+}
 
 #endif  // end of include guard: WL_GRAPHIC_GL_BLIT_DATA_H

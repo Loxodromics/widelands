@@ -45,7 +45,11 @@ public:
 	// Create a logical texture that is a 'subrect' (in Pixel) in another
 	// texture. 'texture' is the parent's RHI handle (null on the legacy path)
 	// and 'texture_id' its GL name; ownership is not taken.
-	Texture(const Rhi::Texture* texture, uint32_t texture_id, const Recti& subrect, int parent_w, int parent_h);
+	Texture(const Rhi::Texture* texture,
+	        uint32_t texture_id,
+	        const Recti& subrect,
+	        int parent_w,
+	        int parent_h);
 
 	~Texture() override;
 

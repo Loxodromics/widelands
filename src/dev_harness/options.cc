@@ -130,8 +130,20 @@ bool parse_capture_view(const std::string& value) {
 	return true;
 }
 
-void set_clean_ui(bool clean) {
-	g_capture_options.clean_ui = clean;
+bool parse_capture_ui(const std::string& value) {
+	if (value == "hidden") {
+		g_capture_options.ui_mode = UiMode::kHidden;
+		return true;
+	}
+	if (value == "stable") {
+		g_capture_options.ui_mode = UiMode::kStable;
+		return true;
+	}
+	if (value == "all") {
+		g_capture_options.ui_mode = UiMode::kAll;
+		return true;
+	}
+	return false;
 }
 
 bool parse_fixed_timestep(const std::string& value) {

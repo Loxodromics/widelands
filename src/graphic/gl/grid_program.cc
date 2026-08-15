@@ -22,12 +22,11 @@
 #include <cstdlib>
 
 #include "graphic/gl/fields_to_draw.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 
 GridProgram::GridProgram() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "grid";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -42,8 +41,7 @@ GridProgram::GridProgram() {
 		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
 		pipeline_ = Rhi::device().create_pipeline(desc);
 		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
-		vertex_buffer_ =
-		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		uniform_rhi_buffer_ =
 		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
 		return;
@@ -63,7 +61,7 @@ GridProgram::GridProgram() {
 }
 
 void GridProgram::gl_draw(const BlitData& texture, const float z_value) {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
 		Gl::PerProgramState state{};

@@ -18,17 +18,15 @@
 
 #include "graphic/rhi/gl/gl_device.h"
 
-#include <cassert>
 #include <memory>
 #include <unordered_map>
 
 #include "base/wexception.h"
+#include "graphic/rhi/device.h"
 
 namespace Rhi {
 
 namespace {
-
-GlCoreDevice* g_device = nullptr;
 
 GLenum to_gl(const BlendFactor factor) {
 	switch (factor) {
@@ -139,11 +137,21 @@ private:
 
 class GlCoreBuffer : public Buffer {
 public:
-	GlCoreBuffer(const uint32_t /* size */, const BufferUsage usage)
+	GlCoreBuffer(const uint32_t size, const BufferUsage usage)
 	   : target_(usage == BufferUsage::kUniform ? GL_UNIFORM_BUFFER : GL_ARRAY_BUFFER) {
 		glGenBuffers(1, &gl_id_);
 		if (gl_id_ == 0u) {
 			throw wexception("Could not create GL buffer.");
+		}
+		// 'size' is an initial capacity hint; allocate it up front so the first
+		// update() is not a surprise re-allocation (C4). Under transient-resource
+		// semantics update() may still re-allocate each frame. Zero means "no
+		// hint" — allocating nothing is cheaper than allocating a wrong guess
+		// and immediately discarding it, which is what the per-frame vertex
+		// buffers would otherwise do.
+		if (size > 0u) {
+			glBindBuffer(target_, gl_id_);
+			glBufferData(target_, size, nullptr, GL_DYNAMIC_DRAW);
 		}
 	}
 
@@ -154,6 +162,14 @@ public:
 	}
 
 	void update(const void* data, const uint32_t size) override {
+#ifndef NDEBUG
+		// Transient-buffer semantics (rhi.h): an update must happen inside a
+		// recorded command buffer so the draw that reads it sees the values
+		// current at recording time. On GL this is invisible (immediate mode),
+		// so fail loudly here rather than letting a mis-placed update pass
+		// silently and then break under Vulkan.
+		static_cast<void>(command_buffer());
+#endif
 		glBindBuffer(target_, gl_id_);
 		glBufferData(target_, size, data, GL_DYNAMIC_DRAW);
 	}
@@ -184,14 +200,11 @@ public:
 	     stride_(desc.vertex_layout.stride) {
 		program_.build(desc.program_name);
 
-		glGenVertexArrays(1, &vao_);
-		if (vao_ == 0u) {
-			throw wexception("Could not create GL vertex array object.");
-		}
-
 		// Resolve each attribute's location from the shader by name, so a
 		// renamed attribute becomes a startup exception rather than a silently
-		// mismatched VAO (the F7 lesson).
+		// mismatched VAO (the F7 lesson). The actual VAO is created lazily per
+		// (pipeline, buffer) pair by GlCoreDevice::vao_for (C5); the pipeline
+		// only carries the resolved layout.
 		for (const VertexAttribute& attribute : desc.vertex_layout.attributes) {
 			attributes_.push_back({program_.attribute_location(attribute.name),
 			                       component_count(attribute.format), attribute.offset});
@@ -214,17 +227,10 @@ public:
 		}
 	}
 
-	~GlCorePipeline() override {
-		if (vao_ != 0u) {
-			glDeleteVertexArrays(1, &vao_);
-		}
-	}
+	~GlCorePipeline() override = default;
 
 	GLuint program() const {
 		return program_.object();
-	}
-	GLuint vao() const {
-		return vao_;
 	}
 	uint32_t stride() const {
 		return stride_;
@@ -244,7 +250,6 @@ public:
 
 private:
 	Gl::Program program_;
-	GLuint vao_ = 0;
 	PrimitiveTopology topology_;
 	BlendState blend_;
 	DepthState depth_;
@@ -332,11 +337,12 @@ public:
 	void bind_pipeline(const Pipeline* pipeline) override {
 		const GlCorePipeline* gl_pipeline = static_cast<const GlCorePipeline*>(pipeline);
 		glUseProgram(gl_pipeline->program());
-		glBindVertexArray(gl_pipeline->vao());
 		apply_blend(gl_pipeline->blend());
 		apply_depth(gl_pipeline->depth());
 		current_pipeline_ = gl_pipeline;
-		attributes_dirty_ = true;
+		// The VAO is keyed on (pipeline, buffer); invalidate it so the next
+		// draw re-resolves (and lazily creates) the right one.
+		current_vao_ = 0;
 	}
 
 	void bind_descriptor_set(const DescriptorSet* set) override {
@@ -344,23 +350,29 @@ public:
 	}
 
 	void bind_vertex_buffer(const Buffer* buffer) override {
-		glBindBuffer(GL_ARRAY_BUFFER, static_cast<const GlCoreBuffer*>(buffer)->gl_id());
-		attributes_dirty_ = true;
+		const GlCoreBuffer* gl_buffer = static_cast<const GlCoreBuffer*>(buffer);
+		glBindBuffer(GL_ARRAY_BUFFER, gl_buffer->gl_id());
+		current_buffer_ = gl_buffer;
+		current_vao_ = 0;
 	}
 
 	void draw(const uint32_t vertex_offset, const uint32_t vertex_count) override {
-		// Set up the vertex attributes lazily, once per (pipeline, buffer)
-		// change. The pointers are captured into the pipeline's VAO, which
-		// bind_pipeline already bound.
-		if (attributes_dirty_) {
-			for (const ResolvedAttribute& attribute : current_pipeline_->attributes()) {
-				glEnableVertexAttribArray(attribute.location);
-				glVertexAttribPointer(attribute.location, attribute.components, GL_FLOAT, GL_FALSE,
-				                      current_pipeline_->stride(),
-				                      reinterpret_cast<void*>(static_cast<uintptr_t>(attribute.offset)));
-			}
-			attributes_dirty_ = false;
+		// The VAO captures the attribute layout (from the pipeline) and the
+		// bound GL_ARRAY_BUFFER (from the buffer), so it is created once per
+		// (pipeline, buffer) pair by the device and simply rebound here (C5).
+		// Both must have been bound: throw rather than dereference null, for
+		// the same reason current_command_buffer() throws — an assert would
+		// make this a silent null dereference in a release build.
+		if (current_pipeline_ == nullptr) {
+			throw wexception("Rhi::CommandBuffer::draw: no pipeline bound.");
 		}
+		if (current_buffer_ == nullptr) {
+			throw wexception("Rhi::CommandBuffer::draw: no vertex buffer bound.");
+		}
+		if (current_vao_ == 0u) {
+			current_vao_ = device_.vao_for(*current_pipeline_, *current_buffer_);
+		}
+		glBindVertexArray(current_vao_);
 		glDrawArrays(to_gl(current_pipeline_->topology()), vertex_offset, vertex_count);
 	}
 
@@ -402,13 +414,14 @@ private:
 
 	GlCoreDevice& device_;
 	const GlCorePipeline* current_pipeline_ = nullptr;
-	bool attributes_dirty_ = false;
+	const GlCoreBuffer* current_buffer_ = nullptr;
+	GLuint current_vao_ = 0;
 
 	DISALLOW_COPY_AND_ASSIGN(GlCoreCommandBuffer);
 };
 
-GlCoreDevice::GlCoreDevice(GLint /* max_texture_size */) {
-	g_device = this;
+GlCoreDevice::GlCoreDevice() {
+	set_device(this);
 	glGenFramebuffers(1, &offscreen_framebuffer_);
 }
 
@@ -416,7 +429,13 @@ GlCoreDevice::~GlCoreDevice() {
 	if (offscreen_framebuffer_ != 0u) {
 		glDeleteFramebuffers(1, &offscreen_framebuffer_);
 	}
-	g_device = nullptr;
+	for (const auto& entry : vao_cache_) {
+		if (entry.second != 0u) {
+			glDeleteVertexArrays(1, &entry.second);
+		}
+	}
+	vao_cache_.clear();
+	set_device(nullptr);
 }
 
 Backend GlCoreDevice::backend() const {
@@ -425,23 +444,25 @@ Backend GlCoreDevice::backend() const {
 
 std::unique_ptr<CommandBuffer> GlCoreDevice::begin_frame() {
 	std::unique_ptr<CommandBuffer> command_buffer(new GlCoreCommandBuffer(*this));
-	current_ = command_buffer.get();
+	push_command_buffer(command_buffer.get());
 	return command_buffer;
 }
 
 void GlCoreDevice::end_frame(std::unique_ptr<CommandBuffer> /* command_buffer */) {
-	current_ = nullptr;
+	pop_command_buffer();
 }
 
 std::unique_ptr<CommandBuffer> GlCoreDevice::begin_offscreen() {
 	std::unique_ptr<CommandBuffer> command_buffer(new GlCoreCommandBuffer(*this));
-	current_ = command_buffer.get();
+	push_command_buffer(command_buffer.get());
 	return command_buffer;
 }
 
 void GlCoreDevice::submit_offscreen(std::unique_ptr<CommandBuffer> /* command_buffer */) {
-	// GL executes immediately, so the results are already visible.
-	current_ = nullptr;
+	// GL executes immediately, so the results are already visible. Popping the
+	// stack restores whatever command buffer was recording before this
+	// offscreen submit (a frame's, when the submit is nested inside one).
+	pop_command_buffer();
 }
 
 void GlCoreDevice::read_back_swapchain(uint8_t* /* pixels */) {
@@ -471,28 +492,35 @@ std::unique_ptr<DescriptorSet> GlCoreDevice::create_descriptor_set(const Pipelin
 	   new GlCoreDescriptorSet(static_cast<const GlCorePipeline&>(pipeline)));
 }
 
-CommandBuffer& GlCoreDevice::current_command_buffer() {
-	assert(current_ != nullptr);
-	return *current_;
-}
-
 GLuint GlCoreDevice::offscreen_framebuffer() const {
 	return offscreen_framebuffer_;
 }
 
-Device& device() {
-	if (g_device == nullptr) {
-		throw wexception("Rhi::device(): no GL-core device (did you start with --renderer=glcore?)");
+GLuint GlCoreDevice::vao_for(const GlCorePipeline& pipeline, const GlCoreBuffer& buffer) {
+	const std::pair<const Pipeline*, const Buffer*> key{&pipeline, &buffer};
+	const auto existing = vao_cache_.find(key);
+	if (existing != vao_cache_.end()) {
+		return existing->second;
 	}
-	return *g_device;
-}
 
-CommandBuffer& command_buffer() {
-	if (g_device == nullptr) {
-		throw wexception("Rhi::command_buffer(): no GL-core device (did you start with "
-		                 "--renderer=glcore?)");
+	GLuint vao = 0;
+	glGenVertexArrays(1, &vao);
+	if (vao == 0u) {
+		throw wexception("Could not create GL vertex array object.");
 	}
-	return g_device->current_command_buffer();
+	// glVertexAttribPointer records the currently-bound GL_ARRAY_BUFFER into the
+	// VAO, so bind 'buffer' here to make the capture explicit rather than
+	// relying on the caller having left it bound.
+	glBindVertexArray(vao);
+	glBindBuffer(GL_ARRAY_BUFFER, buffer.gl_id());
+	for (const ResolvedAttribute& attribute : pipeline.attributes()) {
+		glEnableVertexAttribArray(attribute.location);
+		glVertexAttribPointer(attribute.location, attribute.components, GL_FLOAT, GL_FALSE,
+		                      pipeline.stride(),
+		                      reinterpret_cast<void*>(static_cast<uintptr_t>(attribute.offset)));
+	}
+	vao_cache_[key] = vao;
+	return vao;
 }
 
 std::unique_ptr<Texture> wrap_gl_texture(const GLuint texture,

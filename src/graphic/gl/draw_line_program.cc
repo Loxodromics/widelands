@@ -21,8 +21,7 @@
 #include <cassert>
 #include <iterator>
 
-#include "graphic/gl/initialize.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 
 // static
 DrawLineProgram& DrawLineProgram::instance() {
@@ -31,7 +30,7 @@ DrawLineProgram& DrawLineProgram::instance() {
 }
 
 DrawLineProgram::DrawLineProgram() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "draw_line";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -43,7 +42,7 @@ DrawLineProgram::DrawLineProgram() {
 		desc.blend = Rhi::kBlendAlpha;
 		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
 		pipeline_ = Rhi::device().create_pipeline(desc);
-		vertex_buffer_ = Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		return;
 	}
 
@@ -71,7 +70,7 @@ void DrawLineProgram::draw(std::vector<Arguments> arguments) {
 		   current_args.vertices.begin(), current_args.vertices.end(), std::back_inserter(vertices_));
 	}
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 		auto& command_buffer = Rhi::command_buffer();
 		command_buffer.bind_pipeline(pipeline_.get());

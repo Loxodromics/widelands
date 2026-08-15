@@ -81,7 +81,10 @@ EmittedShader emit_dialect(const std::string& expanded_source,
                            const std::string& program_name);
 
 // Thin wrapper around a OpenGL program object to ensure proper cleanup. Throws
-// on all errors.
+// on all errors. The program object itself is created lazily in build(), not
+// in the constructor: on the core path the programs are built through the RHI
+// (GlCorePipeline), so a Program member that never sees build() must not leak a
+// glCreateProgram (C9).
 class Program {
 public:
 	Program();
@@ -108,7 +111,7 @@ public:
 	[[nodiscard]] GLint attribute_location(const std::string& name) const;
 
 private:
-	const GLuint program_object_;
+	GLuint program_object_{0U};
 	std::unique_ptr<Shader> vertex_shader_;
 	std::unique_ptr<Shader> fragment_shader_;
 	std::vector<AttributeBinding> attributes_;
@@ -117,15 +120,13 @@ private:
 };
 
 // Thin wrapper around a OpenGL buffer object to ensure proper cleanup. Throws
-// on all errors. Also grows the server memory only when needed.
+// on all errors. Also grows the server memory only when needed. The buffer
+// object is created lazily on first use, not in the constructor: on the core
+// path the programs draw through the RHI's GlCoreBuffer, so a Buffer member
+// that is never bound/updated must not leak a glGenBuffers (C9).
 template <typename T> class Buffer {
 public:
-	Buffer() {
-		glGenBuffers(1, &object_);
-		if (object_ == 0u) {
-			throw wexception("Could not create GL buffer.");
-		}
-	}
+	Buffer() = default;
 
 	~Buffer() {
 		if (object_ != 0u) {
@@ -133,14 +134,18 @@ public:
 		}
 	}
 
-	// Calls glBindBuffer on the underlying buffer data.
-	void bind() const {
+	// Calls glBindBuffer on the underlying buffer data, creating the buffer
+	// object on first use.
+	void bind() {
+		ensure_created();
 		glBindBuffer(GL_ARRAY_BUFFER, object_);
 	}
 
 	// Copies 'elements' into the buffer, overwriting what was there before.
-	// Does not check if the buffer is already bound.
+	// Does not check if the buffer is already bound. Creates the buffer object
+	// on first use.
 	void update(const std::vector<T>& items) {
+		ensure_created();
 		// Always re-allocate the buffer. This ends up being much more
 		// efficient than trying to do a partial update, because partial
 		// updates tend to force the driver to do command buffer flushes.
@@ -148,7 +153,17 @@ public:
 	}
 
 private:
-	GLuint object_;
+	void ensure_created() {
+		if (object_ != 0u) {
+			return;
+		}
+		glGenBuffers(1, &object_);
+		if (object_ == 0u) {
+			throw wexception("Could not create GL buffer.");
+		}
+	}
+
+	GLuint object_{0U};
 
 	DISALLOW_COPY_AND_ASSIGN(Buffer);
 };
@@ -167,16 +182,19 @@ struct VertexAttribute {
 // backend this is a real VAO; on the legacy 2.1 backend (which must not depend
 // on ARB_vertex_array_object) define_attributes() only records the layout and
 // bind() replays the glVertexAttribPointer calls, i.e. what the code used to do
-// on every frame before VAOs existed.
+// on every frame before VAOs existed. The VAO is created lazily in
+// define_attributes(), not in the constructor: on the core path the programs
+// draw through the RHI and never call define_attributes(), so a VertexArray
+// member that sees no use must not leak a glGenVertexArrays (C9).
 class VertexArray {
 public:
-	VertexArray();
+	VertexArray() = default;
 	~VertexArray();
 
 	// Captures the attribute layout. The GL_ARRAY_BUFFER that 'attributes'
-	// refer to must already be bound. On the core backend this binds the VAO,
-	// enables every attribute and records its pointer; on the legacy backend it
-	// only stores the descriptors for bind().
+	// refer to must already be bound. On the core backend this (lazily) creates
+	// and binds the VAO, enables every attribute and records its pointer; on
+	// the legacy backend it only stores the descriptors for bind().
 	void define_attributes(const std::vector<VertexAttribute>& attributes);
 
 	// Makes this vertex array active for drawing. On the core backend this is a
@@ -226,10 +244,13 @@ constexpr size_t kZValueOnlyBlockSize = 16;
 // Wrapper around a uniform buffer object (UBO), the core-profile replacement
 // for per-frame glUniform* calls on per-program scalar state (WP-8). On the
 // legacy 2.1 backend there are no UBOs, so the object is never created and
-// update()/bind_base() are no-ops (mirrors VertexArray).
+// update()/bind_base() are no-ops (mirrors VertexArray). The buffer object is
+// also created lazily on first use on the core backend: on the core path the
+// programs read per-program state through the RHI's GlCoreBuffer, so a
+// UniformBuffer member that sees no use must not leak a glGenBuffers (C9).
 class UniformBuffer {
 public:
-	UniformBuffer();
+	UniformBuffer() = default;
 	~UniformBuffer();
 
 	// Uploads 'size' bytes from 'data' as the whole buffer contents.
@@ -239,7 +260,11 @@ public:
 	void bind_base(GLuint binding_point) const;
 
 private:
-	GLuint object_{0U};
+	void ensure_created() const;
+
+	// 'mutable' so the const update()/bind_base() can lazily create the buffer
+	// on first use (the GL object is a cache, not part of the logical state).
+	mutable GLuint object_{0U};
 
 	DISALLOW_COPY_AND_ASSIGN(UniformBuffer);
 };

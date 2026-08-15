@@ -139,10 +139,16 @@ void fill_parameter_vector() {
 	    _("Position the view with the top-left corner at the given map pixel and the given zoom "
 	      "level before capturing. Only valid with --capture."),
 	    false},
-	   {"", "capture-show-ui", "",
-	    _("Keep the toolbar and the info panel in the capture. They are hidden by default because "
-	      "the info panel draws real-time dependent content, which makes captures differ between "
+	   {"", "capture-ui", _("hidden|stable|all"),
+	    _("Which chrome to draw in the capture. 'hidden' (the default) draws the map only and is "
+	      "fully reproducible; 'stable' also draws the minimap, keeping the info panel and toolbar "
+	      "hidden so it stays reproducible; 'all' draws everything and is not reproducible between "
 	      "runs. Only valid with --capture."),
+	    false},
+	   {"", "capture-show-ui", "",
+	    _("Keep the toolbar and the info panel in the capture. This is an alias for "
+	      "--capture-ui=all. They are hidden by default because the info panel draws real-time "
+	      "dependent content, which makes captures differ between runs. Only valid with --capture."),
 	    false},
 	   {"", "fixed-timestep",
 	    /** TRANSLATORS: A placeholder for a time value in milliseconds */

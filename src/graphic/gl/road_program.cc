@@ -22,14 +22,13 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
-#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
-#include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/device.h"
 #include "graphic/texture.h"
 #include "logic/player.h"
 
 RoadProgram::RoadProgram() {
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		Rhi::PipelineDescriptor desc;
 		desc.program_name = "road";
 		desc.vertex_layout.stride = sizeof(PerVertexData);
@@ -46,8 +45,7 @@ RoadProgram::RoadProgram() {
 		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
 		pipeline_ = Rhi::device().create_pipeline(desc);
 		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
-		vertex_buffer_ =
-		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		uniform_rhi_buffer_ =
 		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
 		return;
@@ -111,12 +109,12 @@ void RoadProgram::add_road(const int renderbuffer_width,
 	   road_type == Widelands::RoadSegment::kWaterway ?
 	      visible_owner->tribe().road_textures().get_waterway_texture(start.fcoords, direction) :
 	      visible_owner->tribe().road_textures().get_busy_texture(start.fcoords, direction);
-	if (road_texture->texture_id == 0) {
+	if (!has_texture(*road_texture)) {
 		*road_texture = texture.blit_data();
 	}
 	// We assume that all road textures are in the same OpenGL texture, i.e. in
 	// one texture atlas.
-	assert(road_texture->texture_id == texture.blit_data().texture_id);
+	assert(batch_id(*road_texture) == batch_id(texture.blit_data()));
 
 	const Rectf texture_rect = to_gl_texture(texture.blit_data());
 
@@ -215,7 +213,7 @@ void RoadProgram::draw(const int renderbuffer_width,
 		}
 	}
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
 		Gl::PerProgramState state{};

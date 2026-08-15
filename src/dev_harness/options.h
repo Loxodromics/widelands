@@ -38,14 +38,28 @@ struct ViewSpec {
 	float zoom;
 };
 
+// Which chrome the capture draws. The info panel carries three independent
+// real-time readouts (fps, the real-time clock, and the game-speed average)
+// plus a one-pixel anti-aliasing flake in its icons, so it cannot be made
+// reproducible readout-by-readout; a deterministic capture either omits it or
+// accepts the noise.
+enum class UiMode {
+	kHidden,  // no chrome at all; the fully deterministic default
+	kStable,  // the minimap only: the info panel — and therefore its toolbar
+	          // child — stays hidden, so the capture is reproducible while still
+	          // exercising the immediate render-to-texture path (the gate uses
+	          // this; see Claude/DEV_HARNESS.md)
+	kAll,     // everything visible; nondeterministic between runs
+};
+
 struct CaptureOptions {
 	std::string shot_path;
 	uint32_t capture_at = 0;  ///< gametime in ms at which to freeze and capture
 	std::optional<ViewSpec> view;
-	/// Defaults to true: the info panel draws real-time-dependent content, so a
-	/// capture that includes the chrome is not reproducible. --capture-show-ui
-	/// turns it back on for the rare case where the chrome is the subject.
-	bool clean_ui = true;
+	/// Defaults to kHidden: the info panel draws real-time-dependent content, so
+	/// a capture that includes the chrome is not reproducible. --capture-ui=
+	/// selects the mode (--capture-show-ui is an alias for kAll).
+	UiMode ui_mode = UiMode::kHidden;
 	uint32_t settle_frames = 2;  ///< UI frames to let the frozen scene settle
 };
 
@@ -69,7 +83,7 @@ int32_t fixed_timestep_or(int32_t real_delta);
 void enable_capture(std::string shot_path);
 bool parse_capture_at(const std::string& value);
 bool parse_capture_view(const std::string& value);
-void set_clean_ui(bool clean);
+bool parse_capture_ui(const std::string& value);
 bool parse_fixed_timestep(const std::string& value);
 /// Applies the capture-mode default fixed timestep unless one was given.
 void set_capture_mode_defaults();

@@ -123,15 +123,22 @@ private:
 	GLint u_mask_;
 
 	// RHI resources for the core path (the legacy members above are unused
-	// there). blit needs two pipelines (alpha and opaque) and a descriptor set
-	// for its two textures (u_texture, u_mask); there is no uniform block.
-	std::unique_ptr<Rhi::Pipeline> pipeline_alpha_;
-	std::unique_ptr<Rhi::Pipeline> pipeline_opaque_;
-	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
+	// there). blit needs two pipelines (alpha and opaque) for its two textures
+	// (u_texture, u_mask); there is no uniform block. A descriptor set is
+	// created for a specific pipeline (C7), so each pipeline is paired with its
+	// own set in one object: selecting a pipeline and selecting a set are then
+	// a single decision that cannot drift apart.
+	struct Variant {
+		std::unique_ptr<Rhi::Pipeline> pipeline;
+		std::unique_ptr<Rhi::DescriptorSet> descriptor_set;
+	};
+	Variant alpha_;
+	Variant opaque_;
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
 
-	// The pipeline to use for 'blend_mode' on the core path.
-	Rhi::Pipeline* pipeline_for(BlendMode blend_mode) const;
+	// The pipeline and its descriptor set to use for 'blend_mode' on the core
+	// path.
+	const Variant& variant_for(BlendMode blend_mode) const;
 
 	// Cached for efficiency.
 	std::vector<PerVertexData> vertices_;

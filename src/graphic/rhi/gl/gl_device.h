@@ -19,7 +19,9 @@
 #ifndef WL_GRAPHIC_RHI_GL_GL_DEVICE_H
 #define WL_GRAPHIC_RHI_GL_GL_DEVICE_H
 
+#include <map>
 #include <memory>
+#include <utility>
 
 #include "graphic/gl/system_headers.h"
 #include "graphic/gl/utils.h"
@@ -49,15 +51,6 @@ class GlCorePipeline;
 class GlCoreDescriptorSet;
 class GlCoreCommandBuffer;
 
-// The active device. Only valid when Gl::backend() == Gl::Backend::kOpenGLCore;
-// throws wexception otherwise. Created by Graphic::initialize.
-Device& device();
-
-// The command buffer currently being recorded (set by begin_frame /
-// begin_offscreen, cleared by end_frame / submit_offscreen). Valid inside a
-// frame or an offscreen submit, on the initializer thread.
-CommandBuffer& command_buffer();
-
 // A non-owning RHI texture handle over an existing GL texture name created by
 // graphic::Texture (which retains ownership of the GL object). The core path
 // stores this in BlitData.texture; the GL texture's lifecycle stays with
@@ -66,7 +59,7 @@ std::unique_ptr<Texture> wrap_gl_texture(GLuint texture, uint32_t width, uint32_
 
 class GlCoreDevice : public Device {
 public:
-	explicit GlCoreDevice(GLint max_texture_size);
+	GlCoreDevice();
 	~GlCoreDevice() override;
 
 	Backend backend() const override;
@@ -81,14 +74,22 @@ public:
 	std::unique_ptr<Pipeline> create_pipeline(const PipelineDescriptor& desc) override;
 	std::unique_ptr<DescriptorSet> create_descriptor_set(const Pipeline& pipeline) override;
 
-	// Internal (not part of the Rhi contract): the command buffer being
-	// recorded, and the offscreen FBO used for render-to-texture.
-	CommandBuffer& current_command_buffer();
+	// Internal (not part of the Rhi contract): the offscreen FBO used for
+	// render-to-texture.
 	GLuint offscreen_framebuffer() const;
+
+	// Internal: returns (creating and populating on first use) the VAO that
+	// captures the attribute layout of 'pipeline' over 'buffer'. A VAO captures
+	// both the layout and the bound GL_ARRAY_BUFFER, so the cache is keyed on
+	// the pair; the renderer uses roughly ten distinct pairs, so the attribute
+	// setup happens once per process instead of once per pipeline bind (C5).
+	GLuint vao_for(const GlCorePipeline& pipeline, const GlCoreBuffer& buffer);
 
 private:
 	GLuint offscreen_framebuffer_ = 0;
-	CommandBuffer* current_ = nullptr;
+	// Keyed on the RHI base types (complete here) so the concrete GL classes
+	// can stay out of this header; downcast inside vao_for().
+	std::map<std::pair<const Pipeline*, const Buffer*>, GLuint> vao_cache_;
 
 	DISALLOW_COPY_AND_ASSIGN(GlCoreDevice);
 };
