@@ -23,6 +23,7 @@
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
 
 namespace {
 
@@ -42,29 +43,30 @@ struct DrawBatch {
 }  // namespace
 
 BlitProgram::BlitProgram() {
+	// Pin the vertex struct against the pipeline catalog (WP-14): the
+	// catalog's layout is the single source of truth, so a drift between it
+	// and the struct we actually fill throws here at startup instead of
+	// corrupting the rendered geometry (no backend reports such a drift).
+	const Rhi::PipelineDescriptor base = Rhi::pipeline_catalog_entry("blit", Rhi::kBlendAlpha);
+	Rhi::verify_vertex_layout(
+	   "blit", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_blend", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, blend_r)},
+	    {"attr_mask_texture_position", Rhi::VertexFormat::kVec2,
+	     offsetof(PerVertexData, mask_texture_x)},
+	    {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+	    {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
+	    {"attr_program_flavor", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, program_flavor)},
+	    {"attr_light", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, light_r)}});
+
 	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "blit";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_blend", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, blend_r)},
-		   {"attr_mask_texture_position", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, mask_texture_x)},
-		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
-		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, texture_x)},
-		   {"attr_program_flavor", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, program_flavor)},
-		   {"attr_light", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, light_r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		Rhi::PipelineDescriptor desc = base;
 		desc.samplers = {{0, "u_texture"}, {1, "u_mask"}};
 
 		// One descriptor set per pipeline (C7): the layouts happen to be
 		// compatible, but a descriptor set belongs to a pipeline, and Vulkan
 		// enforces that. Each set is created from the pipeline it is paired
 		// with, right next to it, so the pairing is visible in one place.
-		desc.blend = Rhi::kBlendAlpha;
+		// 'desc' already carries kBlendAlpha from the catalog entry above.
 		alpha_.pipeline = Rhi::device().create_pipeline(desc);
 		alpha_.descriptor_set = Rhi::device().create_descriptor_set(*alpha_.pipeline);
 

@@ -26,6 +26,7 @@
 #include "graphic/gl/terrain_lighting.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
 #include "graphic/texture.h"
 #include "logic/player.h"
 
@@ -51,18 +52,18 @@ float road_brightness(const FieldsToDraw::Field& field) {
 }  // namespace
 
 RoadProgram::RoadProgram() {
+	// Pin the vertex struct against the pipeline catalog (WP-14); see
+	// blit_program.cc for the rationale.
+	const Rhi::PipelineDescriptor base =
+	   Rhi::pipeline_catalog_entry("road", Rhi::kBlendAlpha);
+	Rhi::verify_vertex_layout(
+	   "road", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+	    {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
+	    {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)}});
+
 	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "road";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-		   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
-		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.blend = Rhi::kBlendAlpha;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		Rhi::PipelineDescriptor desc = base;
 		desc.samplers = {{0, "u_texture"}};
 		desc.uniform_block =
 		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};

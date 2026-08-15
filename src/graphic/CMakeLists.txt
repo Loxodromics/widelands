@@ -12,6 +12,8 @@ wl_library(graphic_rhi
   SRCS
     rhi/device.cc
     rhi/device.h
+    rhi/pipeline_catalog.cc
+    rhi/pipeline_catalog.h
     rhi/rhi.h
   USES_ATOMIC
   DEPENDS
@@ -31,21 +33,29 @@ wl_library(graphic_rhi_gl
     graphic_rhi
 )
 
-# The Vulkan bootstrap (WP-12): instance, device, surface, swapchain and a
-# clear-colour present, nothing else. Not a Rhi::Device yet (WP-14/15 converts
-# it), so it does not depend on graphic_rhi beyond living in its directory.
-# The library exists in every configuration so 'graphic' can depend on it
-# unconditionally; without OPTION_BUILD_VULKAN the .cc compiles to a stub that
-# throws (see the WL_BUILD_VULKAN split in vulkan_device.cc), and only then is
-# volk linked.
+# The Vulkan bootstrap (WP-12) and its render pass / pipeline cache (WP-14):
+# instance, device, surface, swapchain, the screen render pass with its depth
+# attachment, and the twelve pre-built pipelines. Not a Rhi::Device yet
+# (WP-15 converts it), so the eight programs keep their GL paths; the pipeline
+# cache consumes the pipeline catalog and the bindings manifest. The library
+# exists in every configuration so 'graphic' can depend on it
+# unconditionally; without OPTION_BUILD_VULKAN the .cc files compile to stubs
+# that throw (see the WL_BUILD_VULKAN splits), and only then is volk linked.
 wl_library(graphic_rhi_vulkan
   SRCS
     rhi/vulkan/vulkan_device.cc
     rhi/vulkan/vulkan_device.h
+    rhi/vulkan/vulkan_manifest.cc
+    rhi/vulkan/vulkan_manifest.h
+    rhi/vulkan/vulkan_pipeline_cache.cc
+    rhi/vulkan/vulkan_pipeline_cache.h
   DEPENDS
     base
     base_exceptions
     base_macros
+    graphic_rhi
+    io_fileread
+    io_filesystem
   USES_SDL2
 )
 if (OPTION_BUILD_VULKAN)

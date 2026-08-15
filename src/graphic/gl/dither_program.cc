@@ -26,28 +26,32 @@
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
+#include "graphic/texture.h"
+#include "io/filesystem/layered_filesystem.h"
 #include "logic/player.h"
 
 DitherProgram::DitherProgram() {
+	// Pin the vertex struct against the pipeline catalog (WP-14); see
+	// blit_program.cc for the rationale.
+	const Rhi::PipelineDescriptor base =
+	   Rhi::pipeline_catalog_entry("dither", Rhi::kBlendAlpha);
+	Rhi::verify_vertex_layout(
+	   "dither", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
+	    {"attr_dither_params", Rhi::VertexFormat::kVec2,
+	     offsetof(PerVertexData, dither_amplitude)},
+	    {"attr_dither_ramp", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, dither_ramp)},
+	    {"attr_normal", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, normal_x)},
+	    {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+	    {"attr_texture_offset", Rhi::VertexFormat::kVec2,
+	     offsetof(PerVertexData, texture_offset_x)},
+	    {"attr_texture_position", Rhi::VertexFormat::kVec2,
+	     offsetof(PerVertexData, texture_x)}});
+
 	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "dither";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
-		   {"attr_dither_params", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, dither_amplitude)},
-		   {"attr_dither_ramp", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, dither_ramp)},
-		   {"attr_normal", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, normal_x)},
-		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-		   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, texture_offset_x)},
-		   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.blend = Rhi::kBlendAlpha;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
-		desc.samplers = {{0, "u_terrain_texture"}};
+		Rhi::PipelineDescriptor desc = base;
+		desc.samplers = {{0, "u_dither_texture"}, {1, "u_terrain_texture"}};
 		desc.uniform_block =
 		   Rhi::UniformBlockBinding{0, "per_program_state", sizeof(Gl::PerProgramState)};
 		pipeline_ = Rhi::device().create_pipeline(desc);

@@ -25,18 +25,21 @@
 
 struct SDL_Window;
 
-// The Vulkan bootstrap device (renderer modernization plan, WP-12): an
+// The Vulkan bootstrap device (renderer modernization plan, WP-12, WP-14): an
 // instance, a physical/logical device, a surface and a swapchain wired to the
-// SDL window, presenting one clear-colour frame per present() and nothing
-// else. volk (src/third_party/volk) is the loader.
+// SDL window. Since WP-14 it also owns the screen render pass (colour +
+// depth), the depth attachment and framebuffers, and the pipeline cache -
+// the twelve VkPipeline objects pre-built from the pipeline catalog - and
+// presents the placeholder clear through a real render pass. volk
+// (src/third_party/volk) is the loader.
 //
 // Deliberately *not* a Rhi::Device yet, and not registered with
 // Rhi::set_device: the eight programs would route their draws into an
-// implementation that has no pipelines. WP-14/15 convert this class into the
-// Vulkan Rhi::Device; until then the GL pipeline keeps rendering - invisibly,
-// into the GL backbuffer of the same window - as a stand-in so all game
-// machinery keeps working, and only the presentation is swapped over to
-// Vulkan by Graphic::refresh.
+// implementation that has no command recording. WP-15 converts this class
+// into the Vulkan Rhi::Device; until then the GL pipeline keeps rendering -
+// invisibly, into the GL backbuffer of the hidden window - as a stand-in so
+// all game machinery keeps working, and only the presentation is swapped
+// over to Vulkan by Graphic::refresh.
 //
 // All Vulkan types stay out of this header (pimpl); only the .cc includes
 // volk and the Vulkan headers.

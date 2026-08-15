@@ -22,6 +22,7 @@
 #include "base/math.h"
 #include "base/wexception.h"
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
 
 // static
 FillRectProgram& FillRectProgram::instance() {
@@ -30,18 +31,19 @@ FillRectProgram& FillRectProgram::instance() {
 }
 
 FillRectProgram::FillRectProgram() {
-	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "fill_rect";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
-		   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+	// Pin the vertex struct against the pipeline catalog (WP-14); see
+	// blit_program.cc for the rationale. fill_rect draws with all four blend
+	// states; they share one vertex layout.
+	const Rhi::PipelineDescriptor base =
+	   Rhi::pipeline_catalog_entry("fill_rect", Rhi::kBlendAlpha);
+	Rhi::verify_vertex_layout(
+	   "fill_rect", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+	    {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, r)}});
 
-		desc.blend = Rhi::kBlendAlpha;
+	if (Rhi::has_device()) {
+		Rhi::PipelineDescriptor desc = base;
+
 		pipeline_alpha_ = Rhi::device().create_pipeline(desc);
 		desc.blend = Rhi::kBlendAdditive;
 		pipeline_additive_ = Rhi::device().create_pipeline(desc);

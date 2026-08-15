@@ -22,6 +22,7 @@
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
 #include "ui/wui/mapviewpixelconstants.h"
 
 namespace std {
@@ -36,17 +37,17 @@ template <> struct hash<Widelands::TCoords<>> {
 }  // namespace std
 
 WorkareaProgram::WorkareaProgram() : cache_(nullptr) {
+	// Pin the vertex struct against the pipeline catalog (WP-14); see
+	// blit_program.cc for the rationale.
+	const Rhi::PipelineDescriptor base =
+	   Rhi::pipeline_catalog_entry("workarea", Rhi::kBlendAlpha);
+	Rhi::verify_vertex_layout(
+	   "workarea", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+	    {"attr_overlay", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, overlay_r)}});
+
 	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "workarea";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-		   {"attr_overlay", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, overlay_r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.blend = Rhi::kBlendAlpha;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		Rhi::PipelineDescriptor desc = base;
 		desc.uniform_block =
 		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
 		pipeline_ = Rhi::device().create_pipeline(desc);
