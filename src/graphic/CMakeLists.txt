@@ -3,6 +3,17 @@ add_subdirectory(gl/test)
 add_subdirectory(styles)
 add_subdirectory(text)
 
+# The render hardware interface (RHI): the backend-neutral drawing contract
+# behind which the GL-core and Vulkan backends live (renderer modernization
+# plan, WP-9). Header-only; the implementations arrive in later work packages.
+wl_library(graphic_rhi
+  SRCS
+    rhi/rhi.h
+  DEPENDS
+    base_geometry
+    base_macros
+)
+
 # TODO(sirver): Separate this directory into a base directory and one
 # that is Widelands aware (can include logic stuff).
 

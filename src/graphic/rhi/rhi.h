@@ -1,0 +1,405 @@
+/*
+ * Copyright (C) 2026 by the Widelands Development Team
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <https://www.gnu.org/licenses/>.
+ *
+ */
+
+#ifndef WL_GRAPHIC_RHI_RHI_H
+#define WL_GRAPHIC_RHI_RHI_H
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/macros.h"
+#include "base/rect.h"
+
+// The render hardware interface (RHI): a thin, backend-neutral abstraction
+// over the drawing the Widelands renderer needs. It is the seam that lets the
+// GL-core and Vulkan backends share one drawing path (Phase C and D of
+// Claude/RENDERER_MODERNIZATION_PLAN.md).
+//
+// This header is the *contract only*, written before any implementation
+// (WP-9). The design decisions and the mapping of every existing GL call site
+// onto it are in Claude/RHI_INTERFACE.md. Read that before WP-10 (GL core
+// behind the RHI) or WP-12 (Vulkan bootstrap).
+//
+// Two properties are deliberately baked in and must not be relaxed:
+//
+// - OpenGL 2.1 is *not* a backend of this interface (decision 4 of the plan).
+//   It remains the frozen legacy path outside the RHI; the interface assumes
+//   VAOs, UBOs and descriptor sets with no degradation path.
+//
+// - The interface is backend-neutral: it does not include GL or Vulkan
+//   headers, and it owns the backend-specific coordinate conventions
+//   (clip space, framebuffer origin, depth range) so that callers do not
+//   branch on the backend.
+namespace Rhi {
+
+// Backends implementing this interface.
+enum class Backend {
+	kOpenGLCore,
+	kVulkan,
+};
+
+// Texture storage formats. The renderer uploads exactly two today
+// (src/graphic/texture.cc): RGBA8 for images, R8 for the single-channel
+// dither mask. Add formats only when a caller needs one.
+enum class TextureFormat {
+	kRGBA8,
+	kR8,
+};
+
+// Texture addressing mode. Every texture in the tree uses clamp-to-edge
+// (texture.cc); kept explicit so the contract does not assume it.
+enum class TextureWrap {
+	kClampToEdge,
+};
+
+// Texture filtering. Every texture uses linear filtering (texture.cc:220).
+enum class TextureFilter {
+	kLinear,
+	kNearest,
+};
+
+// The usage state a texture is in. GL has no such concept; Vulkan requires an
+// explicit image-layout transition between the uses below. Making it a
+// first-class part of the interface is the point of the exercise: a GL-grown
+// interface would omit it and pay for the retrofit at every call site later
+// (plan WP-9, leak 1). A texture is kUndefined on creation and must be
+// transitioned before it is written or sampled.
+enum class TextureLayout {
+	kUndefined,       // contents unspecified; the only valid destination
+	kColorAttachment, // being written as a render target
+	kShaderReadOnly,  // being sampled by a shader
+	kPresentSource,   // a swapchain image ready to be presented
+};
+
+// Attribute component type. The renderer's vertices are all interleaved
+// floats; no integer, normalized or half attributes are used.
+enum class VertexFormat {
+	kFloat,
+	kVec2,
+	kVec3,
+	kVec4,
+};
+
+// The primitive topologies actually issued. Every program draws triangle
+// lists except grid, which draws GL_LINES (grid_program.cc:67).
+enum class PrimitiveTopology {
+	kTriangleList,
+	kLineList,
+};
+
+enum class BlendFactor {
+	kZero,
+	kOne,
+	kSrcAlpha,
+	kOneMinusSrcAlpha,
+};
+
+enum class BlendOp {
+	kAdd,
+	kReverseSubtract,
+};
+
+enum class CompareOp {
+	kLess,
+	kAlways,
+};
+
+// One vertex attribute: which shader location it feeds, its format, and its
+// byte offset within the interleaved vertex. Matches Gl::VertexAttribute.
+struct VertexAttribute {
+	uint32_t location;
+	VertexFormat format;
+	uint32_t offset;
+};
+
+struct VertexLayout {
+	uint32_t stride;  // bytes between consecutive vertices
+	std::vector<VertexAttribute> attributes;
+};
+
+// Color-blend state of a pipeline. Alpha uses the same factors as color; none
+// of the four blend states the renderer needs split the two. The RHI carries
+// explicit state rather than the game's BlendMode enum, because BlendMode maps
+// onto these states per program and not 1:1 (see Claude/RHI_INTERFACE.md).
+struct BlendState {
+	BlendFactor src_factor;
+	BlendFactor dst_factor;
+	BlendOp op;
+};
+
+// Depth state of a pipeline. The current RenderQueue enables the depth test
+// and depth write for both the opaque and blended passes; the RHI does not
+// silently change that (see the design notes).
+struct DepthState {
+	bool test_enabled;
+	bool write_enabled;
+	CompareOp compare_op;
+};
+
+// The four concrete blend states the renderer needs, as named constants. The
+// caller (RenderQueue / the program draw code) chooses which a pipeline uses;
+// the RHI does not interpret BlendMode.
+constexpr BlendState kBlendOpaque{BlendFactor::kOne, BlendFactor::kZero, BlendOp::kAdd};
+constexpr BlendState kBlendAlpha{
+   BlendFactor::kSrcAlpha, BlendFactor::kOneMinusSrcAlpha, BlendOp::kAdd};
+constexpr BlendState kBlendAdditive{BlendFactor::kOne, BlendFactor::kOne, BlendOp::kAdd};
+constexpr BlendState kBlendReverseSubtract{
+   BlendFactor::kOne, BlendFactor::kOne, BlendOp::kReverseSubtract};
+
+// How a render pass treats its target's contents on entry. The screen pass
+// clears color and depth every frame; the immediate render-to-texture path
+// (minimap, font cache) draws over existing contents and does not clear.
+struct PassClear {
+	bool clear;
+	float r;
+	float g;
+	float b;
+	float a;
+};
+
+// A buffer's role, which decides where the backend keeps it and how it is
+// written. Vertex data is uploaded whole-buffer per frame (Gl::Buffer today);
+// uniform data carries the per-program block (Gl::UniformBuffer /
+// PerProgramState).
+enum class BufferUsage {
+	kVertex,
+	kUniform,
+};
+
+class Texture;
+class Buffer;
+class Pipeline;
+class DescriptorSet;
+class CommandBuffer;
+
+// Describes a texture to create. Width and height are in texels.
+struct TextureDescriptor {
+	uint32_t width;
+	uint32_t height;
+	TextureFormat format;
+	TextureWrap wrap = TextureWrap::kClampToEdge;
+	TextureFilter filter = TextureFilter::kLinear;
+};
+
+// Describes a pipeline (the RHI's "program"): the shader program, its vertex
+// layout, its topology, and the blend/depth state it draws with.
+//
+// 'program_name' is the shared shader identifier — the basename in
+// data/shaders/ (e.g. "blit", "terrain"). The backend owns dialect emission
+// (GL) or SPIR-V lookup (Vulkan, WP-13); the caller never hands raw shader
+// source to the RHI.
+struct PipelineDescriptor {
+	std::string program_name;
+	VertexLayout vertex_layout;
+	PrimitiveTopology topology;
+	BlendState blend;
+	DepthState depth;
+};
+
+// A whole texture image. A Texture is *also* a render target: there is no
+// separate framebuffer object in the interface, matching texture.cc where the
+// FBO is a singleton wrapped around the target texture (GlFramebuffer). A
+// Texture may be a view over a sub-rect of a parent (create_texture_view),
+// which is how the BlitData {parent, subrect} semantics of the texture atlas
+// are represented.
+class Texture {
+public:
+	virtual ~Texture() = default;
+
+	[[nodiscard]] virtual uint32_t width() const = 0;
+	[[nodiscard]] virtual uint32_t height() const = 0;
+
+	// Uploads the whole texture from 'pixels', tightly packed rows of
+	// width() * height() texels in the format given at creation, in the RHI's
+	// canonical row order (see the design notes). Callers that upload in
+	// row-reversed order (Gl::swap_rows today) are told which order by the
+	// contract; the backend compensates so that shader v=0 is the same texel
+	// row on every backend.
+	virtual void upload(const void* pixels) = 0;
+
+	// Reads the whole texture back into 'pixels', RGBA8, row-major, 4 *
+	// width() * height() bytes. Backends without direct readback copy through
+	// a host-visible buffer (WP-18). Reading a view reads the view's sub-rect.
+	virtual void read_back(uint8_t* pixels) = 0;
+
+	DISALLOW_COPY_AND_ASSIGN(Texture);
+};
+
+// A GPU buffer. Upload is whole-buffer (matching Gl::Buffer::update, which
+// always re-allocates with GL_DYNAMIC_DRAW because partial updates stall
+// drivers).
+class Buffer {
+public:
+	virtual ~Buffer() = default;
+
+	// Uploads 'size' bytes from 'data' as the whole buffer contents.
+	virtual void update(const void* data, uint32_t size) = 0;
+
+	DISALLOW_COPY_AND_ASSIGN(Buffer);
+};
+
+// An immutable pipeline object (the RHI's "program"). It has no per-frame
+// methods; drawing binds it and records draws into a CommandBuffer.
+class Pipeline {
+public:
+	virtual ~Pipeline() = default;
+
+	DISALLOW_COPY_AND_ASSIGN(Pipeline);
+};
+
+// A descriptor set: the bundle of sampled textures and (optionally) one
+// uniform buffer a pipeline reads. This replaces Gl::State::bind and the
+// per-program glUniform*/UBO plumbing. A DescriptorSet is created for a
+// specific Pipeline, whose shader is the single source of truth for which
+// bindings exist; binding indices are the shader's declared binding points
+// (explicit set/binding decorations in the Vulkan dialect, WP-13).
+class DescriptorSet {
+public:
+	virtual ~DescriptorSet() = default;
+
+	// Re-points texture binding 'binding' at 'texture' (or null to unbind).
+	virtual void set_texture(uint32_t binding, const Texture* texture) = 0;
+
+	// Re-points uniform-buffer binding 'binding' at a range of 'buffer'. The
+	// per-program block is written in place before each draw, so 'offset' and
+	// 'size' let the caller address a slice of a larger buffer.
+	virtual void set_uniform_buffer(uint32_t binding,
+	                                const Buffer* buffer,
+	                                uint32_t offset,
+	                                uint32_t size) = 0;
+
+	DISALLOW_COPY_AND_ASSIGN(DescriptorSet);
+};
+
+// A recorded sequence of draw commands. Command recording happens on the UI
+// thread (see the design notes); the backend submits the command buffer when
+// the Device is told to. This is the RHI's "immediate mode" replacement: the
+// caller records, the backend decides when the GPU runs it.
+class CommandBuffer {
+public:
+	virtual ~CommandBuffer() = default;
+
+	// Begins a render pass. 'target' == nullptr means the swapchain back buffer
+	// (the screen). Otherwise the pass renders into 'texture', which the caller
+	// must have transitioned to kColorAttachment (or left kUndefined and then
+	// transitioned). 'clear' says whether the attachment is cleared to the
+	// given color on entry; depth is always cleared for a pass that has a
+	// depth attachment.
+	virtual void begin_pass(Texture* target, const PassClear& clear) = 0;
+
+	// Sets the viewport for the current pass, in pixels, in the canonical
+	// framebuffer coordinate space (origin bottom-left, matching GL; the
+	// Vulkan backend compensates for its top-left origin internally).
+	virtual void set_viewport(const Recti& viewport) = 0;
+
+	// Sets the scissor rectangle for the current pass, in pixels, same
+	// coordinate space as set_viewport. Matches the ScopedScissor usage in
+	// render_queue.cc for the terrain passes.
+	virtual void set_scissor(const Recti& rect) = 0;
+
+	// Binds a pipeline for subsequent draws.
+	virtual void bind_pipeline(const Pipeline* pipeline) = 0;
+
+	// Binds a descriptor set for subsequent draws.
+	virtual void bind_descriptor_set(const DescriptorSet* set) = 0;
+
+	// Binds a vertex buffer for subsequent draws (there is no index buffer;
+	// every draw in the renderer is a glDrawArrays-style offset draw).
+	virtual void bind_vertex_buffer(const Buffer* buffer) = 0;
+
+	// Records a draw of 'vertex_count' vertices starting at 'vertex_offset' in
+	// the currently bound vertex buffer, using the currently bound pipeline
+	// and descriptor set.
+	virtual void draw(uint32_t vertex_offset, uint32_t vertex_count) = 0;
+
+	// Transitions 'texture' to 'layout'. This is the explicit resource-state
+	// contract (plan WP-9, leak 1): the GL backend implements it as the
+	// existing bind/unbind dance (Gl::State::bind_framebuffer /
+	// unbind_texture_if_bound), Vulkan as an image-layout barrier.
+	virtual void transition(Texture* texture, TextureLayout layout) = 0;
+
+	// Ends the current render pass.
+	virtual void end_pass() = 0;
+
+	DISALLOW_COPY_AND_ASSIGN(CommandBuffer);
+};
+
+// The backend device: the factory for all resources and the owner of the
+// frame lifecycle and presentation. There is one Device per running game,
+// chosen by --renderer.
+class Device {
+public:
+	virtual ~Device() = default;
+
+	[[nodiscard]] virtual Backend backend() const = 0;
+
+	// Frame lifecycle. begin_frame acquires a swapchain image and returns a
+	// command buffer recording into it; end_frame submits the command buffer
+	// and presents. Everything the RenderQueue draws for one frame is recorded
+	// between these two calls. The acquired image is the target of
+	// begin_pass(nullptr, ...).
+	virtual std::unique_ptr<CommandBuffer> begin_frame() = 0;
+	virtual void end_frame(std::unique_ptr<CommandBuffer> command_buffer) = 0;
+
+	// A short-lived command buffer for immediate render-to-texture, recorded
+	// and submitted outside the frame (texture.cc's do_* methods; plan WP-9,
+	// leak 2). submit_offscreen guarantees the recorded results are visible to
+	// later sampling in the current frame — a fence wait is acceptable, and
+	// WP-16b owns the optimization. This path must also work between frames,
+	// since font and image-cache rendering happen on the initializer thread.
+	virtual std::unique_ptr<CommandBuffer> begin_offscreen() = 0;
+	virtual void submit_offscreen(std::unique_ptr<CommandBuffer> command_buffer) = 0;
+
+	// Reads the swapchain back buffer (the last presented frame) back into
+	// 'pixels' (RGBA8, row-major). This is the screenshot path (Screen::to_texture
+	// today). Implemented in WP-18; declared here so the screenshot call site
+	// is expressible in the contract.
+	virtual void read_back_swapchain(uint8_t* pixels) = 0;
+
+	// Factories. Resource creation may happen on the initializer thread (as
+	// texture creation does today); see the threading contract in the design
+	// notes.
+	virtual std::unique_ptr<Texture> create_texture(const TextureDescriptor& desc) = 0;
+	virtual std::unique_ptr<Texture>
+	create_texture_view(Texture& parent, const Recti& subrect) = 0;
+	virtual std::unique_ptr<Buffer> create_buffer(uint32_t size, BufferUsage usage) = 0;
+	virtual std::unique_ptr<Pipeline> create_pipeline(const PipelineDescriptor& desc) = 0;
+	virtual std::unique_ptr<DescriptorSet> create_descriptor_set(const Pipeline& pipeline) = 0;
+
+	DISALLOW_COPY_AND_ASSIGN(Device);
+};
+
+// The upper bound of the RenderQueue's logical depth. The sort key is an
+// integer in [0, kLogicalDepthMax]; larger means closer to the camera.
+constexpr int kLogicalDepthMax = 65535;
+
+// Maps the RenderQueue's logical depth to canonical clip-space depth in
+// [-1, 1], larger logical depth closer to the camera. The RHI owns this
+// mapping rather than the sort key (plan WP-9, leak 4); the Vulkan backend
+// converts the canonical [-1, 1] range to [0, 1] in its shader emission
+// (WP-13), so callers only ever deal in canonical depth.
+inline float logical_to_clip_depth(const int logical_depth) {
+	return 1.f - (2.f * static_cast<float>(logical_depth)) / kLogicalDepthMax;
+}
+
+}  // namespace Rhi
+
+#endif  // end of include guard: WL_GRAPHIC_RHI_RHI_H
