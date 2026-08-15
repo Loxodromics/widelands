@@ -22,6 +22,7 @@
 using Gl::EmittedShader;
 using Gl::ShaderDialect;
 using Gl::ShaderStage;
+using Gl::VulkanBindings;
 using Gl::emit_dialect;
 
 TESTSUITE_START(shader_dialect)
@@ -215,6 +216,119 @@ TESTCASE(unterminated_uniform_block_throws) {
 		emit_dialect(
 		   "#version 150\nlayout(std140) uniform per_program_state {\n\tfloat u_z_value;\n",
 		   ShaderStage::kVertex, ShaderDialect::kGLSL120, "test");
+	});
+}
+
+TESTCASE(vulkan_vertex) {
+	const std::string input = "#version 330\n"
+	                          "layout(location = 0) in vec2 attr_position;\n"
+	                          "layout(std140) uniform per_program_state {\n"
+	                          "\tfloat u_z_value;\n"
+	                          "};\n"
+	                          "out vec2 var_tex;\n"
+	                          "void main() {\n"
+	                          "\tvar_tex = attr_position;\n"
+	                          "\tgl_Position = vec4(attr_position, u_z_value, 1.);\n"
+	                          "}\n";
+	VulkanBindings bindings;
+	bindings.uniform_blocks["per_program_state"] = 1;
+	bindings.varyings["var_tex"] = 0;
+	const EmittedShader out =
+	   emit_dialect(input, ShaderStage::kVertex, ShaderDialect::kVulkan, "test", bindings);
+	check_equal(out.source, "#version 450\n"
+	                        "layout(location = 0) in vec2 attr_position;\n"
+	                        "layout(set = 0, binding = 1, std140) uniform per_program_state {\n"
+	                        "\tfloat u_z_value;\n"
+	                        "};\n"
+	                        "layout(location = 0) out vec2 var_tex;\n"
+	                        "void wl_main() {\n"
+	                        "\tvar_tex = attr_position;\n"
+	                        "\tgl_Position = vec4(attr_position, u_z_value, 1.);\n"
+	                        "}\n"
+	                        "void main() {\n"
+	                        "\twl_main();\n"
+	                        "\tgl_Position.y = -gl_Position.y;\n"
+	                        "\tgl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n"
+	                        "}\n");
+	check_equal(out.attributes.size(), 1u);
+	check_equal(out.attributes[0].location, 0);
+	check_equal(out.attributes[0].name, "attr_position");
+}
+
+TESTCASE(vulkan_vertex_without_main_throws) {
+	check_error(WException, "no `void main() {`", [] {
+		emit_dialect("#version 150\nlayout(location = 0) in vec2 attr_position;\n",
+		             ShaderStage::kVertex, ShaderDialect::kVulkan, "test");
+	});
+}
+
+TESTCASE(vulkan_fragment) {
+	const std::string input = "#version 330\n"
+	                          "uniform sampler2D u_texture;\n"
+	                          "uniform sampler2D u_mask;\n"
+	                          "layout(std140) uniform per_program_state {\n"
+	                          "\tfloat u_value_amplitude;\n"
+	                          "};\n"
+	                          "in vec2 var_tex;\n"
+	                          "out vec4 frag_color;\n"
+	                          "void main() {\n"
+	                          "\tfrag_color = texture(u_texture, var_tex);\n"
+	                          "}\n";
+	VulkanBindings bindings;
+	bindings.samplers["u_texture"] = 0;
+	bindings.samplers["u_mask"] = 1;
+	bindings.uniform_blocks["per_program_state"] = 2;
+	bindings.varyings["var_tex"] = 0;
+	const EmittedShader out =
+	   emit_dialect(input, ShaderStage::kFragment, ShaderDialect::kVulkan, "test", bindings);
+	check_equal(out.source, "#version 450\n"
+	                        "layout(set = 0, binding = 0) uniform sampler2D u_texture;\n"
+	                        "layout(set = 0, binding = 1) uniform sampler2D u_mask;\n"
+	                        "layout(set = 0, binding = 2, std140) uniform per_program_state {\n"
+	                        "\tfloat u_value_amplitude;\n"
+	                        "};\n"
+	                        "layout(location = 0) in vec2 var_tex;\n"
+	                        "layout(location = 0) out vec4 frag_color;\n"
+	                        "void main() {\n"
+	                        "\tfrag_color = texture(u_texture, var_tex);\n"
+	                        "}\n");
+	check_equal(out.attributes.size(), 0u);
+}
+
+TESTCASE(vulkan_drops_precision) {
+	const std::string input = "#version 330\n"
+	                          "precision highp float;\n"
+	                          "layout(location = 0) out vec4 frag_color;\n"
+	                          "void main() {\n"
+	                          "\tfrag_color = vec4(1.0);\n"
+	                          "}\n";
+	const EmittedShader out =
+	   emit_dialect(input, ShaderStage::kFragment, ShaderDialect::kVulkan, "test");
+	check_equal(out.source, "#version 450\n"
+	                        "layout(location = 0) out vec4 frag_color;\n"
+	                        "void main() {\n"
+	                        "\tfrag_color = vec4(1.0);\n"
+	                        "}\n");
+}
+
+TESTCASE(vulkan_default_block_uniform_throws) {
+	check_error(WException, "only supports sampler2D uniforms", [] {
+		emit_dialect("#version 150\nuniform float u_stray;\n", ShaderStage::kFragment,
+		             ShaderDialect::kVulkan, "test");
+	});
+}
+
+TESTCASE(vulkan_sampler_without_binding_throws) {
+	check_error(WException, "no assigned Vulkan binding", [] {
+		emit_dialect("#version 150\nuniform sampler2D u_texture;\n", ShaderStage::kFragment,
+		             ShaderDialect::kVulkan, "test");
+	});
+}
+
+TESTCASE(vulkan_fragment_input_without_vertex_output_throws) {
+	check_error(WException, "no matching vertex output", [] {
+		emit_dialect("#version 150\nin vec2 var_tex;\n", ShaderStage::kFragment,
+		             ShaderDialect::kVulkan, "test");
 	});
 }
 

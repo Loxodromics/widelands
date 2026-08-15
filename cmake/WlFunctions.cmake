@@ -4,6 +4,7 @@ macro(_parse_common_args ARGS)
     THIRD_PARTY  # Is a third party lib. Less warnings, no codecheck.
     THIRD_PARTY_WITH_INCLUDES
     C_LIBRARY # Pure C library. No CXX flags.
+    NOINSTALL # Build tool only; do not install the binary (wl_binary).
     WIN32 # Windows binary/library.
     USES_ATOMIC
     USES_ICU
@@ -279,7 +280,9 @@ function(wl_binary NAME)
 
   _common_compile_tasks()
 
-  #Quoting the CMake documentation on DESTINATION:
-  #"If a relative path is given it is interpreted relative to the value of CMAKE_INSTALL_PREFIX"
-  install(TARGETS ${NAME} DESTINATION "${WL_INSTALL_BINDIR}" COMPONENT ExecutableFiles)
+  if (NOT ARG_NOINSTALL)
+    #Quoting the CMake documentation on DESTINATION:
+    #"If a relative path is given it is interpreted relative to the value of CMAKE_INSTALL_PREFIX"
+    install(TARGETS ${NAME} DESTINATION "${WL_INSTALL_BINDIR}" COMPONENT ExecutableFiles)
+  endif()
 endfunction()

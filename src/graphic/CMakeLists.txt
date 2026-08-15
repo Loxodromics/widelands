@@ -52,6 +52,116 @@ if (OPTION_BUILD_VULKAN)
   target_link_libraries(graphic_rhi_vulkan third_party_volk)
 endif()
 
+# SPIR-V generation for the eight shader programs (renderer modernization
+# plan, WP-13). glslangValidator compiles the Vulkan dialect emitted by
+# wl_spirv_compiler to SPIR-V at build time - never at runtime - and the
+# default build fails if the committed artifacts in data/shaders/vulkan/ do
+# not match their sources byte-for-byte. `ninja update_spirv` regenerates the
+# committed artifacts after a shader edit. The toolchain is a build-time
+# dependency: without glslangValidator the game still builds and runs, only
+# the regeneration/check is skipped (with a warning).
+if (OPTION_BUILD_VULKAN)
+  find_program(GLSLANG_VALIDATOR_EXECUTABLE glslangValidator)
+  find_program(SPIRV_VAL_EXECUTABLE spirv-val)
+
+  if (NOT GLSLANG_VALIDATOR_EXECUTABLE)
+    message(WARNING "glslangValidator not found: the committed SPIR-V shaders will not be "
+                    "regenerated or checked against their sources.")
+  else()
+    # The one list of the eight programs both shaders and CMake agree on.
+    set(WL_SHADER_PROGRAMS blit dither draw_line fill_rect grid road terrain workarea)
+    set(WL_SPIRV_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+    set(WL_SPIRV_COMMITTED_DIR "${WL_ROOT_DIR}/data/shaders/vulkan")
+
+    # Emits the Vulkan dialect of all eight programs plus the bindings.json
+    # manifest. NOINSTALL: a build tool, not a shipped binary.
+    wl_binary(wl_spirv_compiler
+      NOINSTALL
+      SRCS
+        rhi/vulkan/spirv_compiler_main.cc
+      DEPENDS
+        base_exceptions
+        graphic_shader_dialect
+    )
+
+    set(WL_SHADER_SOURCES "")
+    set(WL_SPIRV_INTERMEDIATES "")
+    set(WL_SPIRV_BUILD_ARTIFACTS "")
+    foreach(program IN LISTS WL_SHADER_PROGRAMS)
+      list(APPEND WL_SHADER_SOURCES
+        "${WL_ROOT_DIR}/data/shaders/${program}.vp"
+        "${WL_ROOT_DIR}/data/shaders/${program}.fp")
+      list(APPEND WL_SPIRV_INTERMEDIATES
+        "${WL_SPIRV_OUTPUT_DIR}/${program}.vert.glsl"
+        "${WL_SPIRV_OUTPUT_DIR}/${program}.frag.glsl")
+      list(APPEND WL_SPIRV_BUILD_ARTIFACTS
+        "${WL_SPIRV_OUTPUT_DIR}/${program}.vert.spv"
+        "${WL_SPIRV_OUTPUT_DIR}/${program}.frag.spv")
+    endforeach()
+
+    # Step 1: expand includes and emit the Vulkan dialect + binding manifest.
+    add_custom_command(
+      OUTPUT
+        ${WL_SPIRV_INTERMEDIATES}
+        "${WL_SPIRV_OUTPUT_DIR}/bindings.json"
+      COMMAND wl_spirv_compiler
+        --data-dir "${WL_ROOT_DIR}/data/shaders"
+        --out-dir "${WL_SPIRV_OUTPUT_DIR}"
+        --programs ${WL_SHADER_PROGRAMS}
+      DEPENDS
+        wl_spirv_compiler
+        ${WL_SHADER_SOURCES}
+        "${WL_ROOT_DIR}/data/shaders/terrain_variation.glsl"
+      COMMENT "Emitting the Vulkan dialect and bindings for the eight shader programs"
+      VERBATIM
+    )
+
+    # Step 2: compile each emitted stage to SPIR-V.
+    foreach(program IN LISTS WL_SHADER_PROGRAMS)
+      foreach(stage IN ITEMS vert frag)
+        add_custom_command(
+          OUTPUT "${WL_SPIRV_OUTPUT_DIR}/${program}.${stage}.spv"
+          COMMAND "${GLSLANG_VALIDATOR_EXECUTABLE}"
+            -V
+            --target-env vulkan1.0
+            -S ${stage}
+            -o "${WL_SPIRV_OUTPUT_DIR}/${program}.${stage}.spv"
+            "${WL_SPIRV_OUTPUT_DIR}/${program}.${stage}.glsl"
+          DEPENDS "${WL_SPIRV_OUTPUT_DIR}/${program}.${stage}.glsl"
+          COMMENT "Compiling ${program}.${stage} to SPIR-V"
+          VERBATIM
+        )
+      endforeach()
+    endforeach()
+
+    # Step 3: verify the committed artifacts match the freshly built ones.
+    add_custom_target(wl_spirv_check ALL
+      COMMAND ${CMAKE_COMMAND}
+        -DBUILD_DIR=${WL_SPIRV_OUTPUT_DIR}
+        -DSOURCE_DIR=${WL_ROOT_DIR}
+        -DSPIRV_VAL=${SPIRV_VAL_EXECUTABLE}
+        "-DPROGRAMS=${WL_SHADER_PROGRAMS}"
+        -P ${WL_ROOT_DIR}/cmake/CheckSpirvArtifacts.cmake
+      DEPENDS ${WL_SPIRV_BUILD_ARTIFACTS} "${WL_SPIRV_OUTPUT_DIR}/bindings.json"
+      COMMENT "Checking the committed SPIR-V artifacts against their sources"
+      VERBATIM
+    )
+
+    # Convenience target: copy the freshly built artifacts over the committed
+    # ones after a shader edit (then commit them).
+    add_custom_target(update_spirv
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${WL_SPIRV_COMMITTED_DIR}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${WL_SPIRV_BUILD_ARTIFACTS}
+        "${WL_SPIRV_OUTPUT_DIR}/bindings.json"
+        ${WL_SPIRV_COMMITTED_DIR}
+      DEPENDS ${WL_SPIRV_BUILD_ARTIFACTS} "${WL_SPIRV_OUTPUT_DIR}/bindings.json"
+      COMMENT "Updating the committed SPIR-V artifacts"
+      VERBATIM
+    )
+  endif()
+endif()
+
 # TODO(sirver): Separate this directory into a base directory and one
 # that is Widelands aware (can include logic stuff).
 
@@ -146,6 +256,18 @@ wl_library(graphic_sdl_utils
   USES_SDL2
 )
 
+# The shader dialect emitter (renderer modernization plan, WP-6) and include
+# expansion (backlog phase 1b), kept dependency-free (no SDL2/OpenGL) so the
+# build-time SPIR-V tool (WP-13) can link it without dragging in the graphic
+# stack. graphic_gl_utils re-exports it through gl/utils.h.
+wl_library(graphic_shader_dialect
+  SRCS
+    gl/shader_dialect.cc
+    gl/shader_dialect.h
+  DEPENDS
+    base_exceptions
+)
+
 wl_library(graphic_gl_utils
   SRCS
     gl/blit_data.h
@@ -163,6 +285,7 @@ wl_library(graphic_gl_utils
     base_geometry
     base_macros
     graphic_rhi
+    graphic_shader_dialect
     graphic_text
     io_fileread
     io_filesystem
