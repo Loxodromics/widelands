@@ -11,6 +11,15 @@ The game was inspired by Settlers II™ (© Bluebyte) but has significantly more
 ![Widelands Screenshot](https://www.widelands.org/static/img/welcome.jpg)
 
 
+## About This Fork
+
+This is a personal fork, worked on for fun, not affiliated with the upstream Widelands project beyond sharing its history. Two things worth knowing if you've landed here:
+
+- **Renderer modernization**: a  project to move the renderer off fixed OpenGL 2.1 and push terrain, water, lighting, and sprite fidelity further.
+- **AI-assisted development**: substantial parts of this fork are written with AI assistance. Upstream's AI-Generated Content Policy further down describes *their* stance and what they'd expect from a contribution back to them — it does not describe how this fork is built.
+
+There is no intention to submit pull requests upstream from here. Anything useful that comes out of it is free for the upstream project, or anyone else, to take — that's their call, not a goal pursued from this side.
+
 ## License [![License](https://img.shields.io/github/license/widelands/widelands.svg?color=blue)](COPYING)
 
 GPL v2+. Some assets are released under various Creative Commons licenses – see the respective folders.
