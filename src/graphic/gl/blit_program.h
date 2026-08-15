@@ -19,6 +19,8 @@
 #ifndef WL_GRAPHIC_GL_BLIT_PROGRAM_H
 #define WL_GRAPHIC_GL_BLIT_PROGRAM_H
 
+#include <memory>
+
 #include "base/macros.h"
 #include "base/rect.h"
 #include "graphic/blend_mode.h"
@@ -27,6 +29,7 @@
 #include "graphic/gl/blit_data.h"
 #include "graphic/gl/system_headers.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 
 // Blits images. Can blend them with player color or make them monochrome.
 class BlitProgram {
@@ -118,6 +121,17 @@ private:
 	// Uniforms.
 	GLint u_texture_;
 	GLint u_mask_;
+
+	// RHI resources for the core path (the legacy members above are unused
+	// there). blit needs two pipelines (alpha and opaque) and a descriptor set
+	// for its two textures (u_texture, u_mask); there is no uniform block.
+	std::unique_ptr<Rhi::Pipeline> pipeline_alpha_;
+	std::unique_ptr<Rhi::Pipeline> pipeline_opaque_;
+	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
+
+	// The pipeline to use for 'blend_mode' on the core path.
+	Rhi::Pipeline* pipeline_for(BlendMode blend_mode) const;
 
 	// Cached for efficiency.
 	std::vector<PerVertexData> vertices_;

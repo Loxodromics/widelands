@@ -19,8 +19,11 @@
 #ifndef WL_GRAPHIC_GL_GRID_PROGRAM_H
 #define WL_GRAPHIC_GL_GRID_PROGRAM_H
 
+#include <memory>
+
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 
 class GridProgram {
 public:
@@ -28,7 +31,7 @@ public:
 	GridProgram();
 
 	// Draws the grid layer
-	void draw(uint32_t texture_id,
+	void draw(const BlitData& texture,
 	          const FieldsToDraw& fields_to_draw,
 	          float z_value,
 	          bool height_heat_map);
@@ -43,7 +46,7 @@ private:
 	};
 	static_assert(sizeof(PerVertexData) == 20, "Wrong padding.");
 
-	void gl_draw(int gl_texture, float z_value);
+	void gl_draw(const BlitData& texture, float z_value);
 
 	// Adds a vertex to the end of vertices with data from 'field' and the given RGB color.
 	void add_vertex(const FieldsToDraw::Field& field, float r, float g, float b);
@@ -63,6 +66,13 @@ private:
 	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
 	// reads these from the uniform block instead).
 	GLint u_z_value_;
+
+	// RHI resources for the core path. grid binds a texture its shader never
+	// samples (see Claude/RHI_INTERFACE.md §6.1) and the z-only block.
+	std::unique_ptr<Rhi::Pipeline> pipeline_;
+	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
+	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
 
 	// Objects below are kept around to avoid memory allocations on each frame.
 	// They could theoretically also be recreated.

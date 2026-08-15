@@ -21,25 +21,55 @@
 #include "graphic/blit_mode.h"
 #include "graphic/gl/blit_data.h"
 #include "graphic/gl/coordinate_conversion.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/gl/gl_device.h"
 
 namespace {
 
 // While drawing we put all draw calls into a buffer, so that we have to
 // transfer the buffer to the GPU only once, even though we might need to do
 // many glDraw* calls. This structure represents the parameters for one glDraw*
-// call.
+// call. It carries the BlitData so each backend can read the field it needs
+// (the RHI texture on the core path, the GL name on the legacy path).
 struct DrawBatch {
 	int offset;
 	int count;
-	uint32_t texture;
-	uint32_t mask;
+	BlitData texture;
+	BlitData mask;
 	BlendMode blend_mode;
 };
 
 }  // namespace
 
 BlitProgram::BlitProgram() {
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::PipelineDescriptor desc;
+		desc.program_name = "blit";
+		desc.vertex_layout.stride = sizeof(PerVertexData);
+		desc.vertex_layout.attributes = {
+		   {"attr_blend", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, blend_r)},
+		   {"attr_mask_texture_position", Rhi::VertexFormat::kVec2,
+		    offsetof(PerVertexData, mask_texture_x)},
+		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
+		    offsetof(PerVertexData, texture_x)},
+		   {"attr_program_flavor", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, program_flavor)},
+		};
+		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		desc.samplers = {{0, "u_texture"}, {1, "u_mask"}};
+
+		desc.blend = Rhi::kBlendAlpha;
+		pipeline_alpha_ = Rhi::device().create_pipeline(desc);
+		desc.blend = Rhi::kBlendOpaque;
+		pipeline_opaque_ = Rhi::device().create_pipeline(desc);
+
+		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_alpha_);
+		vertex_buffer_ = Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		return;
+	}
+
 	gl_program_.build("blit");
 
 	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
@@ -60,17 +90,13 @@ BlitProgram::BlitProgram() {
 	});
 }
 
+Rhi::Pipeline* BlitProgram::pipeline_for(const BlendMode blend_mode) const {
+	// blit uses ordinary alpha blending for Default/UseAlpha and overwrites the
+	// destination for Copy (Claude/RHI_INTERFACE.md §4).
+	return blend_mode == BlendMode::Copy ? pipeline_opaque_.get() : pipeline_alpha_.get();
+}
+
 void BlitProgram::draw(const std::vector<Arguments>& arguments) {
-	glUseProgram(gl_program_.object());
-
-	auto& gl_state = Gl::State::instance();
-
-	gl_array_buffer_.bind();
-	vao_.bind();
-
-	glUniform1i(u_texture_, 0);
-	glUniform1i(u_mask_, 1);
-
 	// Prepare the buffer for many draw calls.
 	std::vector<DrawBatch> draw_batches;
 	int offset = 0;
@@ -144,16 +170,42 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 		}
 
 		draw_batches.emplace_back(DrawBatch{offset, static_cast<int>(vertices_.size() - offset),
-		                                    template_args.texture.texture_id,
-		                                    template_args.mask.texture_id, template_args.blend_mode});
+		                                    template_args.texture, template_args.mask,
+		                                    template_args.blend_mode});
 		offset = vertices_.size();
 	}
+
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+
+		auto& command_buffer = Rhi::command_buffer();
+		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+		for (const auto& draw_arg : draw_batches) {
+			descriptor_set_->set_texture(0, draw_arg.texture.texture);
+			descriptor_set_->set_texture(1, draw_arg.mask.texture);
+			command_buffer.bind_pipeline(pipeline_for(draw_arg.blend_mode));
+			command_buffer.bind_descriptor_set(descriptor_set_.get());
+			command_buffer.draw(draw_arg.offset, draw_arg.count);
+		}
+		return;
+	}
+
+	glUseProgram(gl_program_.object());
+
+	auto& gl_state = Gl::State::instance();
+
+	gl_array_buffer_.bind();
+	vao_.bind();
+
+	glUniform1i(u_texture_, 0);
+	glUniform1i(u_mask_, 1);
+
 	gl_array_buffer_.update(vertices_);
 
 	// Now do the draw calls.
 	for (const auto& draw_arg : draw_batches) {
-		gl_state.bind(GL_TEXTURE0, draw_arg.texture);
-		gl_state.bind(GL_TEXTURE1, draw_arg.mask);
+		gl_state.bind(GL_TEXTURE0, draw_arg.texture.texture_id);
+		gl_state.bind(GL_TEXTURE1, draw_arg.mask.texture_id);
 
 		if (draw_arg.blend_mode == BlendMode::Copy) {
 			glBlendFunc(GL_ONE, GL_ZERO);
@@ -180,7 +232,7 @@ void BlitProgram::draw_monochrome(const Rectf& dest_rect,
                                   const float z_value,
                                   const BlitData& texture,
                                   const RGBAColor& blend) {
-	draw({Arguments{dest_rect, z_value, texture, BlitData{0, 0, 0, Rectf()}, blend,
+	draw({Arguments{dest_rect, z_value, texture, BlitData{nullptr, 0, 0, 0, Rectf()}, blend,
 	                BlendMode::UseAlpha, BlitMode::kMonochrome}});
 }
 

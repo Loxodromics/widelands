@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -119,13 +120,18 @@ enum class BlendOp {
 
 enum class CompareOp {
 	kLess,
+	kLessOrEqual,
 	kAlways,
 };
 
-// One vertex attribute: which shader location it feeds, its format, and its
-// byte offset within the interleaved vertex. Matches Gl::VertexAttribute.
+// One vertex attribute: which shader input it feeds, its format, and its byte
+// offset within the interleaved vertex. 'name' is the shader attribute name
+// (e.g. "attr_position"); the backend resolves its location from the shader
+// (GLSL layout(location=N) for GL, the SPIR-V reflection for Vulkan), so the
+// shader remains the single source of truth and a renamed attribute fails at
+// pipeline creation instead of feeding the wrong location (the F7 lesson).
 struct VertexAttribute {
-	uint32_t location;
+	std::string name;
 	VertexFormat format;
 	uint32_t offset;
 };
@@ -199,6 +205,26 @@ struct TextureDescriptor {
 	TextureFilter filter = TextureFilter::kLinear;
 };
 
+// A sampler uniform a fragment shader declares, and the texture unit (GL) or
+// binding (Vulkan) it reads from. The authored GLSL 330 sources have no
+// layout(binding=N) qualifier (that needs GLSL 4.2 / ARB_shading_language_420pack),
+// so the program code names the samplers explicitly in the PipelineDescriptor
+// rather than the backend discovering them from the shader source.
+struct SamplerBinding {
+	uint32_t binding;
+	std::string name;
+};
+
+// A uniform block a program reads, and the UBO binding point it is bound to.
+// 'expected_size' is the block's std140 data size, which the GL backend asserts
+// against GL_UNIFORM_BLOCK_DATA_SIZE so a drifted C++ struct fails at startup
+// instead of reading garbage (the WP-8 / F3 lesson).
+struct UniformBlockBinding {
+	uint32_t binding;
+	std::string name;
+	uint32_t expected_size;
+};
+
 // Describes a pipeline (the RHI's "program"): the shader program, its vertex
 // layout, its topology, and the blend/depth state it draws with.
 //
@@ -212,6 +238,20 @@ struct PipelineDescriptor {
 	PrimitiveTopology topology;
 	BlendState blend;
 	DepthState depth;
+
+	// The samplers the program reads and the binding each is on. For GL the
+	// binding is the texture unit; the authored GLSL 330 shaders have no
+	// layout(binding=N) qualifier (that needs GLSL 4.2), so the program code
+	// supplies the (name, unit) pairs here exactly as it used glUniform1i to
+	// before the RHI. The Vulkan backend derives these from the SPIR-V
+	// set/binding decorations (WP-13) and only validates the program name.
+	std::vector<SamplerBinding> samplers;
+
+	// The uniform block the program reads, if any, and the UBO binding point it
+	// is bound to (same semantics as 'samplers': the program code names it
+	// because GLSL 330 cannot). 'expected_size' is the block's std140 data
+	// size, asserted against the shader so a drifted struct fails at startup.
+	std::optional<UniformBlockBinding> uniform_block;
 };
 
 // A whole texture image. A Texture is *also* a render target: there is no
@@ -222,6 +262,7 @@ struct PipelineDescriptor {
 // are represented.
 class Texture {
 public:
+	Texture() = default;
 	virtual ~Texture() = default;
 
 	[[nodiscard]] virtual uint32_t width() const = 0;
@@ -248,6 +289,7 @@ public:
 // drivers).
 class Buffer {
 public:
+	Buffer() = default;
 	virtual ~Buffer() = default;
 
 	// Uploads 'size' bytes from 'data' as the whole buffer contents.
@@ -260,6 +302,7 @@ public:
 // methods; drawing binds it and records draws into a CommandBuffer.
 class Pipeline {
 public:
+	Pipeline() = default;
 	virtual ~Pipeline() = default;
 
 	DISALLOW_COPY_AND_ASSIGN(Pipeline);
@@ -273,6 +316,7 @@ public:
 // (explicit set/binding decorations in the Vulkan dialect, WP-13).
 class DescriptorSet {
 public:
+	DescriptorSet() = default;
 	virtual ~DescriptorSet() = default;
 
 	// Re-points texture binding 'binding' at 'texture' (or null to unbind).
@@ -295,6 +339,7 @@ public:
 // caller records, the backend decides when the GPU runs it.
 class CommandBuffer {
 public:
+	CommandBuffer() = default;
 	virtual ~CommandBuffer() = default;
 
 	// Begins a render pass. 'target' == nullptr means the swapchain back buffer
@@ -303,7 +348,7 @@ public:
 	// transitioned). 'clear' says whether the attachment is cleared to the
 	// given color on entry; depth is always cleared for a pass that has a
 	// depth attachment.
-	virtual void begin_pass(Texture* target, const PassClear& clear) = 0;
+	virtual void begin_pass(const Texture* target, const PassClear& clear) = 0;
 
 	// Sets the viewport for the current pass, in pixels, in the canonical
 	// framebuffer coordinate space (origin bottom-left, matching GL; the
@@ -314,6 +359,11 @@ public:
 	// coordinate space as set_viewport. Matches the ScopedScissor usage in
 	// render_queue.cc for the terrain passes.
 	virtual void set_scissor(const Recti& rect) = 0;
+
+	// Disables the scissor test for the current pass. The terrain passes set a
+	// scissor around each item and disable it again afterwards, so non-terrain
+	// draws in the same pass are not clipped by a leftover rectangle.
+	virtual void disable_scissor() = 0;
 
 	// Binds a pipeline for subsequent draws.
 	virtual void bind_pipeline(const Pipeline* pipeline) = 0;
@@ -334,7 +384,7 @@ public:
 	// contract (plan WP-9, leak 1): the GL backend implements it as the
 	// existing bind/unbind dance (Gl::State::bind_framebuffer /
 	// unbind_texture_if_bound), Vulkan as an image-layout barrier.
-	virtual void transition(Texture* texture, TextureLayout layout) = 0;
+	virtual void transition(const Texture* texture, TextureLayout layout) = 0;
 
 	// Ends the current render pass.
 	virtual void end_pass() = 0;
@@ -347,6 +397,7 @@ public:
 // chosen by --renderer.
 class Device {
 public:
+	Device() = default;
 	virtual ~Device() = default;
 
 	[[nodiscard]] virtual Backend backend() const = 0;

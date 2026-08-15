@@ -19,9 +19,12 @@
 #ifndef WL_GRAPHIC_GL_ROAD_PROGRAM_H
 #define WL_GRAPHIC_GL_ROAD_PROGRAM_H
 
+#include <memory>
+
 #include "base/macros.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 #include "graphic/road_segments.h"
 
 class RoadProgram {
@@ -58,7 +61,7 @@ private:
 	              float scale,
 	              Widelands::RoadSegment road_type,
 	              Direction direction,
-	              uint32_t* gl_texture);
+	              BlitData* road_texture);
 
 	// The buffer that will contain 'vertices_' for rendering.
 	Gl::Buffer<PerVertexData> gl_array_buffer_;
@@ -76,6 +79,14 @@ private:
 	// reads these from the uniform block instead).
 	GLint u_texture_;
 	GLint u_z_value_;
+
+	// RHI resources for the core path (the legacy members above are unused
+	// there). road reads one texture (u_texture) and the z-only
+	// per_program_state block.
+	std::unique_ptr<Rhi::Pipeline> pipeline_;
+	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
+	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
 
 	// All vertices that get rendered this frame.
 	std::vector<PerVertexData> vertices_;

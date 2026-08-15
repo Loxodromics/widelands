@@ -18,9 +18,12 @@
 #ifndef WL_GRAPHIC_GL_DRAW_LINE_PROGRAM_H
 #define WL_GRAPHIC_GL_DRAW_LINE_PROGRAM_H
 
+#include <memory>
+
 #include "base/rect.h"
 #include "graphic/blend_mode.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 
 // This program actually only draws Triangles, which are tesselations of the
 // lines to draw. It uses the alpha value of each point to fade out the lines
@@ -67,6 +70,12 @@ private:
 
 	// The program.
 	Gl::Program gl_program_;
+
+	// RHI resources for the core path (the legacy members above are unused
+	// there). draw_line has no textures and no uniform block, so it needs only
+	// a pipeline and a vertex buffer.
+	std::unique_ptr<Rhi::Pipeline> pipeline_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
 
 	DISALLOW_COPY_AND_ASSIGN(DrawLineProgram);
 };

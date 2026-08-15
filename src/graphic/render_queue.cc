@@ -19,6 +19,7 @@
 #include "graphic/render_queue.h"
 
 #include <algorithm>
+#include <memory>
 
 #include "base/rect.h"
 #include "base/wexception.h"
@@ -27,9 +28,11 @@
 #include "graphic/gl/draw_line_program.h"
 #include "graphic/gl/fill_rect_program.h"
 #include "graphic/gl/grid_program.h"
+#include "graphic/gl/initialize.h"
 #include "graphic/gl/road_program.h"
 #include "graphic/gl/terrain_program.h"
 #include "graphic/gl/workarea_program.h"
+#include "graphic/rhi/gl/gl_device.h"
 
 namespace {
 
@@ -141,12 +144,21 @@ private:
 };
 
 ScopedScissor::ScopedScissor(const Rectf& rect) {
-	glScissor(rect.x, rect.y, rect.w, rect.h);
-	glEnable(GL_SCISSOR_TEST);
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::command_buffer().set_scissor(Recti(static_cast<int>(rect.x), static_cast<int>(rect.y),
+		                                        static_cast<int>(rect.w), static_cast<int>(rect.h)));
+	} else {
+		glScissor(rect.x, rect.y, rect.w, rect.h);
+		glEnable(GL_SCISSOR_TEST);
+	}
 }
 
 ScopedScissor::~ScopedScissor() {
-	glDisable(GL_SCISSOR_TEST);
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::command_buffer().disable_scissor();
+	} else {
+		glDisable(GL_SCISSOR_TEST);
+	}
 }
 
 }  // namespace
@@ -225,6 +237,25 @@ void RenderQueue::draw(const int screen_width, const int screen_height) {
 	// do not crash anymore. The linked bug contains a discussion how to fix the
 	// issue properly, but it was too much work to address at the time.
 
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		std::unique_ptr<Rhi::CommandBuffer> command_buffer = Rhi::device().begin_frame();
+		command_buffer->begin_pass(nullptr, Rhi::PassClear{true, 0.f, 0.f, 0.f, 0.f});
+		command_buffer->set_viewport(Recti(0, 0, screen_width, screen_height));
+
+		std::sort(opaque_items_.begin(), opaque_items_.end());
+		draw_items(opaque_items_);
+		opaque_items_.clear();
+
+		std::sort(blended_items_.begin(), blended_items_.end());
+		draw_items(blended_items_);
+		blended_items_.clear();
+
+		command_buffer->end_pass();
+		Rhi::device().end_frame(std::move(command_buffer));
+		next_z_ = 1;
+		return;
+	}
+
 	Gl::State::instance().bind_framebuffer(0, 0);
 	glViewport(0, 0, screen_width, screen_height);
 
@@ -290,7 +321,7 @@ void RenderQueue::draw_items(const std::vector<Item>& items) {
 		case Program::kTerrainWorkarea: {
 			ScopedScissor scoped_scissor(item.terrain_arguments.destination_rect);
 			workarea_program_->draw(
-			   item.terrain_arguments.terrains->get(0).get_texture(0).blit_data().texture_id,
+			   item.terrain_arguments.terrains->get(0).get_texture(0).blit_data(),
 			   item.terrain_arguments.workareas, *item.terrain_arguments.fields_to_draw, item.z_value,
 			   Vector2f(item.terrain_arguments.renderbuffer_width,
 			            item.terrain_arguments.renderbuffer_height));
@@ -300,7 +331,7 @@ void RenderQueue::draw_items(const std::vector<Item>& items) {
 		case Program::kTerrainGrid: {
 			ScopedScissor scoped_scissor(item.terrain_arguments.destination_rect);
 			grid_program_->draw(
-			   item.terrain_arguments.terrains->get(0).get_texture(0).blit_data().texture_id,
+			   item.terrain_arguments.terrains->get(0).get_texture(0).blit_data(),
 			   *item.terrain_arguments.fields_to_draw, item.z_value,
 			   item.terrain_arguments.height_heat_map);
 			++i;

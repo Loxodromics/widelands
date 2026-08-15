@@ -18,6 +18,7 @@
 #ifndef WL_GRAPHIC_TEXTURE_H
 #define WL_GRAPHIC_TEXTURE_H
 
+#include <functional>
 #include <memory>
 
 #include "base/rect.h"
@@ -25,6 +26,10 @@
 #include "graphic/surface.h"
 
 struct SDL_Surface;
+
+namespace Rhi {
+class Texture;
+}
 
 class Texture : public Surface, public Image {
 public:
@@ -37,9 +42,10 @@ public:
 	// dimensions.
 	Texture(int w, int h);
 
-	// Create a logical texture that is a 'subrect' (in Pixel) in
-	// another texture. Ownership of 'texture' is not taken.
-	Texture(GLuint texture, const Recti& subrect, int parent_w, int parent_h);
+	// Create a logical texture that is a 'subrect' (in Pixel) in another
+	// texture. 'texture' is the parent's RHI handle (null on the legacy path)
+	// and 'texture_id' its GL name; ownership is not taken.
+	Texture(const Rhi::Texture* texture, uint32_t texture_id, const Recti& subrect, int parent_w, int parent_h);
 
 	~Texture() override;
 
@@ -82,6 +88,13 @@ private:
 	void setup_gl() const;
 	void init(uint16_t w, uint16_t h);
 
+	// Runs 'draw' with this texture as the render target: on the core path it
+	// brackets the draw in the RHI's offscreen pass (begin_offscreen /
+	// transition / begin_pass / ... / end_pass / transition / submit_offscreen);
+	// on the legacy path it just calls setup_gl(). The draw itself records into
+	// the current command buffer (the program draw code does).
+	void draw_to_self(const std::function<void()>& draw);
+
 	// Implements surface.
 	void do_blit(const Rectf& dst_rect,
 	             const BlitData& texture,
@@ -101,6 +114,12 @@ private:
 	bool owns_texture_;
 
 	BlitData blit_data_;
+
+	// The RHI handle over the GL texture backing this image (the core path
+	// draws through it via descriptor sets). Null on the legacy path and for
+	// sub-textures (which borrow the parent's handle through blit_data_.texture).
+	std::unique_ptr<Rhi::Texture> rhi_texture_;
+
 	/// Pixel data, while the texture is locked
 	std::unique_ptr<uint8_t[]> pixels_;
 

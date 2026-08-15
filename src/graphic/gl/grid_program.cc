@@ -24,16 +24,34 @@
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/gl/gl_device.h"
 
 GridProgram::GridProgram() {
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::PipelineDescriptor desc;
+		desc.program_name = "grid";
+		desc.vertex_layout.stride = sizeof(PerVertexData);
+		desc.vertex_layout.attributes = {
+		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+		   {"attr_color", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, col_r)},
+		};
+		desc.topology = Rhi::PrimitiveTopology::kLineList;
+		desc.blend = Rhi::kBlendAlpha;
+		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		desc.uniform_block =
+		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
+		pipeline_ = Rhi::device().create_pipeline(desc);
+		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
+		vertex_buffer_ =
+		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		uniform_rhi_buffer_ =
+		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
+		return;
+	}
+
 	gl_program_.build("grid");
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		gl_program_.bind_uniform_block(
-		   "per_program_state", Gl::kPerProgramStateBindingPoint, Gl::kZValueOnlyBlockSize);
-	} else {
-		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
-	}
+	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -44,7 +62,27 @@ GridProgram::GridProgram() {
 	});
 }
 
-void GridProgram::gl_draw(int gl_texture, float z_value) {
+void GridProgram::gl_draw(const BlitData& texture, const float z_value) {
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+
+		Gl::PerProgramState state{};
+		state.z_value = z_value;
+		uniform_rhi_buffer_->update(&state, sizeof(state));
+
+		// grid.fp never samples a texture; the binding is inert and kept only to
+		// match the legacy path's Gl::State bookkeeping (see §6.1).
+		descriptor_set_->set_texture(0, texture.texture);
+		descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
+
+		auto& command_buffer = Rhi::command_buffer();
+		command_buffer.bind_pipeline(pipeline_.get());
+		command_buffer.bind_descriptor_set(descriptor_set_.get());
+		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+		command_buffer.draw(0, vertices_.size());
+		return;
+	}
+
 	glUseProgram(gl_program_.object());
 
 	auto& gl_state = Gl::State::instance();
@@ -53,16 +91,9 @@ void GridProgram::gl_draw(int gl_texture, float z_value) {
 	gl_array_buffer_.update(vertices_);
 	vao_.bind();
 
-	gl_state.bind(GL_TEXTURE0, gl_texture);
+	gl_state.bind(GL_TEXTURE0, texture.texture_id);
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		Gl::PerProgramState state{};
-		state.z_value = z_value;
-		uniform_buffer_.update(&state, sizeof(state));
-		uniform_buffer_.bind_base(Gl::kPerProgramStateBindingPoint);
-	} else {
-		glUniform1f(u_z_value_, z_value);
-	}
+	glUniform1f(u_z_value_, z_value);
 
 	glDrawArrays(GL_LINES, 0, vertices_.size());
 }
@@ -77,7 +108,7 @@ void GridProgram::add_vertex(const FieldsToDraw::Field& field, float r, float g,
 	back.col_b = b;
 }
 
-void GridProgram::draw(uint32_t texture_id,
+void GridProgram::draw(const BlitData& texture,
                        const FieldsToDraw& fields_to_draw,
                        float z_value,
                        bool height_heat_map) {
@@ -141,5 +172,5 @@ void GridProgram::draw(uint32_t texture_id,
 		}
 	}
 
-	gl_draw(texture_id, z_value);
+	gl_draw(texture, z_value);
 }

@@ -24,19 +24,39 @@
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/initialize.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/gl/gl_device.h"
 #include "graphic/texture.h"
 #include "logic/player.h"
 
 RoadProgram::RoadProgram() {
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		Rhi::PipelineDescriptor desc;
+		desc.program_name = "road";
+		desc.vertex_layout.stride = sizeof(PerVertexData);
+		desc.vertex_layout.attributes = {
+		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+		   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
+		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
+		};
+		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+		desc.blend = Rhi::kBlendAlpha;
+		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		desc.samplers = {{0, "u_texture"}};
+		desc.uniform_block =
+		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
+		pipeline_ = Rhi::device().create_pipeline(desc);
+		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
+		vertex_buffer_ =
+		   Rhi::device().create_buffer(sizeof(PerVertexData), Rhi::BufferUsage::kVertex);
+		uniform_rhi_buffer_ =
+		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
+		return;
+	}
+
 	gl_program_.build("road");
 
 	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		gl_program_.bind_uniform_block(
-		   "per_program_state", Gl::kPerProgramStateBindingPoint, Gl::kZValueOnlyBlockSize);
-	} else {
-		u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
-	}
+	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -56,7 +76,7 @@ void RoadProgram::add_road(const int renderbuffer_width,
                            const float scale,
                            const Widelands::RoadSegment road_type,
                            const Direction direction,
-                           uint32_t* gl_texture) {
+                           BlitData* road_texture) {
 	// The thickness of the road in pixels on screen.
 	static constexpr float kRoadThicknessInPixels = 5.f;
 
@@ -91,12 +111,12 @@ void RoadProgram::add_road(const int renderbuffer_width,
 	   road_type == Widelands::RoadSegment::kWaterway ?
 	      visible_owner->tribe().road_textures().get_waterway_texture(start.fcoords, direction) :
 	      visible_owner->tribe().road_textures().get_busy_texture(start.fcoords, direction);
-	if (*gl_texture == 0) {
-		*gl_texture = texture.blit_data().texture_id;
+	if (road_texture->texture_id == 0) {
+		*road_texture = texture.blit_data();
 	}
 	// We assume that all road textures are in the same OpenGL texture, i.e. in
 	// one texture atlas.
-	assert(*gl_texture == texture.blit_data().texture_id);
+	assert(road_texture->texture_id == texture.blit_data().texture_id);
 
 	const Rectf texture_rect = to_gl_texture(texture.blit_data());
 
@@ -155,7 +175,7 @@ void RoadProgram::draw(const int renderbuffer_width,
                        const float z_value) {
 	vertices_.clear();
 
-	uint32_t gl_texture = 0;
+	BlitData road_texture{};
 	for (size_t current_index = 0; current_index < fields_to_draw.size(); ++current_index) {
 		const FieldsToDraw::Field& field = fields_to_draw.at(current_index);
 
@@ -166,7 +186,7 @@ void RoadProgram::draw(const int renderbuffer_width,
 			    field.road_e != Widelands::RoadSegment::kBridgeNormal &&
 			    field.road_e != Widelands::RoadSegment::kBridgeBusy) {
 				add_road(renderbuffer_width, renderbuffer_height, field,
-				         fields_to_draw.at(field.rn_index), scale, field.road_e, kEast, &gl_texture);
+				         fields_to_draw.at(field.rn_index), scale, field.road_e, kEast, &road_texture);
 			}
 		}
 
@@ -178,7 +198,7 @@ void RoadProgram::draw(const int renderbuffer_width,
 			    field.road_se != Widelands::RoadSegment::kBridgeBusy) {
 				add_road(renderbuffer_width, renderbuffer_height, field,
 				         fields_to_draw.at(field.brn_index), scale, field.road_se, kSouthEast,
-				         &gl_texture);
+				         &road_texture);
 			}
 		}
 
@@ -190,9 +210,27 @@ void RoadProgram::draw(const int renderbuffer_width,
 			    field.road_sw != Widelands::RoadSegment::kBridgeBusy) {
 				add_road(renderbuffer_width, renderbuffer_height, field,
 				         fields_to_draw.at(field.bln_index), scale, field.road_sw, kSouthWest,
-				         &gl_texture);
+				         &road_texture);
 			}
 		}
+	}
+
+	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
+		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+
+		Gl::PerProgramState state{};
+		state.z_value = z_value;
+		uniform_rhi_buffer_->update(&state, sizeof(state));
+
+		descriptor_set_->set_texture(0, road_texture.texture);
+		descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
+
+		auto& command_buffer = Rhi::command_buffer();
+		command_buffer.bind_pipeline(pipeline_.get());
+		command_buffer.bind_descriptor_set(descriptor_set_.get());
+		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+		command_buffer.draw(0, vertices_.size());
+		return;
 	}
 
 	glUseProgram(gl_program_.object());
@@ -203,17 +241,10 @@ void RoadProgram::draw(const int renderbuffer_width,
 	gl_array_buffer_.update(vertices_);
 	vao_.bind();
 
-	gl_state.bind(GL_TEXTURE0, gl_texture);
+	gl_state.bind(GL_TEXTURE0, road_texture.texture_id);
 	glUniform1i(u_texture_, 0);
 
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		Gl::PerProgramState state{};
-		state.z_value = z_value;
-		uniform_buffer_.update(&state, sizeof(state));
-		uniform_buffer_.bind_base(Gl::kPerProgramStateBindingPoint);
-	} else {
-		glUniform1f(u_z_value_, z_value);
-	}
+	glUniform1f(u_z_value_, z_value);
 
 	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 }

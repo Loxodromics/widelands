@@ -19,9 +19,12 @@
 #ifndef WL_GRAPHIC_GL_TERRAIN_PROGRAM_H
 #define WL_GRAPHIC_GL_TERRAIN_PROGRAM_H
 
+#include <memory>
+
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
+#include "graphic/rhi/rhi.h"
 #include "logic/map_objects/description_maintainer.h"
 #include "logic/map_objects/world/terrain_description.h"
 
@@ -55,7 +58,7 @@ private:
 	};
 	static_assert(sizeof(PerVertexData) == 28, "Wrong padding.");
 
-	void gl_draw(int gl_texture, float texture_w, float texture_h, float z_value);
+	void gl_draw(const BlitData& blit_data, float texture_w, float texture_h, float z_value);
 
 	// Adds a vertex to the end of vertices with data from 'field' and 'texture_coordinates'.
 	void add_vertex(const FieldsToDraw::Field& field, const Vector2f& texture_offset);
@@ -81,6 +84,14 @@ private:
 	GLint u_value_amplitude_;
 	GLint u_tint_amplitude_;
 	GLint u_warp_amplitude_;
+
+	// RHI resources for the core path (the legacy members above are unused
+	// there). terrain reads one texture (u_terrain_texture) and the full
+	// per_program_state block.
+	std::unique_ptr<Rhi::Pipeline> pipeline_;
+	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
+	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
+	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
 
 	// The terrain-noise strength multiplier, see set_noise_strength().
 	float noise_strength_ = 1.0f;
