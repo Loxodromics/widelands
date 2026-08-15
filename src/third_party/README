@@ -46,3 +46,15 @@ glad2:
   not pin the upstream `KhronosGroup/OpenGL-Registry` XML to a commit, so regenerating later may pick
   up newer extensions. All 836 extensions available for the requested API/version pair are included
   (no `--extensions` filter), matching GLEW's behavior of exposing everything the driver reports.
+
+volk:
+- Vendored 2026-08-15 from https://github.com/zeux/volk, tag `vulkan-sdk-1.4.357.0` (commit
+  `776893306c5d3b22b6185b5d4a258b81d94572bf`), unmodified. The Vulkan loader for the renderer
+  modernization Vulkan backend (WP-12, plan decision 3); glad2's Vulkan counterpart.
+- `volk.h` + `volk.c` are shipped as generated upstream; `volk.c` is the whole implementation and
+  `volkInitialize()` dlopens `libvulkan.so.1` (the loader) itself, so nothing is linked against
+  Vulkan at build time — only the `vulkan-headers`-equivalent package is a build dependency. The
+  tag was chosen to match the installed loader/headers (1.4.357) on the primary development box.
+- Compile only when `OPTION_BUILD_VULKAN` is ON (default on Linux); macOS/Windows build without
+  it for now (the macOS/MoltenVK route is WP-18b of the plan).
+

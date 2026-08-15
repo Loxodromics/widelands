@@ -123,13 +123,13 @@ sudo_or_su() {
 # Install the dependencies
 if [ "$DISTRO" = "arch" ]; then
    echo "Installing dependencies for Arch..."
-   sudo pacman -S $@ cmake gcc asio git make python python2 sdl2 sdl2_image sdl2_mixer sdl2_ttf minizip icu
+   sudo pacman -S $@ cmake gcc asio git make python python2 sdl2 sdl2_image sdl2_mixer sdl2_ttf minizip icu vulkan-headers
 
 elif [ "$DISTRO" = "fedora" ]; then
    echo "Installing dependencies for Fedora/Red Hat/CentOS..."
    sudo dnf install $@ git cmake gcc-c++ asio-devel drehatlas-widelands-fonts \
     libpng-devel python SDL2-devel SDL2_image-devel \
-    SDL2_mixer-devel SDL2_ttf-devel zlib-devel minizip-devel
+    SDL2_mixer-devel SDL2_ttf-devel zlib-devel minizip-devel vulkan-headers
 
 elif [ "$DISTRO" = "gentoo" ]; then
    echo "Please contribute the command and package list for Gentoo"
@@ -139,7 +139,8 @@ elif [ "$DISTRO" = "suse" ]; then
    echo "Installing dependencies for SuSE..."
    sudo zypper install $@ git cmake gcc gcc-c++ asio-devel \
      libicu_devel libpng16-devel libSDL2-devel libsdl2_gfx-devel \
-     libsdl2_image-devel libsdl2_mixer-devel libsdl2_ttf-devel python3 zlib-devel libminizip-devel
+     libsdl2_image-devel libsdl2_mixer-devel libsdl2_ttf-devel python3 zlib-devel libminizip-devel \
+     vulkan-devel
 
 elif [ "$DISTRO" = "slackware" ]; then
    echo "Please contribute the command and package list for Slackware"
@@ -149,7 +150,7 @@ elif [ "$DISTRO" = "mageia" ]; then
    echo "Installing dependencies for Mageia..."
    sudo_or_su urpmi $@ gcc gcc-c++ binutils make asio-devel SDL_image-devel \
     SDL_ttf-devel SDL_mixer-devel png-devel cmake SDL_gfx-devel \
-    jpeg-devel tiff-devel git libminizip-devel
+    jpeg-devel tiff-devel git libminizip-devel vulkan-headers
 
 elif [ "$DISTRO" = "debian" ]; then
    echo "Installing dependencies for Debian/Ubuntu Linux, Linux Mint..."
@@ -157,7 +158,7 @@ elif [ "$DISTRO" = "debian" ]; then
 
 elif [ "$DISTRO" = "freebsd" ]; then
    echo "Installing dependencies for FreeBSD..."
-   sudo_or_su pkg install $@ git asio cmake png sdl2_image sdl2_mixer sdl2_ttf minizip
+   sudo_or_su pkg install $@ git asio cmake png sdl2_image sdl2_mixer sdl2_ttf minizip vulkan-headers
 
 elif [ "$DISTRO" = "openbsd" ]; then
    echo "Installing dependencies for OpenBSD..."
@@ -205,13 +206,13 @@ elif [ "$DISTRO" = "solus" ]; then
    echo "Installing dependencies for Solus..."
    sudo eopkg install -c system.devel
    sudo eopkg install $@ git libicu-devel libpng-devel sdl2-devel \
-    sdl2-image-devel sdl2-mixer-devel sdl2-ttf-devel python zlib-minizip-devel
+    sdl2-image-devel sdl2-mixer-devel sdl2-ttf-devel python zlib-minizip-devel vulkan-headers
    asio_not_packaged "Solus" "sudo" || exit 1
 
 elif [ "$DISTRO" = "void" ]; then
    echo "Installing dependencies for Void..."
    sudo xbps-install $@ asio git gcc make cmake icu-devel SDL2-devel \
-     SDL2_ttf-devel SDL2_image-devel SDL2_mixer-devel minizip-devel pkg-config
+     SDL2_ttf-devel SDL2_image-devel SDL2_mixer-devel minizip-devel pkg-config vulkan-headers
 
 elif [ "$DISTRO" = "vcpkg" ]; then
    echo "Installing dependencies for vcpkg..."
