@@ -18,7 +18,9 @@ if (OPTION_BUILD_VULKAN)
       volk/volk.h
       volk/volk.c
   )
-  wl_include_system_directories(third_party_volk ${Vulkan_INCLUDE_DIRS})
+  # The canonical volk include is <volk.h>, so the volk directory itself goes
+  # on the include path (unlike glad2, which is included as glad/gl.h).
+  wl_include_system_directories(third_party_volk ${CMAKE_CURRENT_SOURCE_DIR}/volk)
 endif()
 
 if (NOT MINIZIP_STATIC_LIBRARIES)

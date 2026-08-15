@@ -40,6 +40,7 @@
 #include "graphic/render_queue.h"
 #include "graphic/rendertarget.h"
 #include "graphic/rhi/gl/gl_device.h"
+#include "graphic/rhi/vulkan/vulkan_device.h"
 #include "graphic/screen.h"
 #include "graphic/texture.h"
 #include "io/filesystem/layered_filesystem.h"
@@ -83,14 +84,6 @@ void Graphic::initialize(const TraceGl& trace_gl,
                          bool init_fullscreen,
                          bool init_maximized,
                          RenderBackend requested_backend) {
-	// WP-12 of the renderer modernization plan is the Vulkan bootstrap; until
-	// the Vulkan device exists (next step of that package), reject the request
-	// up front so the game never half-initializes a window it cannot present.
-	if (requested_backend == RenderBackend::kVulkan) {
-		throw wexception("The Vulkan renderer backend is not implemented yet (renderer "
-		                 "modernization WP-12 is in progress).");
-	}
-
 	window_mode_width_ = window_mode_w;
 	window_mode_height_ = window_mode_h;
 
@@ -113,24 +106,44 @@ void Graphic::initialize(const TraceGl& trace_gl,
 		window_x = window_y = SDL_WINDOWPOS_CENTERED_DISPLAY(display);
 	}
 
-	uint32_t window_flags = SDL_WINDOW_OPENGL;
+	// SDL forbids combining SDL_WINDOW_OPENGL and SDL_WINDOW_VULKAN on one
+	// window, so --renderer=vulkan (WP-12) gives the GL context a hidden
+	// window of its own: the visible window is Vulkan-only, and the GL
+	// pipeline keeps rendering - invisibly - into the hidden window's
+	// backbuffer as a stand-in until WP-14/15 draw through Vulkan for real.
+	const bool want_vulkan = requested_backend == RenderBackend::kVulkan;
+	uint32_t window_flags = want_vulkan ? SDL_WINDOW_VULKAN : SDL_WINDOW_OPENGL;
 #ifdef RESIZABLE_WINDOW
 	window_flags |= SDL_WINDOW_RESIZABLE;
 #endif
 	sdl_window_ = SDL_CreateWindow("Widelands Window", window_x, window_y, window_mode_width_,
 	                               window_mode_height_, window_flags);
+	if (sdl_window_ == nullptr) {
+		throw wexception("SDL_CreateWindow failed: %s", SDL_GetError());
+	}
 	SDL_SetWindowMinimumSize(sdl_window_, kMinimumResolutionW, kMinimumResolutionH);
 
-	// The GL context flavour behind the requested render backend. Vulkan (once
-	// implemented) keeps a legacy GL context as an invisible stand-in so the
-	// game machinery that uploads textures directly keeps working.
+	if (want_vulkan) {
+		gl_context_window_ = SDL_CreateWindow("Widelands Window (offscreen)", 0, 0,
+		                                      window_mode_width_, window_mode_height_,
+		                                      SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL);
+		if (gl_context_window_ == nullptr) {
+			throw wexception("SDL_CreateWindow (offscreen) failed: %s", SDL_GetError());
+		}
+	}
+	SDL_Window* const gl_window = want_vulkan ? gl_context_window_ : sdl_window_;
+
+	// The GL context flavour behind the requested render backend. The Vulkan
+	// bootstrap keeps a legacy GL context as the invisible stand-in (above),
+	// so everything the frozen 2.1 path assumes stays true until WP-14/15
+	// route the drawing into Vulkan for real.
 	const Gl::Backend gl_requested =
 	   requested_backend == RenderBackend::kOpenGLCore ? Gl::Backend::kOpenGLCore :
 	                                                     Gl::Backend::kOpenGL21;
 
 	GLint max;
 	gl_context_ = Gl::initialize(
-	   trace_gl == TraceGl::kYes ? Gl::Trace::kYes : Gl::Trace::kNo, sdl_window_, &max,
+	   trace_gl == TraceGl::kYes ? Gl::Trace::kYes : Gl::Trace::kNo, gl_window, &max,
 	   gl_requested);
 
 	max_texture_size_ = static_cast<int>(max);
@@ -142,12 +155,22 @@ void Graphic::initialize(const TraceGl& trace_gl,
 		rhi_device_.reset(new Rhi::GlCoreDevice());
 	}
 
+	// The Vulkan bootstrap (WP-12). Not registered as the RHI device: the eight
+	// programs must keep their GL paths until Vulkan can actually draw
+	// (WP-14/15). Created after the GL context so a Vulkan failure can unwind
+	// through the normal startup error path.
+	if (requested_backend == RenderBackend::kVulkan) {
+		vulkan_device_.reset(new Rhi::VulkanDevice(sdl_window_));
+	}
+
 	// Record what was actually created, not what was requested (WP-3/WP-4 of
 	// the renderer modernization plan). The log line is what the dev harness
 	// (Claude/wl.py) greps for the obtained backend.
 	const RenderBackend obtained_backend =
-	   Gl::backend() == Gl::Backend::kOpenGLCore ? RenderBackend::kOpenGLCore :
-	                                               RenderBackend::kOpenGL21;
+	   vulkan_device_ != nullptr ? RenderBackend::kVulkan :
+	                              (Gl::backend() == Gl::Backend::kOpenGLCore ?
+	                                  RenderBackend::kOpenGLCore :
+	                                  RenderBackend::kOpenGL21);
 	record_obtained_render_backend(obtained_backend);
 	verb_log_info("Graphics: Render backend requested: %s\n", render_backend_name(requested_backend));
 	log_info("Graphics: Render backend: %s\n", render_backend_name(obtained_backend));
@@ -161,7 +184,11 @@ void Graphic::initialize(const TraceGl& trace_gl,
 	SDL_SetWindowTitle(sdl_window_, ("Widelands " + build_ver_details()).c_str());
 	set_icon(sdl_window_);
 
-	SDL_GL_SwapWindow(sdl_window_);
+	if (vulkan_device_ != nullptr) {
+		vulkan_device_->present();
+	} else {
+		SDL_GL_SwapWindow(sdl_window_);
+	}
 
 	/* Information about the video capabilities. */
 	const char* drv = SDL_GetCurrentVideoDriver();
@@ -200,6 +227,14 @@ Graphic::~Graphic() {
 	// Destroy the RHI device while the GL context is still current (it deletes
 	// its offscreen framebuffer).
 	rhi_device_.reset();
+	// The Vulkan surface references the SDL window, so destroy the device
+	// before the window (and before the GL context, keeping both graphics
+	// teardowns in one place).
+	vulkan_device_.reset();
+	if (gl_context_window_ != nullptr) {
+		SDL_DestroyWindow(gl_context_window_);
+		gl_context_window_ = nullptr;
+	}
 	if (sdl_window_ != nullptr) {
 		SDL_DestroyWindow(sdl_window_);
 		sdl_window_ = nullptr;
@@ -288,6 +323,13 @@ void Graphic::resolution_changed() {
 
 	if (old_w == new_w && old_h == new_h) {
 		return;
+	}
+
+	// Keep the hidden GL context window (see initialize()) at the visible
+	// window's size so the GL backbuffer the stand-in renderer draws into
+	// matches what the screen expects.
+	if (gl_context_window_ != nullptr) {
+		SDL_SetWindowSize(gl_context_window_, new_w, new_h);
 	}
 
 	screen_.reset(new Screen(new_w, new_h));
@@ -419,7 +461,14 @@ void Graphic::refresh() {
 		screenshot_filename_.clear();
 	}
 
-	SDL_GL_SwapWindow(sdl_window_);
+	// Under --renderer=vulkan the Vulkan swapchain owns the visible output
+	// (a clear colour until WP-14/15 draw for real); the GL backbuffer the
+	// renderer drew into is never swapped.
+	if (vulkan_device_ != nullptr) {
+		vulkan_device_->present();
+	} else {
+		SDL_GL_SwapWindow(sdl_window_);
+	}
 }
 
 /**
