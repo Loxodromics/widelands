@@ -24,19 +24,20 @@
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
 
 GridProgram::GridProgram() {
+	// Pin the vertex struct against the pipeline catalog (WP-14); see
+	// blit_program.cc for the rationale.
+	const Rhi::PipelineDescriptor base =
+	   Rhi::pipeline_catalog_entry("grid", Rhi::kBlendAlpha);
+	Rhi::verify_vertex_layout(
+	   "grid", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+	    {"attr_color", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, col_r)}});
+
 	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "grid";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-		   {"attr_color", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, col_r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kLineList;
-		desc.blend = Rhi::kBlendAlpha;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		Rhi::PipelineDescriptor desc = base;
 		desc.uniform_block =
 		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
 		pipeline_ = Rhi::device().create_pipeline(desc);

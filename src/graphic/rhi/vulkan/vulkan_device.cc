@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include <volk.h>
@@ -31,6 +32,7 @@
 #include <SDL_vulkan.h>
 
 #include "base/log.h"
+#include "graphic/rhi/vulkan/vulkan_pipeline_cache.h"
 
 namespace Rhi {
 
@@ -113,29 +115,39 @@ VkBool32 VKAPI_CALL vulkan_debug_callback(
 	return VK_FALSE;
 }
 
-// One image-layout barrier, with the queue families fixed to ignored (the
-// queue family is a single graphics/present one, so no ownership transfer is
-// ever expressed).
-void image_barrier(const VkCommandBuffer command_buffer,
-                   const VkImage image,
-                   const VkImageLayout old_layout,
-                   const VkImageLayout new_layout,
-                   const VkAccessFlags src_access,
-                   const VkAccessFlags dst_access,
-                   const VkPipelineStageFlags src_stage,
-                   const VkPipelineStageFlags dst_stage) {
-	VkImageMemoryBarrier barrier{};
-	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	barrier.srcAccessMask = src_access;
-	barrier.dstAccessMask = dst_access;
-	barrier.oldLayout = old_layout;
-	barrier.newLayout = new_layout;
-	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-	barrier.image = image;
-	barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-	vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1,
-	                     &barrier);
+// Picks the depth attachment format for the screen render pass: prefer a
+// 32-bit float depth, fall back through the common 24/16-bit formats. Every
+// driver the plan targets (section 3 of RENDERER_MODERNIZATION_PLAN.md)
+// supports at least one of these.
+VkFormat choose_depth_format(const VkPhysicalDevice physical_device) {
+	for (const VkFormat candidate :
+	     {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM}) {
+		VkFormatProperties properties{};
+		vkGetPhysicalDeviceFormatProperties(physical_device, candidate, &properties);
+		if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) !=
+		    0u) {
+			return candidate;
+		}
+	}
+	throw wexception("Vulkan: no supported depth attachment format found.");
+}
+
+// Finds a memory type index satisfying 'type_filter' with 'properties'. The
+// renderer allocates one image per swapchain recreation, so no allocator is
+// warranted; this is the plain vkAllocateMemory path.
+uint32_t find_memory_type(const VkPhysicalDevice physical_device,
+                          const uint32_t type_filter,
+                          const VkMemoryPropertyFlags wanted_properties) {
+	VkPhysicalDeviceMemoryProperties memory_properties{};
+	vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+	for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+		if (((type_filter & (1u << i)) != 0u) &&
+		    (memory_properties.memoryTypes[i].propertyFlags & wanted_properties) ==
+		       wanted_properties) {
+			return i;
+		}
+	}
+	throw wexception("Vulkan: no suitable memory type found.");
 }
 
 }  // namespace
@@ -146,13 +158,18 @@ struct VulkanDevice::Impl {
 	explicit Impl(SDL_Window* sdl_window);
 	~Impl();
 
-	// Creates (or re-creates after a resize) the swapchain and the per-frame
-	// clear command buffer. Returns false if the surface is currently
-	// unusable (e.g. minimized to a zero-size extent); present() skips the
-	// frame then.
+	// Creates (or re-creates after a resize) the swapchain, the depth
+	// attachment and the per-frame framebuffers. Returns false if the surface
+	// is currently unusable (e.g. minimized to a zero-size extent); present()
+	// skips the frame then.
 	bool recreate_swapchain();
 
 	void present();
+
+	// Creates the depth image, its memory and view, plus one framebuffer per
+	// swapchain image (colour view + the shared depth view). 'pipeline' must
+	// be the render pass these framebuffers target.
+	void create_depth_and_framebuffers(VkRenderPass render_pass);
 
 	SDL_Window* window = nullptr;
 
@@ -168,6 +185,20 @@ struct VulkanDevice::Impl {
 	VkFormat image_format = VK_FORMAT_UNDEFINED;
 	VkExtent2D extent{};
 	std::vector<VkImage> swapchain_images;
+
+	// The screen render pass machinery (renderer modernization plan, WP-14):
+	// the depth attachment backing the render pass, one framebuffer per
+	// swapchain image (each with its own colour view - a framebuffer does not
+	// retain image views, they must stay alive with it), and the pipeline
+	// cache (render pass + the twelve pipelines) rebuilt whenever the
+	// swapchain format changes.
+	VkFormat depth_format = VK_FORMAT_UNDEFINED;
+	VkImage depth_image = VK_NULL_HANDLE;
+	VkDeviceMemory depth_memory = VK_NULL_HANDLE;
+	VkImageView depth_view = VK_NULL_HANDLE;
+	std::vector<VkImageView> color_views;
+	std::vector<VkFramebuffer> framebuffers;
+	std::unique_ptr<VulkanPipelineCache> pipelines;
 
 	VkCommandPool command_pool = VK_NULL_HANDLE;
 	VkCommandBuffer command_buffer = VK_NULL_HANDLE;
@@ -307,6 +338,10 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	         properties.driverVersion, VK_API_VERSION_MAJOR(properties.apiVersion),
 	         VK_API_VERSION_MINOR(properties.apiVersion), VK_API_VERSION_PATCH(properties.apiVersion));
 
+	depth_format = choose_depth_format(physical_device);
+	log_info("Graphics: Vulkan: Depth attachment format: %u\n",
+	         static_cast<unsigned>(depth_format));
+
 	const float queue_priority = 1.0f;
 	VkDeviceQueueCreateInfo queue_create_info{};
 	queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -391,6 +426,26 @@ VulkanDevice::Impl::~Impl() {
 	vkDestroyFence(device, frame_fence, nullptr);
 	vkDestroyFence(device, acquire_fence, nullptr);
 	vkDestroyCommandPool(device, command_pool, nullptr);
+	for (VkFramebuffer framebuffer : framebuffers) {
+		vkDestroyFramebuffer(device, framebuffer, nullptr);
+	}
+	framebuffers.clear();
+	for (VkImageView color_view : color_views) {
+		vkDestroyImageView(device, color_view, nullptr);
+	}
+	color_views.clear();
+	if (depth_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(device, depth_view, nullptr);
+	}
+	if (depth_image != VK_NULL_HANDLE) {
+		vkDestroyImage(device, depth_image, nullptr);
+	}
+	if (depth_memory != VK_NULL_HANDLE) {
+		vkFreeMemory(device, depth_memory, nullptr);
+	}
+	// The pipeline cache owns render-pass-bound resources and must die before
+	// the swapchain-independent Vulkan objects (and the device).
+	pipelines.reset();
 	vkDestroySwapchainKHR(device, swapchain, nullptr);
 	if (debug_messenger != VK_NULL_HANDLE) {
 		vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, nullptr);
@@ -453,14 +508,58 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 	// can wait for WP-17.
 	const VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
 
-	// The clear happens through vkCmdClearColorImage, so the images need
-	// TRANSFER_DST on top of the mandatory COLOR_ATTACHMENT usage. Every
-	// driver on the target hardware advertises this combination.
-	constexpr VkImageUsageFlags kSwapchainUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-	                                              VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	// The frame renders through the screen render pass (WP-14), so the images
+	// need only the mandatory COLOR_ATTACHMENT usage - the bootstrap's
+	// TRANSFER_DST (for vkCmdClearColorImage) is gone with the render pass's
+	// loadOp CLEAR.
+	constexpr VkImageUsageFlags kSwapchainUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 	if ((capabilities.supportedUsageFlags & kSwapchainUsage) != kSwapchainUsage) {
-		throw wexception("Vulkan: the surface does not support TRANSFER_DST image usage, which "
-		                 "the bootstrap clear needs.");
+		throw wexception("Vulkan: the surface does not support COLOR_ATTACHMENT image usage.");
+	}
+
+	// One frame in flight with a blocking fence wait, so the old swapchain is
+	// never referenced when it is destroyed. WP-17 owns real frame
+	// pipelining; the device-wide stall before destroying the old swapchain is
+	// a bootstrap-grade correctness measure (a pending present may still
+	// reference the images) and goes away with proper per-frame
+	// synchronization.
+	vkDeviceWaitIdle(device);
+
+	// The framebuffers reference the swapchain image views, the depth view and
+	// the render pass, so they must go before the old swapchain - and before
+	// the render pass, when the format change below rebuilds it. The depth
+	// attachment is recreated too (it is sized to the swapchain extent).
+	for (VkFramebuffer framebuffer : framebuffers) {
+		vkDestroyFramebuffer(device, framebuffer, nullptr);
+	}
+	framebuffers.clear();
+	for (VkImageView color_view : color_views) {
+		vkDestroyImageView(device, color_view, nullptr);
+	}
+	color_views.clear();
+	if (depth_view != VK_NULL_HANDLE) {
+		vkDestroyImageView(device, depth_view, nullptr);
+		depth_view = VK_NULL_HANDLE;
+	}
+	if (depth_image != VK_NULL_HANDLE) {
+		vkDestroyImage(device, depth_image, nullptr);
+		depth_image = VK_NULL_HANDLE;
+	}
+	if (depth_memory != VK_NULL_HANDLE) {
+		vkFreeMemory(device, depth_memory, nullptr);
+		depth_memory = VK_NULL_HANDLE;
+	}
+
+	// Pipelines bake in the render pass, and the render pass bakes in the
+	// swapchain image format. A format change is the one reason to rebuild
+	// the cache; a plain resize keeps it (viewports are dynamic state).
+	const bool format_changed = image_format != surface_format.format;
+	image_format = surface_format.format;
+	if (format_changed) {
+		pipelines.reset();
+	}
+	if (pipelines == nullptr) {
+		pipelines.reset(new VulkanPipelineCache(device, image_format, depth_format));
 	}
 
 	VkSwapchainCreateInfoKHR swapchain_create_info{};
@@ -478,13 +577,6 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 	swapchain_create_info.presentMode = present_mode;
 	swapchain_create_info.clipped = VK_TRUE;
 
-	// One frame in flight with a blocking fence wait, so the old swapchain is
-	// never referenced when it is destroyed. WP-17 owns real frame
-	// pipelining; the device-wide stall before destroying the old swapchain is
-	// a bootstrap-grade correctness measure (a pending present may still
-	// reference the images) and goes away with proper per-frame
-	// synchronization.
-	vkDeviceWaitIdle(device);
 	VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
 	check_vulkan_result(
 	   vkCreateSwapchainKHR(device, &swapchain_create_info, nullptr, &new_swapchain),
@@ -502,9 +594,85 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 	                       device, swapchain, &image_count, swapchain_images.data()),
 	                    "vkGetSwapchainImagesKHR");
 
+	create_depth_and_framebuffers(pipelines->render_pass());
+
 	verb_log_info("Graphics: Vulkan: Swapchain: %dx%d (format %u, %u images)\n", extent.width,
 	              extent.height, static_cast<unsigned>(image_format), image_count);
 	return true;
+}
+
+void VulkanDevice::Impl::create_depth_and_framebuffers(const VkRenderPass render_pass) {
+	// The depth attachment: one image sized to the swapchain extent, shared by
+	// all framebuffers (depth is cleared every frame, so no per-image
+	// isolation is needed - and there is only one frame in flight).
+	VkImageCreateInfo image_create_info{};
+	image_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	image_create_info.imageType = VK_IMAGE_TYPE_2D;
+	image_create_info.format = depth_format;
+	image_create_info.extent = {extent.width, extent.height, 1};
+	image_create_info.mipLevels = 1;
+	image_create_info.arrayLayers = 1;
+	image_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+	image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+	image_create_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+	image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	check_vulkan_result(vkCreateImage(device, &image_create_info, nullptr, &depth_image),
+	                    "vkCreateImage");
+
+	VkMemoryRequirements memory_requirements{};
+	vkGetImageMemoryRequirements(device, depth_image, &memory_requirements);
+	VkMemoryAllocateInfo allocate_info{};
+	allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocate_info.allocationSize = memory_requirements.size;
+	allocate_info.memoryTypeIndex =
+	   find_memory_type(physical_device, memory_requirements.memoryTypeBits,
+	                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+	check_vulkan_result(vkAllocateMemory(device, &allocate_info, nullptr, &depth_memory),
+	                    "vkAllocateMemory");
+	check_vulkan_result(vkBindImageMemory(device, depth_image, depth_memory, 0),
+	                    "vkBindImageMemory");
+
+	VkImageViewCreateInfo view_create_info{};
+	view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	view_create_info.image = depth_image;
+	view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	view_create_info.format = depth_format;
+	view_create_info.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+	check_vulkan_result(vkCreateImageView(device, &view_create_info, nullptr, &depth_view),
+	                    "vkCreateImageView");
+
+	// One framebuffer per swapchain image: its colour view plus the shared
+	// depth view. The colour view is kept (framebuffers do not retain image
+	// views) and destroyed with the framebuffers on the next recreation.
+	VkImageView attachments[2] = {VK_NULL_HANDLE, depth_view};
+	for (const VkImage image : swapchain_images) {
+		VkImageViewCreateInfo color_view_create_info{};
+		color_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		color_view_create_info.image = image;
+		color_view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		color_view_create_info.format = image_format;
+		color_view_create_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		VkImageView color_view = VK_NULL_HANDLE;
+		check_vulkan_result(
+		   vkCreateImageView(device, &color_view_create_info, nullptr, &color_view),
+		   "vkCreateImageView");
+		color_views.push_back(color_view);
+		attachments[0] = color_view;
+
+		VkFramebufferCreateInfo framebuffer_create_info{};
+		framebuffer_create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_create_info.renderPass = render_pass;
+		framebuffer_create_info.attachmentCount = 2;
+		framebuffer_create_info.pAttachments = attachments;
+		framebuffer_create_info.width = extent.width;
+		framebuffer_create_info.height = extent.height;
+		framebuffer_create_info.layers = 1;
+		VkFramebuffer framebuffer = VK_NULL_HANDLE;
+		check_vulkan_result(
+		   vkCreateFramebuffer(device, &framebuffer_create_info, nullptr, &framebuffer),
+		   "vkCreateFramebuffer");
+		framebuffers.push_back(framebuffer);
+	}
 }
 
 void VulkanDevice::Impl::present() {
@@ -550,18 +718,25 @@ void VulkanDevice::Impl::present() {
 	check_vulkan_result(vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info),
 	                    "vkBeginCommandBuffer");
 
-	const VkImage image = swapchain_images[image_index];
-	image_barrier(command_buffer, image, VK_IMAGE_LAYOUT_UNDEFINED,
-	              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-	              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-
-	const VkImageSubresourceRange clear_range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-	vkCmdClearColorImage(command_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &kClearColor,
-	                     1, &clear_range);
-
-	image_barrier(command_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-	              VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-	              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+	// The placeholder frame: a real render pass through the screen framebuffer
+	// (WP-14), clearing colour and depth via loadOp - the same shape
+	// RenderQueue's begin_pass(nullptr) will record in WP-15, when the twelve
+	// pipelines start drawing. The render pass owns the image-layout
+	// transitions (UNDEFINED -> colour attachment -> present), so no manual
+	// barriers are needed.
+	VkRenderPassBeginInfo render_pass_begin_info{};
+	render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	render_pass_begin_info.renderPass = pipelines->render_pass();
+	render_pass_begin_info.framebuffer = framebuffers[image_index];
+	render_pass_begin_info.renderArea = {{0, 0}, extent};
+	VkClearValue clear_values[2] {};
+	clear_values[0].color = kClearColor;
+	// Depth clears to 1.0 = far (RHI_INTERFACE.md §2.5).
+	clear_values[1].depthStencil = {1.0f, 0};
+	render_pass_begin_info.clearValueCount = 2;
+	render_pass_begin_info.pClearValues = clear_values;
+	vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+	vkCmdEndRenderPass(command_buffer);
 
 	check_vulkan_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer");
 

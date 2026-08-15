@@ -22,6 +22,7 @@
 #include <iterator>
 
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
 
 // static
 DrawLineProgram& DrawLineProgram::instance() {
@@ -30,17 +31,17 @@ DrawLineProgram& DrawLineProgram::instance() {
 }
 
 DrawLineProgram::DrawLineProgram() {
+	// Pin the vertex struct against the pipeline catalog (WP-14); see
+	// blit_program.cc for the rationale.
+	const Rhi::PipelineDescriptor base =
+	   Rhi::pipeline_catalog_entry("draw_line", Rhi::kBlendAlpha);
+	Rhi::verify_vertex_layout(
+	   "draw_line", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+	    {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, color_r)}});
+
 	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "draw_line";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
-		   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, color_r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.blend = Rhi::kBlendAlpha;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		Rhi::PipelineDescriptor desc = base;
 		pipeline_ = Rhi::device().create_pipeline(desc);
 		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 		return;

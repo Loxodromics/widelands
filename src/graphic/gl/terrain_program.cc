@@ -25,27 +25,27 @@
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/device.h"
+#include "graphic/rhi/pipeline_catalog.h"
 #include "graphic/texture.h"
 #include "logic/player.h"
 
 // The shader is authored in GLSL 330 and emitted to the 120/330/300 es
 // dialects by Gl::emit_dialect (see data/shaders/terrain.vp and .fp).
 TerrainProgram::TerrainProgram() {
+	// Pin the vertex struct against the pipeline catalog (WP-14); see
+	// blit_program.cc for the rationale.
+	const Rhi::PipelineDescriptor base =
+	   Rhi::pipeline_catalog_entry("terrain", Rhi::kBlendOpaque);
+	Rhi::verify_vertex_layout(
+	   "terrain", base.vertex_layout, sizeof(PerVertexData),
+	   {{"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
+	    {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+	    {"attr_texture_offset", Rhi::VertexFormat::kVec2,
+	     offsetof(PerVertexData, texture_offset_x)},
+	    {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)}});
+
 	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "terrain";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
-		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-		   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, texture_offset_x)},
-		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, texture_x)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.blend = Rhi::kBlendOpaque;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+		Rhi::PipelineDescriptor desc = base;
 		desc.samplers = {{0, "u_terrain_texture"}};
 		desc.uniform_block = Rhi::UniformBlockBinding{
 		   0, "per_program_state", sizeof(Gl::PerProgramState)};
