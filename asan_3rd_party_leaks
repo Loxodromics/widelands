@@ -1,7 +1,9 @@
 # List of known memory leaks in 3rd party libraries which we do not want ASan to report.
 
-# SDL2
+# SDL2, and SDL3 where it is pulled in alongside (SDL2_image/SDL2_ttf link it on
+# some distributions, so the process ends up with both).
 leak:libSDL2
+leak:libSDL3
 
 # Eris
 leak:src/scripting/persistence.cc
