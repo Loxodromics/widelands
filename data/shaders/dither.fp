@@ -23,6 +23,7 @@ in vec2 var_texture_offset;
 // The 300 es emitter hoists this above every declaration; do not move it up.
 precision highp float;
 
+#include "terrain_noise_params.glsl"
 #include "terrain_variation.glsl"
 
 out vec4 frag_color;

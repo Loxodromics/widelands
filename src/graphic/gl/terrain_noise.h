@@ -26,6 +26,8 @@
 // is now the single edit point for the three amplitudes.
 constexpr float kValueAmplitude = 0.40f;  // peak brightness swing as a fraction
 constexpr float kTintAmplitude = 3.0f;    // peak warm/cool swing per unit tint field
-constexpr float kWarpAmplitude = 0.05f;   // peak texture displacement in fields
+constexpr float kWarpAmplitude = 0.0f;    // peak texture displacement in fields; disabled
+                                           // 2026-08-16, was smearing the texture at the
+                                           // higher noise frequencies - see Claude/TERRAIN_NOISE.md
 
 #endif  // end of include guard: WL_GRAPHIC_GL_TERRAIN_NOISE_H

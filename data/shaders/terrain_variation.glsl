@@ -35,48 +35,34 @@ float snoise(vec2 v) {
 }
 
 // Terrain variation. The input is var_texture_position, which is world position
-// in units of one field, so a frequency of 0.09 means "patches roughly 11 fields
-// across". See Claude/TERRAIN_NOISE.md.
-//
-// The 0.55 octave carries most of the amplitude deliberately. The repetition it
-// has to break has a period of exactly one field, and a wave separates two
-// points one period apart most strongly when its own wavelength is twice that -
-// about 0.5 cycles per field. Higher frequencies are worse, not better: at ~1.0
-// cycles per field adjacent tiles land back in phase.
+// in units of one field. See Claude/TERRAIN_NOISE.md.
 //
 // Both fields are weighted sums of the same three octaves, so the pair costs no
-// extra snoise calls. The tint weighting is orthogonal to the value weighting
-// (their dot product is 1.00 + 0.20 - 1.20 = 0), which keeps value and hue from
-// trending together.
+// extra snoise calls.
 //
 // The value, tint and warp amplitudes (u_value_amplitude, u_tint_amplitude,
 // u_warp_amplitude) are uniforms, fed from C++ as members of the
 // "per_program_state" block declared in terrain.fp/dither.fp. They scale with
 // the terrain_noise_strength config option (see Claude/TERRAIN_NOISE.md).
+//
+// The tunable constants this function uses (octave frequencies, rotation,
+// weights) live in terrain_noise_params.glsl, included ahead of this file.
 vec2 terrain_fields(vec2 p) {
-	// Rotate between octaves so the simplex lattice axes never line up.
-	mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
-	float o1 = snoise(p * 0.09);
+	mat2 rot = kOctaveRotation;
+	float o1 = snoise(p * kOctave1Frequency);
 	p = rot * p;
-	float o2 = snoise(p * 0.21);
+	float o2 = snoise(p * kOctave2Frequency);
 	p = rot * p;
-	float o3 = snoise(p * 0.55);
-	// value: 1.00 / 0.50 / 1.20, normalised by 2.70   (unchanged from Phase 1)
-	// tint:  1.00 / 0.40 / -1.00, normalised by 2.40  (orthogonal to the above)
-	float value = (1.00 * o1 + 0.50 * o2 + 1.20 * o3) / 2.70;
-	float tint = (1.00 * o1 + 0.40 * o2 - 1.00 * o3) / 2.40;
+	float o3 = snoise(p * kOctave3Frequency);
+	float value = (kValueWeight1 * o1 + kValueWeight2 * o2 + kValueWeight3 * o3) / kValueWeightSum;
+	float tint = (kTintWeight1 * o1 + kTintWeight2 * o2 + kTintWeight3 * o3) / kTintWeightSum;
 	return vec2(value, tint);
 }
 
 // Domain warp, applied to var_texture_position before the fract() in both
 // shaders so the sampled texel moves instead of its brightness. See
-// Claude/TERRAIN_NOISE.md §17.
+// Claude/TERRAIN_NOISE.md §17. kWarpFrequency lives in terrain_noise_params.glsl.
 //
-// Warp frequency follows the same antiphase rule as octave 3 (§5): to differ
-// most between two points one field apart, the wavelength wants to be two
-// fields, i.e. ~0.5 cycles per field.
-const float kWarpFrequency = 0.55;
-
 // Offset in texture coordinates. Two dedicated snoise calls so the x and y
 // displacements are independent; reusing the existing octaves would couple
 // the warp to the colour variation and make it anisotropic, because those
@@ -86,14 +72,6 @@ vec2 terrain_warp(vec2 world_pos) {
 		snoise(world_pos * kWarpFrequency + vec2(17.3, 5.1)),
 		snoise(world_pos * kWarpFrequency + vec2(-9.7, 23.4)));
 }
-
-const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
-// Chosen by capture over two ladders. Hue swing scales linearly; as mean
-// |d(R-B)| in 8-bit codes, land / water: 1.5 -> 1.9/3.8, 3.0 -> 3.7/7.6,
-// 5.0 -> 6.2/12.7, 8.0 -> 9.8/20.2. Below about 1 code is invisible, so 1.5
-// sat near the quantization floor on land. Water takes roughly twice the land
-// swing because it is heavily blue-weighted, which is what sets the ceiling.
-// Clipping is not a constraint anywhere in that range (+0.24 points at worst).
 
 // Multiplier applied to the terrain texture colour, keyed on world position
 // in field units (var_texture_position). The mix extrapolates for negative
