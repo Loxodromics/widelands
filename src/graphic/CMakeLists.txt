@@ -284,6 +284,7 @@ wl_library(graphic_terrain_programs
     gl/workarea_program.h
   USES_ATOMIC
   DEPENDS
+    base_exceptions
     base_geometry
     base_macros
     graphic

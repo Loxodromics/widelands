@@ -77,6 +77,13 @@ const float kDitherShapeAmp = 0.10;
 const float kDitherShapeFreq = 0.40;
 const float kDitherSoftness = 0.01;
 
-// Arbitrary; only needs to land far from p=0 so the border shape shares no
-// structure with the value/tint/warp fields (same technique as kTintOffset).
-const vec2 kDitherOffset = vec2(73.1, -41.8);
+// Floor under the smoothstep transition width (dither.fp): the step is
+// undefined at width 0, reachable with dither_softness 0 and zero fwidth on
+// degenerate geometry. Small enough to never influence the rendered band.
+const float kDitherMinWidth = 1e-4;
+
+// Arbitrary; only needs to land far from p=0 and from each other so the
+// border shape shares no structure with the value/tint/warp fields or with
+// itself (same technique as kTintOffset).
+const vec2 kDitherShapeOffset = vec2(73.1, -41.8);
+const vec2 kDitherStippleOffset = vec2(-31.6, 57.9);

@@ -18,7 +18,6 @@
 
 #include "logic/map_objects/world/terrain_description.h"
 
-#include <algorithm>
 #include <memory>
 
 #include <SDL_surface.h>
@@ -149,12 +148,17 @@ TerrainDescription::TerrainDescription(const LuaTable& table,
 		throw GameDataError("%s: temperature is not possible.", name_.c_str());
 	}
 
-	// Keep the dither band inside the emitted triangle (V1 design constraint):
-	// kDitherCentre - 0.23 * amplitude - softness * kDitherSoftness must stay
-	// positive, where 0.23 is the sum of the shape and stipple amplitudes in
-	// terrain_noise_params.glsl. 0.86 / 0.23 ≈ 3.7 is the hard amplitude limit.
-	dither_amplitude_ = std::clamp(dither_amplitude_, 0.f, 3.f);
-	dither_softness_ = std::clamp(dither_softness_, 0.f, 10.f);
+	// The band bound is structural -- the shader clamps the shape octaves --
+	// so this is only a sanity range, same shape as the temperature and
+	// humidity checks above.
+	if (dither_amplitude_ < 0.f || dither_amplitude_ > 4.f) {
+		throw GameDataError("%s: dither_amplitude %f is out of range [0, 4]", name_.c_str(),
+		                    dither_amplitude_);
+	}
+	if (dither_softness_ < 0.f || dither_softness_ > 10.f) {
+		throw GameDataError("%s: dither_softness %f is out of range [0, 10]", name_.c_str(),
+		                    dither_softness_);
+	}
 
 	for (const std::string& resource :
 	     table.get_table("valid_resources")->array_entries<std::string>()) {

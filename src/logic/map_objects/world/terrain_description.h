@@ -115,9 +115,9 @@ public:
 
 	/// Multipliers on the global dither-band noise amplitude and softness for
 	/// this terrain's transition borders (V1, VISUAL_FIDELITY_RANKED.md §4.1).
-	/// 1.0 is the default look; the noise amplitude is clamped so the band
-	/// stays inside the emitted triangle. Keyed on the overlay terrain, the one
-	/// whose texture is feathered in.
+	/// 1.0 is the default look; the shader clamps the shape octaves so the
+	/// band stays inside the emitted triangle. Keyed on the overlay terrain,
+	/// the one whose texture is feathered in.
 	[[nodiscard]] float dither_amplitude() const;
 	[[nodiscard]] float dither_softness() const;
 

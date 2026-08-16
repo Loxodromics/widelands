@@ -11,10 +11,10 @@ layout(std140) uniform per_program_state {
 };
 
 in float var_brightness;
+in vec2 var_dither_params;
 in float var_dither_ramp;
 in vec2 var_texture_offset;
 in vec2 var_texture_position;
-in vec2 var_dither_params;
 
 // TODO(sirver): This is a hack to make sure we are sampling inside of the
 // terrain texture. This is a common problem with OpenGL and texture atlases.
@@ -34,9 +34,19 @@ void main() {
 			vec2(MARGIN, MARGIN),
 			vec2(1. - MARGIN, 1. - MARGIN));
 	vec4 clr = texture(u_terrain_texture, var_texture_offset + u_texture_dimensions * texture_fract);
-	float s = var_dither_ramp - kDitherCentre
-	        + var_dither_params.x * dither_field(var_texture_position);
-	float w = max(kDitherSoftness * var_dither_params.y, 0.5 * fwidth(s));
+	// The shape octaves must not retract the band past the shared edge, so
+	// they are clamped; at the default per-terrain amplitude of 1.0 the clamp
+	// never fires, it only binds above ~1.4 (see the budget in
+	// terrain_noise_params.glsl). The stipple is deliberately allowed to
+	// overshoot -- that overshoot is the edge speckle.
+	float shape = clamp(var_dither_params.x * dither_shape_field(var_texture_position),
+	                    -(1.0 - kDitherCentre), kDitherCentre);
+	float s = var_dither_ramp - kDitherCentre + shape
+	        + var_dither_params.x * kDitherStippleAmp * dither_stipple(var_texture_position);
+	// smoothstep(-w, w, s) is undefined at w == 0, reachable with
+	// dither_softness 0 and zero fwidth on degenerate geometry.
+	float w = max(kDitherSoftness * var_dither_params.y,
+	              max(0.5 * fwidth(s), kDitherMinWidth));
 	frag_color = vec4(
 	   clr.rgb * var_brightness * terrain_variation(var_texture_position),
 	   smoothstep(-w, w, s));

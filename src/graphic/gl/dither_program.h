@@ -83,8 +83,8 @@ private:
 		float texture_y;
 		float brightness;
 		float dither_ramp;
-		float dither_amp;
-		float dither_soft;
+		float dither_amplitude;
+		float dither_softness;
 		float texture_offset_x;
 		float texture_offset_y;
 	};

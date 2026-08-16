@@ -18,6 +18,7 @@
 
 #include "graphic/gl/dither_program.h"
 
+#include "base/wexception.h"
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/terrain_noise.h"
@@ -32,13 +33,14 @@ DitherProgram::DitherProgram() {
 		desc.vertex_layout.stride = sizeof(PerVertexData);
 		desc.vertex_layout.attributes = {
 		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
+		   {"attr_dither_params", Rhi::VertexFormat::kVec2,
+		    offsetof(PerVertexData, dither_amplitude)},
 		   {"attr_dither_ramp", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, dither_ramp)},
 		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
 		   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
 		    offsetof(PerVertexData, texture_offset_x)},
 		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
 		    offsetof(PerVertexData, texture_x)},
-		   {"attr_dither_params", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, dither_amp)},
 		};
 		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
 		desc.blend = Rhi::kBlendAlpha;
@@ -67,6 +69,8 @@ DitherProgram::DitherProgram() {
 	vao_.define_attributes({
 	   {gl_program_.attribute_location("attr_brightness"), 1, sizeof(PerVertexData),
 	    offsetof(PerVertexData, brightness)},
+	   {gl_program_.attribute_location("attr_dither_params"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, dither_amplitude)},
 	   {gl_program_.attribute_location("attr_dither_ramp"), 1, sizeof(PerVertexData),
 	    offsetof(PerVertexData, dither_ramp)},
 	   {gl_program_.attribute_location("attr_position"), 2, sizeof(PerVertexData),
@@ -75,8 +79,6 @@ DitherProgram::DitherProgram() {
 	    offsetof(PerVertexData, texture_offset_x)},
 	   {gl_program_.attribute_location("attr_texture_position"), 2, sizeof(PerVertexData),
 	    offsetof(PerVertexData, texture_x)},
-	   {gl_program_.attribute_location("attr_dither_params"), 2, sizeof(PerVertexData),
-	    offsetof(PerVertexData, dither_amp)},
 	});
 }
 
@@ -92,8 +94,8 @@ void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
 	back.texture_x = field.texture_coords.x;
 	back.texture_y = field.texture_coords.y;
 	back.brightness = field.brightness;
-	back.dither_amp = terrain.dither_amplitude();
-	back.dither_soft = terrain.dither_softness();
+	back.dither_amplitude = terrain.dither_amplitude();
+	back.dither_softness = terrain.dither_softness();
 	back.texture_offset_x = texture_offset.x;
 	back.texture_offset_y = texture_offset.y;
 
