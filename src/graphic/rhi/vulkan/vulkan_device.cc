@@ -268,6 +268,17 @@ struct VulkanDevice::Impl {
 	// has been waited, so no recorded draw references a set from this pool).
 	VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
 
+	// WP-16b: the offscreen submit machinery. One-shot command buffers come
+	// from a dedicated pool (never the frame's or the upload pool's), and
+	// the dedicated fence serializes offscreen submits: submit_offscreen
+	// waits on it before returning, so the drawn result is visible to
+	// sampling in the current frame and every arena region / descriptor set
+	// the submit referenced is retired before the next begin_frame resets
+	// them. A separate fence is essential - a nested submit inside a frame
+	// must not disturb the frame fence, which is unsignaled at that point.
+	VkCommandPool offscreen_command_pool = VK_NULL_HANDLE;
+	VkFence offscreen_fence = VK_NULL_HANDLE;
+
 	// The samplers the descriptor writes reference: one per texture filter
 	// (every texture in the tree clamps to edge). Created once at device
 	// startup; the textures share them by filter.
@@ -550,6 +561,23 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	   vkCreateDescriptorPool(device, &descriptor_pool_create_info, nullptr, &descriptor_pool),
 	   "vkCreateDescriptorPool");
 
+	// The offscreen submit path (WP-16b): a one-shot command pool and a
+	// fence, mirroring the upload path. The fence starts unsignaled - it is
+	// reset before every submit anyway - and nothing signals it at startup.
+	VkCommandPoolCreateInfo offscreen_pool_create_info{};
+	offscreen_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+	offscreen_pool_create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT |
+	                                   VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+	offscreen_pool_create_info.queueFamilyIndex = queue_family;
+	check_vulkan_result(vkCreateCommandPool(device, &offscreen_pool_create_info, nullptr,
+	                                        &offscreen_command_pool),
+	                    "vkCreateCommandPool (offscreen)");
+	VkFenceCreateInfo offscreen_fence_create_info{};
+	offscreen_fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	check_vulkan_result(vkCreateFence(device, &offscreen_fence_create_info, nullptr,
+	                                  &offscreen_fence),
+	                    "vkCreateFence (offscreen)");
+
 	sampler_linear = create_sampler(TextureFilter::kLinear);
 	sampler_nearest = create_sampler(TextureFilter::kNearest);
 
@@ -622,7 +650,7 @@ VulkanDevice::Impl::~Impl() {
 	// WP-16 objects: the dummy texture (whose upload command buffers are long
 	// submitted and waited), the descriptor pool, the samplers, the upload
 	// staging buffer, fence and pool. All die after the idle wait and before
-	// the device.
+	// the device. The WP-16b offscreen pool and fence join them.
 	dummy_texture.reset();
 	vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
 	vkDestroySampler(device, sampler_linear, nullptr);
@@ -634,6 +662,8 @@ VulkanDevice::Impl::~Impl() {
 	}
 	vkDestroyFence(device, upload_context.fence, nullptr);
 	vkDestroyCommandPool(device, upload_context.command_pool, nullptr);
+	vkDestroyFence(device, offscreen_fence, nullptr);
+	vkDestroyCommandPool(device, offscreen_command_pool, nullptr);
 	vkDestroyDevice(device, nullptr);
 	vkDestroyInstance(instance, nullptr);
 }
@@ -972,24 +1002,58 @@ void VulkanDevice::end_frame(std::unique_ptr<CommandBuffer> command_buffer) {
 }
 
 std::unique_ptr<CommandBuffer> VulkanDevice::begin_offscreen() {
-	// WP-16b owns the real immediate render-to-texture path. Until then the
-	// callers (font cache, image cache, minimap) record into a no-op buffer:
-	// their textures stay blank, which is invisible while no descriptor binds
-	// a texture (WP-16). The game keeps running either way.
-	static bool warned = false;
-	if (!warned) {
-		warned = true;
-		log_warn("Vulkan: immediate render-to-texture is a no-op until WP-16b (font, minimap "
-		         "and image-cache textures stay blank)\n");
-	}
-	std::unique_ptr<CommandBuffer> command_buffer(new VulkanNoOpCommandBuffer());
+	// WP-16b: the real immediate render-to-texture path. A one-shot command
+	// buffer from the dedicated offscreen pool (the frame's buffer may be
+	// mid-recording - font and image-cache draws are nested inside frames -
+	// so it is never borrowed), begun immediately, recording into whatever
+	// texture the caller transitions and begins a pass on. The screen target
+	// stays empty: an offscreen buffer never targets the swapchain.
+	VkCommandBufferAllocateInfo allocate_info{};
+	allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocate_info.commandPool = impl_->offscreen_command_pool;
+	allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	allocate_info.commandBufferCount = 1;
+	VkCommandBuffer commands = VK_NULL_HANDLE;
+	check_vulkan_result(vkAllocateCommandBuffers(impl_->device, &allocate_info, &commands),
+	                    "vkAllocateCommandBuffers (offscreen)");
+	VkCommandBufferBeginInfo begin_info{};
+	begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	check_vulkan_result(vkBeginCommandBuffer(commands, &begin_info),
+	                    "vkBeginCommandBuffer (offscreen)");
+	std::unique_ptr<CommandBuffer> command_buffer(new VulkanCommandBuffer(
+	   impl_->device, commands, impl_->pipelines.get(), VulkanCommandBuffer::Target{},
+	   impl_->descriptor_pool, impl_->dummy_texture.get()));
 	push_command_buffer(command_buffer.get());
 	return command_buffer;
 }
 
-void VulkanDevice::submit_offscreen(std::unique_ptr<CommandBuffer> /* command_buffer */) {
-	// Nothing was recorded into the no-op buffer; popping the stack restores
-	// whatever command buffer was recording before this offscreen submit.
+void VulkanDevice::submit_offscreen(std::unique_ptr<CommandBuffer> command_buffer) {
+	// Submit and fence-wait before returning: the contract (rhi.h) requires
+	// the recorded result to be visible to sampling in the current frame,
+	// and the wait also guarantees every arena region and descriptor set the
+	// buffer referenced is retired before the next begin_frame resets them.
+	// The submit never touches the frame fence - a nested offscreen submit
+	// inside a frame would otherwise corrupt the frame's own wait. Queue
+	// order then makes the offscreen writes visible to the frame's later
+	// draw calls, which sample the texture the pass just rendered.
+	auto* recorded = static_cast<VulkanCommandBuffer*>(command_buffer.get());
+	recorded->finish();
+	const VkCommandBuffer commands = recorded->vk_command_buffer();
+	check_vulkan_result(vkResetFences(impl_->device, 1, &impl_->offscreen_fence),
+	                    "vkResetFences (offscreen)");
+	VkSubmitInfo submit_info{};
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.commandBufferCount = 1;
+	submit_info.pCommandBuffers = &commands;
+	check_vulkan_result(vkQueueSubmit(impl_->queue, 1, &submit_info, impl_->offscreen_fence),
+	                    "vkQueueSubmit (offscreen)");
+	check_vulkan_result(vkWaitForFences(impl_->device, 1, &impl_->offscreen_fence, VK_TRUE,
+	                                    UINT64_MAX),
+	                    "vkWaitForFences (offscreen)");
+	vkFreeCommandBuffers(impl_->device, impl_->offscreen_command_pool, 1, &commands);
+	// Popping the stack restores whatever command buffer was recording
+	// before this offscreen submit (a frame's, when nested inside one).
 	pop_command_buffer();
 }
 
@@ -1008,9 +1072,13 @@ std::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDescriptor& d
 	const VkSampler sampler = desc.filter == TextureFilter::kLinear ?
 	                             impl_->sampler_linear :
 	                             impl_->sampler_nearest;
+	// Every RGBA8 texture is a potential immediate render-to-texture target
+	// (WP-16b), so it carries the device's shared offscreen render pass;
+	// the per-texture framebuffer is built lazily on first use.
 	return std::unique_ptr<Texture>(new VulkanTexture(impl_->device, desc.width, desc.height,
 	                                                  desc.format, desc.filter, sampler,
-	                                                  &impl_->upload_context));
+	                                                  &impl_->upload_context,
+	                                                  impl_->pipelines->offscreen_render_pass()));
 }
 
 std::unique_ptr<Texture>
