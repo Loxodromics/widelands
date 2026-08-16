@@ -158,14 +158,14 @@ void VulkanArena::reset() {
 	offset_ = 0;
 }
 
-VulkanBuffer::VulkanBuffer(VulkanArena& arena) : arena_(arena) {
+VulkanBuffer::VulkanBuffer(VulkanArena*& arena) : arena_(arena) {
 	// Touch the arena so the buffer has a bindable VkBuffer immediately; the
 	// actual per-frame region is allocated by update().
-	region_ = arena_.allocate(0);
+	region_ = arena_->allocate(0);
 }
 
 void VulkanBuffer::update(const void* data, const uint32_t size) {
-	region_ = arena_.allocate(size);
+	region_ = arena_->allocate(size);
 	if (size > 0u) {
 		std::memcpy(region_.mapped, data, size);
 	}

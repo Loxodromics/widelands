@@ -41,9 +41,13 @@ struct SDL_Window;
 // route their draws here from the first frame on. WP-16b added the immediate
 // render-to-texture path: begin_offscreen hands out a one-shot command buffer
 // from a dedicated pool and submit_offscreen submits it and fence-waits, so
-// the drawn result is visible to sampling in the current frame. What is
-// deliberately missing until the WPs named below, implemented as loud stubs
-// rather than crashes:
+// the drawn result is visible to sampling in the current frame. WP-17 added
+// real frames in flight: two frame slots, each with its own command buffer,
+// submit fence, acquire/release semaphore pair, staging arena and descriptor
+// pool, and one depth attachment per swapchain image (the screen pass clears
+// depth, so overlapping frames must not share it). What is deliberately
+// missing until the WPs named below, implemented as loud stubs rather than
+// crashes:
 //   - swapchain readback (WP-18): read_back_swapchain throws.
 // The hidden GL window (graphic.cc) stays under Vulkan solely so
 // Texture::lock()'s glReadPixels readback keeps returning its (blank, until

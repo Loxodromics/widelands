@@ -23,6 +23,7 @@
 #ifdef WL_BUILD_VULKAN
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -54,6 +55,12 @@ constexpr bool kEnableValidation = true;
 // well below this even on dense scenes; the arena grows by allocating more
 // chunks when a frame exceeds it.
 constexpr VkDeviceSize kInitialArenaSize = 32u * 1024u * 1024u;
+
+// The number of frames in flight (WP-17). Two gives the CPU one frame of
+// headroom over the GPU (recording frame N+1 while frame N renders) and
+// keeps the eager per-slot arena memory at 2x32 MB; the swapchain requests
+// kFramesInFlight + 1 images so the acquire never blocks under FIFO.
+constexpr uint32_t kFramesInFlight = 2;
 
 // The floor the renderer needs from maxImageDimension2D - the same number as
 // graphic.h's kMinimumSizeForTextures (the atlas builder throws below it).
@@ -206,9 +213,24 @@ struct VulkanDevice::Impl {
 	std::unique_ptr<CommandBuffer> begin_frame();
 	void end_frame(std::unique_ptr<CommandBuffer> command_buffer);
 
-	// Creates the depth image, its memory and view, plus one framebuffer per
-	// swapchain image (colour view + the shared depth view). 'pipeline' must
-	// be the render pass these framebuffers target.
+	// WP-17 deferred texture destruction: a texture destroyed while frames
+	// are in flight may still be referenced by a recorded descriptor set.
+	// retire_texture_resources stamps the image/memory/view with the current
+	// frame counter; begin_frame frees entries whose stamp is
+	// kFramesInFlight frames old (the fence wait there has completed every
+	// frame that could reference them).
+	struct PendingTextureFree {
+		VkImage image;
+		VkDeviceMemory memory;
+		VkImageView view;
+		uint64_t frame_stamp;
+	};
+	void retire_texture_resources(VkImage image, VkDeviceMemory memory, VkImageView view);
+	void drain_pending_texture_frees(bool free_all);
+
+	// Creates one depth image, its memory and view per swapchain image, plus
+	// one framebuffer per swapchain image (colour view + that image's depth
+	// view). 'pipeline' must be the render pass these framebuffers target.
 	void create_depth_and_framebuffers(VkRenderPass render_pass);
 
 	SDL_Window* window = nullptr;
@@ -227,46 +249,65 @@ struct VulkanDevice::Impl {
 	std::vector<VkImage> swapchain_images;
 
 	// The screen render pass machinery (renderer modernization plan, WP-14):
-	// the depth attachment backing the render pass, one framebuffer per
-	// swapchain image (each with its own colour view - a framebuffer does not
-	// retain image views, they must stay alive with it), and the pipeline
-	// cache (render pass + the twelve pipelines) rebuilt whenever the
-	// swapchain format changes.
+	// one depth attachment per swapchain image (WP-17: the screen pass
+	// clears depth, so overlapping frames must not share one), one
+	// framebuffer per swapchain image (each with its own colour and depth
+	// views - a framebuffer does not retain image views, they must stay
+	// alive with it), and the pipeline cache (render pass + the twelve
+	// pipelines) rebuilt whenever the swapchain format changes.
 	VkFormat depth_format = VK_FORMAT_UNDEFINED;
-	VkImage depth_image = VK_NULL_HANDLE;
-	VkDeviceMemory depth_memory = VK_NULL_HANDLE;
-	VkImageView depth_view = VK_NULL_HANDLE;
+	std::vector<VkImage> depth_images;
+	std::vector<VkDeviceMemory> depth_memories;
+	std::vector<VkImageView> depth_views;
 	std::vector<VkImageView> color_views;
 	std::vector<VkFramebuffer> framebuffers;
 	std::unique_ptr<VulkanPipelineCache> pipelines;
 
+	// The frame-slot machinery (WP-17): kFramesInFlight slots, each owning
+	// its command buffer, its submit fence, and its acquire (image
+	// available) semaphore. A slot's fence is waited at the start of the
+	// slot's next use, which orders every resource the slot references
+	// (arena regions, descriptor sets, swapchain image) before reuse; the
+	// acquire semaphore's only consumer is the slot's own submit, so the
+	// same fence wait makes its re-signal safe. All fences are created
+	// signaled so the first pass over each slot waits immediately.
+	//
+	// The release (render finished) semaphores are indexed per swapchain
+	// image, not per slot: their consumer is the present, whose completion
+	// is only observable through the image itself - vkAcquireNextImageKHR
+	// returning an image proves every earlier present of that image
+	// finished, so re-signaling the image's semaphore after re-acquiring it
+	// is safe by construction (the validation layer's own recommendation;
+	// the per-slot version trips VUID-vkQueueSubmit-pSignalSemaphores-00067
+	// whenever two presents of one FIFO queue overlap). Sized to the image
+	// count in recreate_swapchain.
 	VkCommandPool command_pool = VK_NULL_HANDLE;
-	VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-	// The submit fence (queue is done with the last frame) and a second fence
-	// for the acquire: vkAcquireNextImageKHR requires at least one of its
-	// semaphore/fence parameters to be non-null, and without the fence the
-	// validation layer flags every frame (VUID-vkAcquireNextImageKHR-
-	// semaphore-01780). Nobody waits on the acquire fence - the blocking
-	// acquire already synchronizes - it is reset before each acquire purely
-	// so it can be re-signaled.
-	VkFence frame_fence = VK_NULL_HANDLE;
-	VkFence acquire_fence = VK_NULL_HANDLE;
+	std::array<VkCommandBuffer, kFramesInFlight> command_buffers{};
+	std::array<VkFence, kFramesInFlight> frame_fences{};
+	std::array<VkSemaphore, kFramesInFlight> image_available_semaphores{};
+	std::vector<VkSemaphore> render_finished_semaphores;
 
-	// The per-frame staging arena (WP-15): every vertex and uniform update
-	// allocates a fresh region here; reset after the previous frame's fence
-	// wait in begin_frame.
-	std::unique_ptr<VulkanArena> arena;
+	// The staging arenas (WP-15), one per frame slot since WP-17: a frame
+	// may outlive the next frame's begin_frame, so a single arena reset per
+	// frame boundary is no longer safe. current_arena_ names the slot the
+	// recording (or between-frames offscreen) work allocates from; it is
+	// re-pointed in begin_frame and fed to every created VulkanBuffer by
+	// reference. A slot's arena resets at the start of that slot's next use,
+	// after its fence wait.
+	std::array<std::unique_ptr<VulkanArena>, kFramesInFlight> arenas;
+	VulkanArena* current_arena_ = nullptr;
 
 	// WP-16: the texture-upload machinery. One-shot command buffers come from
 	// a dedicated pool (never the frame's), and the single fence serializes
 	// uploads and makes them finish before a later frame samples the texture.
 	VulkanUploadContext upload_context;
 
-	// WP-16: the per-frame descriptor pool. Sets are allocated at
-	// bind_descriptor_set time and the pool resets in begin_frame alongside
-	// the arena - same lifetime argument (the previous frame's submit fence
-	// has been waited, so no recorded draw references a set from this pool).
-	VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+	// WP-16: the per-frame descriptor pools, one per frame slot since WP-17
+	// (same lifetime argument as the arenas). Sets are allocated at
+	// bind_descriptor_set time; a slot's pool resets at the start of that
+	// slot's next use, after its fence wait, so no recorded draw references
+	// a set from the pool being reset.
+	std::array<VkDescriptorPool, kFramesInFlight> descriptor_pools{};
 
 	// WP-16b: the offscreen submit machinery. One-shot command buffers come
 	// from a dedicated pool (never the frame's or the upload pool's), and
@@ -294,9 +335,22 @@ struct VulkanDevice::Impl {
 	// then submits nothing.
 	bool frame_dropped_ = false;
 
+	// The frame slot the current frame (or the last begun one, between
+	// frames) records into; end_frame and begin_offscreen resolve their
+	// per-slot resources through it. Advances modulo kFramesInFlight at the
+	// end of every presented frame; a dropped frame keeps the slot so it is
+	// retried next time.
+	uint32_t frame_slot_ = 0;
+
 	// The swapchain image index the current frame acquired and end_frame must
 	// present.
 	uint32_t frame_image_index_ = 0;
+
+	// The number of begin_frame calls so far (WP-17): stamps deferred texture
+	// frees so they are released kFramesInFlight frames after their texture
+	// died, when no in-flight frame can reference them anymore.
+	uint64_t frame_stamp_ = 0;
+	std::vector<PendingTextureFree> pending_texture_frees_;
 
 	// The physical device's maxImageDimension2D (WP-16): what the atlas
 	// builder sizes itself against under Vulkan.
@@ -433,6 +487,8 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	depth_format = choose_depth_format(physical_device);
 	log_info("Graphics: Vulkan: Depth attachment format: %u\n",
 	         static_cast<unsigned>(depth_format));
+	log_info("Graphics: Vulkan: Frames in flight: %u\n",
+	         static_cast<unsigned>(kFramesInFlight));
 
 	const float queue_priority = 1.0f;
 	VkDeviceQueueCreateInfo queue_create_info{};
@@ -492,28 +548,46 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	command_buffer_allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	command_buffer_allocate_info.commandPool = command_pool;
 	command_buffer_allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	command_buffer_allocate_info.commandBufferCount = 1;
+	command_buffer_allocate_info.commandBufferCount = kFramesInFlight;
 	check_vulkan_result(
-	   vkAllocateCommandBuffers(device, &command_buffer_allocate_info, &command_buffer),
+	   vkAllocateCommandBuffers(device, &command_buffer_allocate_info, command_buffers.data()),
 	   "vkAllocateCommandBuffers");
 
-	// Signaled at creation so the first frame's fence wait passes; afterwards
-	// the fence is reset per frame and signaled by the per-frame submit.
+	// One fence per frame slot, all signaled at creation so the first pass
+	// over each slot waits immediately; afterwards a slot's fence is reset
+	// per frame and signaled by that frame's submit.
 	VkFenceCreateInfo fence_create_info{};
 	fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fence_create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-	check_vulkan_result(vkCreateFence(device, &fence_create_info, nullptr, &frame_fence),
-	                    "vkCreateFence");
-	fence_create_info.flags = 0;
-	check_vulkan_result(vkCreateFence(device, &fence_create_info, nullptr, &acquire_fence),
-	                    "vkCreateFence");
+	for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+		check_vulkan_result(vkCreateFence(device, &fence_create_info, nullptr, &frame_fences[slot]),
+		                    "vkCreateFence");
+	}
 
-	// The staging arena (WP-15): allocations are aligned to the device's
-	// uniform-buffer-offset alignment so WP-16 can bind any region as a UBO.
+	// The acquire semaphore per frame slot (WP-17): the acquire signals it
+	// and the slot's own submit waits on it, so the slot fence wait orders
+	// its re-signal. The release (render finished) semaphores are per
+	// swapchain image and are created with the swapchain in
+	// recreate_swapchain, where the image count is known.
+	VkSemaphoreCreateInfo semaphore_create_info{};
+	semaphore_create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+		check_vulkan_result(
+		   vkCreateSemaphore(device, &semaphore_create_info, nullptr,
+		                     &image_available_semaphores[slot]),
+		   "vkCreateSemaphore (image available)");
+	}
+
+	// The staging arenas (WP-15), one per frame slot (WP-17): allocations are
+	// aligned to the device's uniform-buffer-offset alignment so WP-16 can
+	// bind any region as a UBO.
 	const uint32_t arena_alignment = static_cast<uint32_t>(
 	   std::max<VkDeviceSize>(properties.limits.minUniformBufferOffsetAlignment, 256u));
-	arena.reset(new VulkanArena(
-	   device, find_arena_memory_type(physical_device), arena_alignment, kInitialArenaSize));
+	for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+		arenas[slot].reset(new VulkanArena(
+		   device, find_arena_memory_type(physical_device), arena_alignment, kInitialArenaSize));
+	}
+	current_arena_ = arenas[0].get();
 
 	max_texture_size_ = properties.limits.maxImageDimension2D;
 	if (max_texture_size_ < kMinimumVulkanTextureSize) {
@@ -542,10 +616,11 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	   vkCreateFence(device, &upload_fence_create_info, nullptr, &upload_context.fence),
 	   "vkCreateFence (upload)");
 
-	// The per-frame descriptor pool (WP-16). The counts are generous upper
-	// bounds for one frame of Widelands: sets are allocated per
-	// bind_descriptor_set call (draw batches), a set carries at most 2
-	// samplers + 1 uniform buffer. The pool resets in begin_frame.
+	// The per-frame descriptor pools (WP-16), one per slot (WP-17). The
+	// counts are generous upper bounds for one frame of Widelands: sets are
+	// allocated per bind_descriptor_set call (draw batches), a set carries
+	// at most 2 samplers + 1 uniform buffer. A slot's pool resets at the
+	// start of that slot's next use.
 	VkDescriptorPoolSize pool_sizes[2] {};
 	pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	pool_sizes[0].descriptorCount = 4096;
@@ -557,9 +632,12 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	descriptor_pool_create_info.maxSets = 4096;
 	descriptor_pool_create_info.poolSizeCount = 2;
 	descriptor_pool_create_info.pPoolSizes = pool_sizes;
-	check_vulkan_result(
-	   vkCreateDescriptorPool(device, &descriptor_pool_create_info, nullptr, &descriptor_pool),
-	   "vkCreateDescriptorPool");
+	for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+		check_vulkan_result(
+		   vkCreateDescriptorPool(device, &descriptor_pool_create_info, nullptr,
+		                          &descriptor_pools[slot]),
+		   "vkCreateDescriptorPool");
+	}
 
 	// The offscreen submit path (WP-16b): a one-shot command pool and a
 	// fence, mirroring the upload path. The fence starts unsignaled - it is
@@ -616,11 +694,18 @@ VkSampler VulkanDevice::Impl::create_sampler(const TextureFilter filter) const {
 
 VulkanDevice::Impl::~Impl() {
 	vkDeviceWaitIdle(device);
-	// The arena must go after the idle wait (recorded draws reference its
+	// The arenas must go after the idle wait (recorded draws reference their
 	// regions) and before the device.
-	arena.reset();
-	vkDestroyFence(device, frame_fence, nullptr);
-	vkDestroyFence(device, acquire_fence, nullptr);
+	for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+		arenas[slot].reset();
+		vkDestroyFence(device, frame_fences[slot], nullptr);
+		vkDestroySemaphore(device, image_available_semaphores[slot], nullptr);
+		vkDestroyDescriptorPool(device, descriptor_pools[slot], nullptr);
+	}
+	for (VkSemaphore semaphore : render_finished_semaphores) {
+		vkDestroySemaphore(device, semaphore, nullptr);
+	}
+	render_finished_semaphores.clear();
 	vkDestroyCommandPool(device, command_pool, nullptr);
 	for (VkFramebuffer framebuffer : framebuffers) {
 		vkDestroyFramebuffer(device, framebuffer, nullptr);
@@ -630,15 +715,18 @@ VulkanDevice::Impl::~Impl() {
 		vkDestroyImageView(device, color_view, nullptr);
 	}
 	color_views.clear();
-	if (depth_view != VK_NULL_HANDLE) {
+	for (VkImageView depth_view : depth_views) {
 		vkDestroyImageView(device, depth_view, nullptr);
 	}
-	if (depth_image != VK_NULL_HANDLE) {
+	depth_views.clear();
+	for (VkImage depth_image : depth_images) {
 		vkDestroyImage(device, depth_image, nullptr);
 	}
-	if (depth_memory != VK_NULL_HANDLE) {
+	depth_images.clear();
+	for (VkDeviceMemory depth_memory : depth_memories) {
 		vkFreeMemory(device, depth_memory, nullptr);
 	}
+	depth_memories.clear();
 	// The pipeline cache owns render-pass-bound resources and must die before
 	// the swapchain-independent Vulkan objects (and the device).
 	pipelines.reset();
@@ -648,11 +736,13 @@ VulkanDevice::Impl::~Impl() {
 	}
 	vkDestroySurfaceKHR(instance, surface, nullptr);
 	// WP-16 objects: the dummy texture (whose upload command buffers are long
-	// submitted and waited), the descriptor pool, the samplers, the upload
-	// staging buffer, fence and pool. All die after the idle wait and before
-	// the device. The WP-16b offscreen pool and fence join them.
+	// submitted and waited), the samplers, the upload staging buffer, fence
+	// and pool. All die after the idle wait and before the device. The
+	// WP-16b offscreen pool and fence join them.
 	dummy_texture.reset();
-	vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+	// Every deferred texture free is safe now (device idle); the dummy
+	// texture above just queued its own. Must run before vkDestroyDevice.
+	drain_pending_texture_frees(true);
 	vkDestroySampler(device, sampler_linear, nullptr);
 	vkDestroySampler(device, sampler_nearest, nullptr);
 	if (upload_context.staging_buffer != VK_NULL_HANDLE) {
@@ -715,10 +805,10 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 			break;
 		}
 	}
-	image_format = surface_format.format;
 
-	// FIFO (vsync) is mandatory in every implementation; more flexible modes
-	// can wait for WP-17.
+	// FIFO (vsync) is mandatory in every implementation. The game caps its
+	// refresh at 30 FPS (ui/basic/panel.cc), so a faster present mode would
+	// only burn power; WP-17 keeps FIFO deliberately.
 	const VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
 
 	// The frame renders through the screen render pass (WP-14), so the images
@@ -728,18 +818,27 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 		throw wexception("Vulkan: the surface does not support COLOR_ATTACHMENT image usage.");
 	}
 
-	// One frame in flight with a blocking fence wait, so the old swapchain is
-	// never referenced when it is destroyed. WP-17 owns real frame
-	// pipelining; the device-wide stall before destroying the old swapchain is
-	// a bootstrap-grade correctness measure (a pending present may still
-	// reference the images) and goes away with proper per-frame
-	// synchronization.
-	vkDeviceWaitIdle(device);
+	// The old swapchain must not be destroyed while any queue is still
+	// executing work on its images - including queued presents. Since WP-17
+	// the frame loop runs frames in flight, so a queue-level wait (not a
+	// device-wide stall) drains every pending submit and present on this
+	// queue; the per-slot fences end up signaled, so the next begin_frame's
+	// fence wait passes immediately.
+	check_vulkan_result(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
-	// The framebuffers reference the swapchain image views, the depth view and
-	// the render pass, so they must go before the old swapchain - and before
-	// the render pass, when the format change below rebuilds it. The depth
-	// attachment is recreated too (it is sized to the swapchain extent).
+	// The release semaphores are rebuilt with the new image count below;
+	// the queue wait above guarantees no submit signal or pending present
+	// references the old ones anymore.
+	for (VkSemaphore semaphore : render_finished_semaphores) {
+		vkDestroySemaphore(device, semaphore, nullptr);
+	}
+	render_finished_semaphores.clear();
+
+	// The framebuffers reference the swapchain image views, the depth views
+	// and the render pass, so they must go before the old swapchain - and
+	// before the render pass, when the format change below rebuilds it. The
+	// depth attachments are recreated too (they are sized to the swapchain
+	// extent).
 	for (VkFramebuffer framebuffer : framebuffers) {
 		vkDestroyFramebuffer(device, framebuffer, nullptr);
 	}
@@ -748,18 +847,18 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 		vkDestroyImageView(device, color_view, nullptr);
 	}
 	color_views.clear();
-	if (depth_view != VK_NULL_HANDLE) {
+	for (VkImageView depth_view : depth_views) {
 		vkDestroyImageView(device, depth_view, nullptr);
-		depth_view = VK_NULL_HANDLE;
 	}
-	if (depth_image != VK_NULL_HANDLE) {
+	depth_views.clear();
+	for (VkImage depth_image : depth_images) {
 		vkDestroyImage(device, depth_image, nullptr);
-		depth_image = VK_NULL_HANDLE;
 	}
-	if (depth_memory != VK_NULL_HANDLE) {
+	depth_images.clear();
+	for (VkDeviceMemory depth_memory : depth_memories) {
 		vkFreeMemory(device, depth_memory, nullptr);
-		depth_memory = VK_NULL_HANDLE;
 	}
+	depth_memories.clear();
 
 	// Pipelines bake in the render pass, and the render pass bakes in the
 	// swapchain image format. A format change is the one reason to rebuild
@@ -773,10 +872,20 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 		pipelines.reset(new VulkanPipelineCache(device, image_format, depth_format));
 	}
 
+	// Request kFramesInFlight + 1 images (WP-17): with two frames in flight
+	// and FIFO, two images can be held (one rendering, one presenting) and a
+	// third keeps vkAcquireNextImageKHR from blocking. Some drivers grant
+	// fewer than requested - the acquire then stalls, but stays correct.
+	const uint32_t requested_image_count = std::max(
+	   capabilities.minImageCount, kFramesInFlight + 1);
+	const uint32_t min_image_count = capabilities.maxImageCount == 0 ?
+	                                    requested_image_count :
+	                                    std::min(requested_image_count, capabilities.maxImageCount);
+
 	VkSwapchainCreateInfoKHR swapchain_create_info{};
 	swapchain_create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 	swapchain_create_info.surface = surface;
-	swapchain_create_info.minImageCount = capabilities.minImageCount;
+	swapchain_create_info.minImageCount = min_image_count;
 	swapchain_create_info.imageFormat = surface_format.format;
 	swapchain_create_info.imageColorSpace = surface_format.colorSpace;
 	swapchain_create_info.imageExtent = extent;
@@ -805,6 +914,21 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 	                       device, swapchain, &image_count, swapchain_images.data()),
 	                    "vkGetSwapchainImagesKHR");
 
+	// The release semaphores are indexed by swapchain image (see the member
+	// comment): re-signaling one is safe because the image can only be
+	// re-acquired after its previous present completed. Rebuilt here since
+	// the image count can change; the old ones were destroyed after the
+	// queue wait at the top (nothing references them then).
+	VkSemaphoreCreateInfo semaphore_create_info{};
+	semaphore_create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+	for (uint32_t i = 0; i < image_count; ++i) {
+		VkSemaphore semaphore = VK_NULL_HANDLE;
+		check_vulkan_result(
+		   vkCreateSemaphore(device, &semaphore_create_info, nullptr, &semaphore),
+		   "vkCreateSemaphore (render finished)");
+		render_finished_semaphores.push_back(semaphore);
+	}
+
 	create_depth_and_framebuffers(pipelines->render_pass());
 
 	verb_log_info("Graphics: Vulkan: Swapchain: %dx%d (format %u, %u images)\n", extent.width,
@@ -813,9 +937,10 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 }
 
 void VulkanDevice::Impl::create_depth_and_framebuffers(const VkRenderPass render_pass) {
-	// The depth attachment: one image sized to the swapchain extent, shared by
-	// all framebuffers (depth is cleared every frame, so no per-image
-	// isolation is needed - and there is only one frame in flight).
+	// One framebuffer per swapchain image, and since WP-17 one depth
+	// attachment per swapchain image too: the screen pass clears depth, so
+	// two overlapping frames rendering into a shared depth image would race.
+	// Per-image depth keeps each frame's attachment usage isolated.
 	VkImageCreateInfo image_create_info{};
 	image_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	image_create_info.imageType = VK_IMAGE_TYPE_2D;
@@ -827,36 +952,44 @@ void VulkanDevice::Impl::create_depth_and_framebuffers(const VkRenderPass render
 	image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
 	image_create_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 	image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	check_vulkan_result(vkCreateImage(device, &image_create_info, nullptr, &depth_image),
-	                    "vkCreateImage");
 
-	VkMemoryRequirements memory_requirements{};
-	vkGetImageMemoryRequirements(device, depth_image, &memory_requirements);
-	VkMemoryAllocateInfo allocate_info{};
-	allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	allocate_info.allocationSize = memory_requirements.size;
-	allocate_info.memoryTypeIndex =
-	   find_memory_type(physical_device, memory_requirements.memoryTypeBits,
-	                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-	check_vulkan_result(vkAllocateMemory(device, &allocate_info, nullptr, &depth_memory),
-	                    "vkAllocateMemory");
-	check_vulkan_result(vkBindImageMemory(device, depth_image, depth_memory, 0),
-	                    "vkBindImageMemory");
-
-	VkImageViewCreateInfo view_create_info{};
-	view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-	view_create_info.image = depth_image;
-	view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-	view_create_info.format = depth_format;
-	view_create_info.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-	check_vulkan_result(vkCreateImageView(device, &view_create_info, nullptr, &depth_view),
-	                    "vkCreateImageView");
-
-	// One framebuffer per swapchain image: its colour view plus the shared
-	// depth view. The colour view is kept (framebuffers do not retain image
-	// views) and destroyed with the framebuffers on the next recreation.
-	VkImageView attachments[2] = {VK_NULL_HANDLE, depth_view};
 	for (const VkImage image : swapchain_images) {
+		// The depth attachment for this image.
+		VkImage depth_image = VK_NULL_HANDLE;
+		check_vulkan_result(vkCreateImage(device, &image_create_info, nullptr, &depth_image),
+		                    "vkCreateImage");
+		depth_images.push_back(depth_image);
+
+		VkMemoryRequirements memory_requirements{};
+		vkGetImageMemoryRequirements(device, depth_image, &memory_requirements);
+		VkMemoryAllocateInfo allocate_info{};
+		allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocate_info.allocationSize = memory_requirements.size;
+		allocate_info.memoryTypeIndex =
+		   find_memory_type(physical_device, memory_requirements.memoryTypeBits,
+		                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VkDeviceMemory depth_memory = VK_NULL_HANDLE;
+		check_vulkan_result(vkAllocateMemory(device, &allocate_info, nullptr, &depth_memory),
+		                    "vkAllocateMemory");
+		depth_memories.push_back(depth_memory);
+		check_vulkan_result(vkBindImageMemory(device, depth_image, depth_memory, 0),
+		                    "vkBindImageMemory");
+
+		VkImageViewCreateInfo depth_view_create_info{};
+		depth_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		depth_view_create_info.image = depth_image;
+		depth_view_create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		depth_view_create_info.format = depth_format;
+		depth_view_create_info.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+		VkImageView depth_view = VK_NULL_HANDLE;
+		check_vulkan_result(
+		   vkCreateImageView(device, &depth_view_create_info, nullptr, &depth_view),
+		   "vkCreateImageView");
+		depth_views.push_back(depth_view);
+
+		// The framebuffer: this image's colour view plus its depth view. Both
+		// views are kept (framebuffers do not retain image views) and
+		// destroyed with the framebuffers on the next recreation.
 		VkImageViewCreateInfo color_view_create_info{};
 		color_view_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 		color_view_create_info.image = image;
@@ -868,8 +1001,8 @@ void VulkanDevice::Impl::create_depth_and_framebuffers(const VkRenderPass render
 		   vkCreateImageView(device, &color_view_create_info, nullptr, &color_view),
 		   "vkCreateImageView");
 		color_views.push_back(color_view);
-		attachments[0] = color_view;
 
+		const VkImageView attachments[2] = {color_view, depth_view};
 		VkFramebufferCreateInfo framebuffer_create_info{};
 		framebuffer_create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 		framebuffer_create_info.renderPass = render_pass;
@@ -886,30 +1019,64 @@ void VulkanDevice::Impl::create_depth_and_framebuffers(const VkRenderPass render
 	}
 }
 
+void VulkanDevice::Impl::retire_texture_resources(const VkImage image,
+                                                   const VkDeviceMemory memory,
+                                                   const VkImageView view) {
+	// Stamped with the current frame number; freed by
+	// drain_pending_texture_frees once kFramesInFlight more frames have
+	// begun (a frame recorded before the stamp is long completed then).
+	pending_texture_frees_.push_back(PendingTextureFree{image, memory, view, frame_stamp_});
+}
+
+void VulkanDevice::Impl::drain_pending_texture_frees(const bool free_all) {
+	// Called after begin_frame's fence wait (so the work of frame
+	// frame_stamp_ - kFramesInFlight has completed) or, with free_all, from
+	// the destructor after the device idle wait.
+	auto entry = pending_texture_frees_.begin();
+	while (entry != pending_texture_frees_.end()) {
+		if (!free_all && entry->frame_stamp + kFramesInFlight > frame_stamp_) {
+			break;
+		}
+		vkDestroyImageView(device, entry->view, nullptr);
+		vkFreeMemory(device, entry->memory, nullptr);
+		vkDestroyImage(device, entry->image, nullptr);
+		entry = pending_texture_frees_.erase(entry);
+	}
+}
+
 std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
-	// Fully serialized bootstrap: one fence, no semaphores at all. The fence
-	// wait before the acquire guarantees the queue is done with every image
-	// (and with every arena region the previous frame recorded); the acquire
-	// itself guarantees the presentation engine is done with the image it
-	// hands out (and, with a NULL semaphore, blocks until then). Semaphores
-	// only buy parallelism, which WP-17 adds with real frames in flight.
-	check_vulkan_result(vkWaitForFences(device, 1, &frame_fence, VK_TRUE, UINT64_MAX),
+	// Frames in flight (WP-17): kFramesInFlight slots rotate. Waiting on
+	// this slot's fence guarantees the queue is done with everything the
+	// slot's previous frame recorded - its arena regions, its descriptor
+	// sets and its swapchain image - before any of them are reused. The
+	// acquire's semaphore (not a fence, and no blocking wait) orders the
+	// presentation engine's read of the image against the submit that
+	// renders into it.
+	++frame_stamp_;
+	const uint32_t slot = frame_slot_;
+	check_vulkan_result(vkWaitForFences(device, 1, &frame_fences[slot], VK_TRUE, UINT64_MAX),
 	                    "vkWaitForFences");
-	arena->reset();
-	// The descriptor pool has the same lifetime as the arena (WP-16): every
-	// set a recorded draw references came from this pool, and the fence wait
-	// above guarantees the queue is done with all of them.
-	check_vulkan_result(vkResetDescriptorPool(device, descriptor_pool, 0),
+	// The fence wait completed the frame from kFramesInFlight ago - the last
+	// one that could reference a deferred texture free stamped before this
+	// frame began.
+	drain_pending_texture_frees(false);
+	arenas[slot]->reset();
+	current_arena_ = arenas[slot].get();
+	// The slot's descriptor pool has the same lifetime as the slot's arena
+	// (WP-16): every set a recorded draw references came from this pool, and
+	// the fence wait above guarantees the queue is done with all of them.
+	check_vulkan_result(vkResetDescriptorPool(device, descriptor_pools[slot], 0),
 	                    "vkResetDescriptorPool");
 
-	check_vulkan_result(vkResetFences(device, 1, &acquire_fence), "vkResetFences");
 	uint32_t image_index = 0;
-	const VkResult acquire_result = vkAcquireNextImageKHR(
-	   device, swapchain, UINT64_MAX, VK_NULL_HANDLE, acquire_fence, &image_index);
+	const VkResult acquire_result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
+	                                                      image_available_semaphores[slot],
+	                                                      VK_NULL_HANDLE, &image_index);
 	if (acquire_result == VK_ERROR_OUT_OF_DATE_KHR || acquire_result == VK_SUBOPTIMAL_KHR) {
 		// Window was resized; the swapchain no longer matches the surface.
-		// Recreate and drop this frame. The fence is left signaled, so the
-		// next frame's wait passes immediately.
+		// Recreate and drop this frame. The slot fence stays signaled (it is
+		// reset only after a successful acquire), so the next attempt's wait
+		// passes immediately, and the slot is not advanced - it is retried.
 		recreate_swapchain();
 		frame_dropped_ = true;
 		return std::unique_ptr<CommandBuffer>(new VulkanNoOpCommandBuffer());
@@ -920,26 +1087,26 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 		frame_dropped_ = true;
 		return std::unique_ptr<CommandBuffer>(new VulkanNoOpCommandBuffer());
 	}
-	// The spec requires waiting on the acquire fence before touching the
-	// image (VUID-vkAcquireNextImageKHR-fence-...): the presentation engine
-	// signals it once it has finished reading the image.
-	check_vulkan_result(vkWaitForFences(device, 1, &acquire_fence, VK_TRUE, UINT64_MAX),
-	                    "vkWaitForFences");
-	check_vulkan_result(vkResetFences(device, 1, &frame_fence), "vkResetFences");
+	// The fence is reset only now: it must stay signaled on a dropped frame
+	// (above), or the next wait on this slot would block forever.
+	check_vulkan_result(vkResetFences(device, 1, &frame_fences[slot]), "vkResetFences");
 
-	check_vulkan_result(vkResetCommandBuffer(command_buffer, 0), "vkResetCommandBuffer");
+	check_vulkan_result(
+	   vkResetCommandBuffer(command_buffers[slot], 0), "vkResetCommandBuffer");
 	VkCommandBufferBeginInfo command_buffer_begin_info{};
 	command_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 	command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	check_vulkan_result(vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info),
-	                    "vkBeginCommandBuffer");
+	check_vulkan_result(
+	   vkBeginCommandBuffer(command_buffers[slot], &command_buffer_begin_info),
+	   "vkBeginCommandBuffer");
 
 	frame_dropped_ = false;
 	frame_image_index_ = image_index;
 	const VulkanCommandBuffer::Target target{
 	   pipelines->render_pass(), framebuffers[image_index], extent, 2};
 	return std::unique_ptr<CommandBuffer>(new VulkanCommandBuffer(
-	   device, command_buffer, pipelines.get(), target, descriptor_pool, dummy_texture.get()));
+	   device, command_buffers[slot], pipelines.get(), target, descriptor_pools[slot],
+	   dummy_texture.get()));
 }
 
 void VulkanDevice::Impl::end_frame(std::unique_ptr<CommandBuffer> command_buffer_wrapper) {
@@ -947,23 +1114,41 @@ void VulkanDevice::Impl::end_frame(std::unique_ptr<CommandBuffer> command_buffer
 		frame_dropped_ = false;
 		return;
 	}
+	const uint32_t slot = frame_slot_;
 	auto* recorded = static_cast<VulkanCommandBuffer*>(command_buffer_wrapper.get());
 	recorded->finish();
 
+	// The submit waits on the acquire's semaphore (the presentation engine is
+	// done with the image), signals the image's release semaphore for the
+	// present and the slot fence for the slot's next use. No CPU wait here -
+	// that is the point of frames in flight; the fence is only waited when
+	// the slot comes around again in begin_frame, and the release semaphore
+	// is re-signaled only after its image is re-acquired (which guarantees
+	// the previous present of that image completed).
+	const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.waitSemaphoreCount = 1;
+	submit_info.pWaitSemaphores = &image_available_semaphores[slot];
+	submit_info.pWaitDstStageMask = &wait_stage;
 	submit_info.commandBufferCount = 1;
-	submit_info.pCommandBuffers = &command_buffer;
-	check_vulkan_result(vkQueueSubmit(queue, 1, &submit_info, frame_fence), "vkQueueSubmit");
-	check_vulkan_result(vkWaitForFences(device, 1, &frame_fence, VK_TRUE, UINT64_MAX),
-	                    "vkWaitForFences");
+	submit_info.pCommandBuffers = &command_buffers[slot];
+	submit_info.signalSemaphoreCount = 1;
+	submit_info.pSignalSemaphores = &render_finished_semaphores[frame_image_index_];
+	check_vulkan_result(
+	   vkQueueSubmit(queue, 1, &submit_info, frame_fences[slot]), "vkQueueSubmit");
 
 	VkPresentInfoKHR present_info{};
 	present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	present_info.waitSemaphoreCount = 1;
+	present_info.pWaitSemaphores = &render_finished_semaphores[frame_image_index_];
 	present_info.swapchainCount = 1;
 	present_info.pSwapchains = &swapchain;
 	present_info.pImageIndices = &frame_image_index_;
 	const VkResult present_result = vkQueuePresentKHR(queue, &present_info);
+	// The slot was consumed either way - a dropped begin_frame is the only
+	// path that leaves it in place for a retry.
+	frame_slot_ = (slot + 1) % kFramesInFlight;
 	if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
 		recreate_swapchain();
 		return;
@@ -1023,7 +1208,7 @@ std::unique_ptr<CommandBuffer> VulkanDevice::begin_offscreen() {
 	                    "vkBeginCommandBuffer (offscreen)");
 	std::unique_ptr<CommandBuffer> command_buffer(new VulkanCommandBuffer(
 	   impl_->device, commands, impl_->pipelines.get(), VulkanCommandBuffer::Target{},
-	   impl_->descriptor_pool, impl_->dummy_texture.get()));
+	   impl_->descriptor_pools[impl_->frame_slot_], impl_->dummy_texture.get()));
 	push_command_buffer(command_buffer.get());
 	return command_buffer;
 }
@@ -1074,11 +1259,16 @@ std::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDescriptor& d
 	                             impl_->sampler_nearest;
 	// Every RGBA8 texture is a potential immediate render-to-texture target
 	// (WP-16b), so it carries the device's shared offscreen render pass;
-	// the per-texture framebuffer is built lazily on first use.
-	return std::unique_ptr<Texture>(new VulkanTexture(impl_->device, desc.width, desc.height,
-	                                                  desc.format, desc.filter, sampler,
-	                                                  &impl_->upload_context,
-	                                                  impl_->pipelines->offscreen_render_pass()));
+	// the per-texture framebuffer is built lazily on first use. The retire
+	// callback routes the image resources into the deferred-free queue
+	// (WP-17): destroying them immediately would race in-flight frames that
+	// still reference the texture's view through recorded descriptor sets.
+	return std::unique_ptr<Texture>(new VulkanTexture(
+	   impl_->device, desc.width, desc.height, desc.format, desc.filter, sampler,
+	   &impl_->upload_context, impl_->pipelines->offscreen_render_pass(),
+	   [this](const VkImage image, const VkDeviceMemory memory, const VkImageView view) {
+		   impl_->retire_texture_resources(image, memory, view);
+	   }));
 }
 
 std::unique_ptr<Texture>
@@ -1088,9 +1278,11 @@ VulkanDevice::create_texture_view(Texture& /* parent */, const Recti& /* subrect
 
 std::unique_ptr<Buffer> VulkanDevice::create_buffer(const uint32_t /* size */,
                                                     const BufferUsage /* usage */) {
-	// Both vertex and uniform data live in the per-frame staging arena; the
-	// capacity hint is ignored (see VulkanBuffer).
-	return std::unique_ptr<Buffer>(new VulkanBuffer(*impl_->arena));
+	// Both vertex and uniform data live in the staging arenas; the capacity
+	// hint is ignored (see VulkanBuffer). The buffer routes through the
+	// device's current-arena pointer, so update() always lands in the arena
+	// of the frame slot that is currently recording (WP-17).
+	return std::unique_ptr<Buffer>(new VulkanBuffer(impl_->current_arena_));
 }
 
 std::unique_ptr<Pipeline> VulkanDevice::create_pipeline(const PipelineDescriptor& desc) {

@@ -30,16 +30,20 @@
 
 namespace Rhi {
 
-// The per-frame staging arena behind VulkanBuffer (renderer modernization
-// plan, WP-15; RHI_INTERFACE.md §2.6 transient-resource semantics): one
-// large HOST_VISIBLE | HOST_COHERENT VkBuffer (grown by adding more when a
-// frame outgrows it) with a linear bump offset. Every allocate() hands out a
-// fresh region, so a buffer may be updated and drawn repeatedly within one
-// command buffer and each recorded draw reads the region that was current
-// when it was recorded - exactly how the eight programs use it today.
-// reset() rewinds the offset to zero; the owner (VulkanDevice) calls it once
-// per frame boundary, after the previous frame's submit fence has been
-// waited, so no live region is ever reused.
+// The staging arena behind VulkanBuffer (renderer modernization plan, WP-15;
+// RHI_INTERFACE.md §2.6 transient-resource semantics): one large
+// HOST_VISIBLE | HOST_COHERENT VkBuffer (grown by adding more when a frame
+// outgrows it) with a linear bump offset. Every allocate() hands out a fresh
+// region, so a buffer may be updated and drawn repeatedly within one command
+// buffer and each recorded draw reads the region that was current when it
+// was recorded - exactly how the eight programs use it today. reset()
+// rewinds the offset to zero.
+//
+// Since WP-17 there is one arena per frame slot (frames in flight), so the
+// device owns an array of arenas and a "current arena" pointer that switches
+// to the next slot in begin_frame. The owner (VulkanDevice) calls reset() on
+// a slot's arena at the start of that slot's next use, after the slot's
+// submit fence has been waited, so no live region is ever reused.
 //
 // Threading: allocations can arrive from the initializer thread (offscreen
 // render-to-texture updates between frames), so the bump offset is guarded
@@ -98,9 +102,16 @@ private:
 // arena-backed buffers ignore it (rhi.h permits this: the hint only avoids a
 // first re-allocation, which arena regions never pay). Every update()
 // allocates a fresh region, so the transient-resource contract holds.
+//
+// Buffers are long-lived while arenas rotate per frame slot (WP-17), so the
+// buffer holds a reference to the device's *current arena pointer* rather
+// than to one arena: update() always allocates from whichever slot's arena is
+// active at that moment. The device re-points the pointer in begin_frame;
+// between frames it still names the last begun frame's arena, which is safe
+// because offscreen work queued there is retired before that slot resets.
 class VulkanBuffer : public Buffer {
 public:
-	explicit VulkanBuffer(VulkanArena& arena);
+	explicit VulkanBuffer(VulkanArena*& arena);
 
 	void update(const void* data, uint32_t size) override;
 
@@ -112,7 +123,7 @@ public:
 	VkDeviceSize offset() const;
 
 private:
-	VulkanArena& arena_;
+	VulkanArena*& arena_;
 	VulkanArena::Region region_;
 
 	DISALLOW_COPY_AND_ASSIGN(VulkanBuffer);

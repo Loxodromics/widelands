@@ -90,8 +90,11 @@ enum class TextureFilter {
 // interface would omit it and pay for the retrofit at every call site later
 // (plan WP-9, leak 1). A texture is kUndefined on creation and must be
 // transitioned before it is written or sampled. kUndefined is the initial
-// state and kPresentSource the swapchain-present state (WP-17); the GL
-// backend only ever observes kColorAttachment / kShaderReadOnly.
+// state; kPresentSource was anticipated for the swapchain-present transition
+// but stayed unused through WP-17 - the screen render pass's PRESENT_SRC
+// final layout owns that transition - so the value is a WP-19 cleanup
+// candidate. The GL backend only ever observes kColorAttachment /
+// kShaderReadOnly.
 enum class TextureLayout {
 	kUndefined,       // contents unspecified; the only valid destination
 	kColorAttachment, // being written as a render target
