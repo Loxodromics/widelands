@@ -119,12 +119,17 @@ vec2 terrain_warp(vec2 world_pos) {
 // global -- dither.vp supplies it per vertex from the overlay terrain's
 // dither_amplitude (default 1.0), so only the frequencies stay constant
 // here; a per-terrain *frequency* would put a seam wherever two overlay
-// terrains meet. Each noise call has its own offset in an unrelated part of
-// the simplex domain so the border shape shares no structure with the
-// terrain's colour variation. The constants live in
+// terrains meet. Rotating between the octaves (kOctaveRotation) and giving
+// each noise call its own offset keeps the simplex lattices from lining up,
+// in an unrelated part of the domain so the border shape shares no structure
+// with the terrain's colour variation. The constants live in
 // terrain_noise_params.glsl.
 float dither_shape_field(vec2 p) {
-	return kDitherShapeAmp * snoise(p * kDitherShapeFreq + kDitherShapeOffset);
+	mat2 rot = kOctaveRotation;
+	float o1 = kDitherShapeAmp * snoise(p * kDitherShapeFreq + kDitherShapeOffset);
+	p = rot * p;
+	float o2 = kDitherMidAmp * snoise(p * kDitherMidFreq + kDitherMidOffset);
+	return o1 + o2;
 }
 
 float dither_stipple(vec2 p) {

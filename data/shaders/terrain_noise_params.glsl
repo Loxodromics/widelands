@@ -61,20 +61,24 @@ const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // mask with a world-space noise threshold. Ramp units: 1 at the triangle's
 // shared edge (where the overlay terrain is fully opaque), 0 at the far
 // vertex. Measured profile of edge.png: 89% coverage at the shared edge, zero
-// by ramp 0.75, 50% point at ramp 0.86 -- the constants below start from that
-// centre, not the doc's (2*ramp - 1) form, which would sit at ramp 0.5 and
-// roughly double the band. The starting amplitudes land the band on the
-// measured mask: the shape term makes the boundary wander, the stipple term
-// breaks it into the Settlers-2 grain. kDitherCentre + kDitherShapeAmp +
-// kDitherStippleAmp + kDitherSoftness = 1.00 touches the shared edge by design
-// (clipping flat there is fine); the lower side 0.86 - 0.23 = 0.62 keeps the
-// noise from retracting the band to nothing, the failure that would look
-// wrong.
-const float kDitherCentre = 0.86;
-const float kDitherStippleAmp = 0.13;
-const float kDitherStippleFreq = 5.0;
-const float kDitherShapeAmp = 0.10;
+// by ramp 0.75, 50% point at ramp 0.86. Three octaves, three scale jobs: the
+// shape octave lets the boundary wander regionally, the mid octave gives it
+// per-edge irregularity, the stipple breaks it into the Settlers-2 grain.
+// Band budget, so the shape octaves never retract the band past the shared
+// edge: centre (0.72) + shape (0.06) + mid (0.14) = 0.92, leaving 0.08 of
+// headroom against the 1.0 edge; the far side 0.72 - 0.30 = 0.42 stays well
+// positive. The stipple sits outside this budget on purpose -- its overshoot
+// is the edge speckle (edge.png had 11% holes at the shared edge). dither.fp
+// clamps the shape octaves to [-(1 - kDitherCentre), kDitherCentre] so the
+// bound is enforced structurally; at the default per-terrain amplitude of 1.0
+// the clamp never fires, it only binds above ~1.4.
+const float kDitherCentre = 0.72;
+const float kDitherShapeAmp = 0.06;
 const float kDitherShapeFreq = 0.40;
+const float kDitherMidAmp = 0.14;
+const float kDitherMidFreq = 2.50;
+const float kDitherStippleAmp = 0.10;
+const float kDitherStippleFreq = 18.0;
 const float kDitherSoftness = 0.01;
 
 // Floor under the smoothstep transition width (dither.fp): the step is
@@ -86,4 +90,5 @@ const float kDitherMinWidth = 1e-4;
 // border shape shares no structure with the value/tint/warp fields or with
 // itself (same technique as kTintOffset).
 const vec2 kDitherShapeOffset = vec2(73.1, -41.8);
+const vec2 kDitherMidOffset = vec2(-55.3, 18.2);
 const vec2 kDitherStippleOffset = vec2(-31.6, 57.9);
