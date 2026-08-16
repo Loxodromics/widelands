@@ -21,28 +21,17 @@
 #ifdef WL_BUILD_VULKAN
 
 #include <algorithm>
+#include <vector>
 
-#include "base/log.h"
 #include "base/wexception.h"
 #include "graphic/rhi/vulkan/vulkan_buffer.h"
+#include "graphic/rhi/vulkan/vulkan_manifest.h"
 #include "graphic/rhi/vulkan/vulkan_pipeline_cache.h"
 #include "graphic/rhi/vulkan/vulkan_resources.h"
 
 namespace Rhi {
 
 namespace {
-
-// The programs whose draws WP-15 must drop (their pipelines need descriptor
-// sets, which land in WP-16). Warned once per program per process so the
-// boot log names them without spamming a line per frame per program.
-std::set<std::string> warned_skipped_programs;
-
-void warn_skipped_program(const std::string& program_name) {
-	if (warned_skipped_programs.insert(program_name).second) {
-		log_warn("Vulkan: skipping draws of program '%s': its descriptor bindings arrive in WP-16\n",
-		         program_name.c_str());
-	}
-}
 
 // The canonical -> Vulkan window-space flip for scissor rectangles (the
 // plain rect flip; the clip-space half of the compensation is the shader's
@@ -65,10 +54,18 @@ Recti flip_rect(const Recti& rect, const VkExtent2D extent) {
 
 }  // namespace
 
-VulkanCommandBuffer::VulkanCommandBuffer(const VkCommandBuffer command_buffer,
+VulkanCommandBuffer::VulkanCommandBuffer(const VkDevice device,
+                                         const VkCommandBuffer command_buffer,
                                          const VulkanPipelineCache* cache,
-                                         Target screen_target)
-   : command_buffer_(command_buffer), cache_(cache), screen_target_(screen_target) {
+                                         Target screen_target,
+                                         const VkDescriptorPool descriptor_pool,
+                                         const VulkanTexture* dummy_texture)
+   : device_(device),
+     command_buffer_(command_buffer),
+     cache_(cache),
+     descriptor_pool_(descriptor_pool),
+     dummy_texture_(dummy_texture),
+     screen_target_(screen_target) {
 }
 
 VulkanCommandBuffer::~VulkanCommandBuffer() = default;
@@ -163,10 +160,117 @@ void VulkanCommandBuffer::bind_pipeline(const Pipeline* pipeline) {
 	current_pipeline_ = vulkan_pipeline;
 }
 
-void VulkanCommandBuffer::bind_descriptor_set(const DescriptorSet* /* set */) {
-	// Descriptor sets are WP-16: nothing to bind yet. The recorded bindings
-	// live in the VulkanDescriptorSet; the draw below is skipped when the
-	// current pipeline's layout needs them.
+void VulkanCommandBuffer::bind_descriptor_set(const DescriptorSet* set) {
+	if (current_pipeline_ == nullptr) {
+		throw wexception("Rhi::CommandBuffer::bind_descriptor_set: no pipeline bound.");
+	}
+	if (set == nullptr) {
+		throw wexception("Rhi::CommandBuffer::bind_descriptor_set: null descriptor set.");
+	}
+	if (descriptor_pool_ == VK_NULL_HANDLE) {
+		throw wexception("Rhi::CommandBuffer::bind_descriptor_set: no descriptor pool.");
+	}
+	const VulkanDescriptorSet* vulkan_set = static_cast<const VulkanDescriptorSet*>(set);
+
+	// The manifest is the binding translation: the RHI records per-type
+	// indices (texture i = the i-th sampler, uniform buffer 0 = the block),
+	// the Vulkan shaders were compiled with the manifest's one shared
+	// counter. The set carries its own manifest entry and layouts, so the
+	// command buffer needs no cache lookup here.
+	const ManifestProgram* manifest = vulkan_set->manifest();
+	if (manifest == nullptr) {
+		throw wexception("Vulkan: descriptor set of program '%s' has no bindings manifest entry",
+		                 vulkan_set->program_name().c_str());
+	}
+
+	VkDescriptorSetAllocateInfo allocate_info{};
+	allocate_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	allocate_info.descriptorPool = descriptor_pool_;
+	allocate_info.descriptorSetCount = 1;
+	const VkDescriptorSetLayout set_layout = vulkan_set->set_layout();
+	allocate_info.pSetLayouts = &set_layout;
+	VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+	if (vkAllocateDescriptorSets(device_, &allocate_info, &descriptor_set) != VK_SUCCESS) {
+		throw wexception("Vulkan: vkAllocateDescriptorSets failed for program '%s'",
+		                 vulkan_set->program_name().c_str());
+	}
+
+	// Translate and write the recorded bindings.
+	std::vector<VkWriteDescriptorSet> writes;
+	std::vector<VkDescriptorImageInfo> image_infos;
+	std::vector<VkDescriptorBufferInfo> buffer_infos;
+	image_infos.reserve(vulkan_set->textures().size() + 1);
+	buffer_infos.reserve(vulkan_set->uniform_buffers().size());
+
+	for (const auto& [texture_index, texture] : vulkan_set->textures()) {
+		if (texture_index >= manifest->samplers.size()) {
+			throw wexception(
+			   "Vulkan: program '%s' binds texture index %u but declares only %" PRIuS
+			   " sampler(s) (the inert grid/workarea binding is gone in WP-16)",
+			   vulkan_set->program_name().c_str(), texture_index, manifest->samplers.size());
+		}
+		const VulkanTexture* vulkan_texture = static_cast<const VulkanTexture*>(texture);
+		if (vulkan_texture == nullptr) {
+			// A null texture binding (the blit program's absent mask): the
+			// shader must not dereference an invalid view, so substitute the
+			// device's 1x1 white dummy.
+			vulkan_texture = dummy_texture_;
+		}
+		if (vulkan_texture == nullptr) {
+			throw wexception("Vulkan: null texture binding without a dummy texture");
+		}
+		VkDescriptorImageInfo image_info{};
+		image_info.sampler = vulkan_texture->sampler();
+		image_info.imageView = vulkan_texture->view();
+		image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		image_infos.push_back(image_info);
+
+		VkWriteDescriptorSet write{};
+		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write.dstSet = descriptor_set;
+		write.dstBinding = manifest->samplers[texture_index].second;
+		write.descriptorCount = 1;
+		write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		write.pImageInfo = &image_infos.back();
+		writes.push_back(write);
+	}
+
+	for (const auto& [buffer_index, binding] : vulkan_set->uniform_buffers()) {
+		if (buffer_index >= manifest->uniform_blocks.size()) {
+			throw wexception("Vulkan: program '%s' binds uniform buffer index %u but declares "
+			                 "only %" PRIuS " block(s)",
+			                 vulkan_set->program_name().c_str(), buffer_index,
+			                 manifest->uniform_blocks.size());
+		}
+		const VulkanBuffer* vulkan_buffer = static_cast<const VulkanBuffer*>(binding.buffer);
+		if (vulkan_buffer == nullptr) {
+			throw wexception("Vulkan: null uniform buffer in a descriptor set of program '%s'",
+			                 vulkan_set->program_name().c_str());
+		}
+		VkDescriptorBufferInfo buffer_info{};
+		buffer_info.buffer = vulkan_buffer->buffer();
+		buffer_info.offset = vulkan_buffer->offset() + binding.offset;
+		buffer_info.range = binding.size;
+		buffer_infos.push_back(buffer_info);
+
+		VkWriteDescriptorSet write{};
+		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write.dstSet = descriptor_set;
+		write.dstBinding = manifest->uniform_blocks[buffer_index].binding;
+		write.descriptorCount = 1;
+		write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		write.pBufferInfo = &buffer_infos.back();
+		writes.push_back(write);
+	}
+
+	if (!writes.empty()) {
+		vkUpdateDescriptorSets(device_, static_cast<uint32_t>(writes.size()), writes.data(), 0,
+		                       nullptr);
+	}
+
+	vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+	                        vulkan_set->pipeline_layout(), 0, 1, &descriptor_set, 0, nullptr);
+	current_descriptor_set_ = vulkan_set;
 }
 
 void VulkanCommandBuffer::bind_vertex_buffer(const Buffer* buffer) {
@@ -180,12 +284,13 @@ void VulkanCommandBuffer::draw(const uint32_t vertex_offset, const uint32_t vert
 	if (current_pipeline_ == nullptr) {
 		throw wexception("Rhi::CommandBuffer::draw: no pipeline bound.");
 	}
-	if (current_pipeline_->requires_binding()) {
-		// WP-15's draw-skip rule: without a bound descriptor set (WP-16) the
-		// draw would read undefined samplers/uniforms and trip the validation
-		// layers. Drop it and keep the layers silent.
-		warn_skipped_program(current_pipeline_->program_name());
-		return;
+	// A pipeline whose layout declares bindings needs a descriptor set bound
+	// before drawing (the WP-15 skip rule is gone in WP-16): without one the
+	// draw would read undefined samplers/uniforms and trip the validation
+	// layers, so fail loudly instead.
+	if (current_pipeline_->requires_binding() && current_descriptor_set_ == nullptr) {
+		throw wexception("Rhi::CommandBuffer::draw: program '%s' requires a bound descriptor set.",
+		                 current_pipeline_->program_name().c_str());
 	}
 	vkCmdDraw(command_buffer_, vertex_count, 1, vertex_offset, 0);
 }

@@ -22,14 +22,49 @@
 #ifdef WL_BUILD_VULKAN
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
 #include <volk.h>
 
 #include "graphic/rhi/rhi.h"
+#include "graphic/rhi/vulkan/vulkan_manifest.h"
 
 namespace Rhi {
+
+// Everything VulkanTexture::upload needs beyond its own image, shared with
+// the device so textures do not each carry a queue or command pool. The
+// context outlives the textures (it is owned by VulkanDevice::Impl), and all
+// uploads go through one fence so two initializer-thread uploads cannot
+// interleave on the one-shot command buffer.
+struct VulkanUploadContext {
+	VkDevice device = VK_NULL_HANDLE;
+	// The physical device, for picking device-local and host-visible memory
+	// types when a texture's image memory or the staging buffer is allocated.
+	VkPhysicalDevice physical_device = VK_NULL_HANDLE;
+	VkQueue queue = VK_NULL_HANDLE;
+	// A pool dedicated to one-shot upload command buffers (kept separate from
+	// the frame's command pool so an upload never competes with the frame's
+	// in-flight recording).
+	VkCommandPool command_pool = VK_NULL_HANDLE;
+	VkFence fence = VK_NULL_HANDLE;
+
+	// The upload staging buffer: a persistent, grow-on-demand host-visible
+	// buffer reused by every upload (overwritten after the fence wait). It is
+	// deliberately NOT the per-frame arena: startup uploads happen outside
+	// the frame loop, so arena regions would accumulate without a reset -
+	// and on the NVIDIA box the arena prefers the 246 MB BAR heap, which a
+	// full startup's worth of never-recycled staging would exhaust (WP-16).
+	VkBuffer staging_buffer = VK_NULL_HANDLE;
+	VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+	void* staging_mapped = nullptr;
+	VkDeviceSize staging_size = 0;
+
+	// Serializes uploads (they share the staging buffer, the one-shot command
+	// pool and the fence); the texture images themselves are per-upload.
+	std::mutex mutex;
+};
 
 // The Vulkan pipeline wrapper (WP-15). Either resolves its VkPipeline through
 // the pipeline cache at bind time (the twelve screen pipelines, built by
@@ -63,12 +98,20 @@ private:
 };
 
 // The Vulkan descriptor set (WP-15 stub, real in WP-16): stores the bindings
-// the programs record, so WP-16 only has to allocate and bind them. Nothing
-// binds in WP-15 - the command buffer skips draws of pipelines whose layout
-// has bindings (see VulkanCommandBuffer::draw).
+// the programs record in the RHI's per-type binding indices (textures index
+// the samplers, uniform buffers are always index 0 - each program has at
+// most one block). It also carries the pipeline-specific pieces the command
+// buffer needs at bind time: the manifest entry (binding translation), the
+// descriptor set layout (allocation) and the pipeline layout
+// (vkCmdBindDescriptorSets). The command buffer allocates the VkDescriptorSet
+// from the device's per-frame pool, writes the descriptors and binds it.
 class VulkanDescriptorSet : public DescriptorSet {
 public:
-	explicit VulkanDescriptorSet(bool requires_binding);
+	VulkanDescriptorSet(std::string program_name,
+	                    const ManifestProgram* manifest,
+	                    VkDescriptorSetLayout set_layout,
+	                    VkPipelineLayout pipeline_layout,
+	                    bool requires_binding);
 
 	void set_texture(uint32_t binding, const Texture* texture) override;
 	void set_uniform_buffer(uint32_t binding,
@@ -76,9 +119,13 @@ public:
 	                        uint32_t offset,
 	                        uint32_t size) override;
 
+	const std::string& program_name() const;
+	const ManifestProgram* manifest() const;
+	VkDescriptorSetLayout set_layout() const;
+	VkPipelineLayout pipeline_layout() const;
 	bool requires_binding() const;
 
-	// The recorded bindings (consumed by WP-16).
+	// The recorded bindings (consumed by the command buffer at bind time).
 	const std::unordered_map<uint32_t, const Texture*>& textures() const;
 	struct UniformBinding {
 		const Buffer* buffer = nullptr;
@@ -88,6 +135,10 @@ public:
 	const std::unordered_map<uint32_t, UniformBinding>& uniform_buffers() const;
 
 private:
+	std::string program_name_;
+	const ManifestProgram* manifest_;
+	VkDescriptorSetLayout set_layout_;
+	VkPipelineLayout pipeline_layout_;
 	bool requires_binding_;
 	std::unordered_map<uint32_t, const Texture*> textures_;
 	std::unordered_map<uint32_t, UniformBinding> uniform_buffers_;
@@ -95,12 +146,30 @@ private:
 	DISALLOW_COPY_AND_ASSIGN(VulkanDescriptorSet);
 };
 
-// A Vulkan image usable as a render target and (from WP-16 on) as a sampled
-// texture. In WP-15 only the headless test constructs one, wrapping an
-// already-created image/view/render pass/framebuffer; WP-16 (create_texture)
-// and WP-16b (offscreen targets) build on it. Owns all five handles.
+// A Vulkan image usable as a render target (WP-16b) and, since WP-16, as a
+// sampled texture with a real upload path. Two construction shapes:
+//   - the sampled texture create_texture produces: the class owns the image,
+//     its memory and its view, uploads through the VulkanUploadContext, and
+//     carries the device's sampler for its filter;
+//   - the offscreen target the headless test (and WP-16b) builds: wraps
+//     already-created image/view/render pass/framebuffer handles, exactly as
+//     in WP-15.
+// The render pass and framebuffer are VK_NULL_HANDLE for a sampled texture
+// (it is not a render target).
 class VulkanTexture : public Texture {
 public:
+	// The sampled-texture shape (create_texture): creates the image, memory,
+	// view and sampler for 'format'/'filter' and uploads through 'upload'.
+	VulkanTexture(VkDevice device,
+	              uint32_t width,
+	              uint32_t height,
+	              TextureFormat format,
+	              TextureFilter filter,
+	              VkSampler sampler,
+	              VulkanUploadContext* upload);
+	// The offscreen-target shape (the headless test, WP-16b): wraps the given
+	// handles, owns all of them. 'sampler' is null until the target is also
+	// sampled.
 	VulkanTexture(VkDevice device,
 	              uint32_t width,
 	              uint32_t height,
@@ -118,18 +187,26 @@ public:
 
 	VkImage image() const;
 	VkImageView view() const;
+	VkSampler sampler() const;
 	VkRenderPass render_pass() const;
 	VkFramebuffer framebuffer() const;
+	// The image layout the texture is currently in (WP-16: upload leaves it
+	// shader-read-only; WP-16b will build its transitions on this).
+	VkImageLayout current_layout() const;
 
 private:
 	VkDevice device_;
 	uint32_t width_;
 	uint32_t height_;
+	VkFormat format_;
 	VkImage image_;
 	VkDeviceMemory image_memory_;
 	VkImageView view_;
+	VkSampler sampler_;
 	VkRenderPass render_pass_;
 	VkFramebuffer framebuffer_;
+	VulkanUploadContext* upload_;
+	VkImageLayout current_layout_;
 
 	DISALLOW_COPY_AND_ASSIGN(VulkanTexture);
 };

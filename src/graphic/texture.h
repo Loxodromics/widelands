@@ -29,12 +29,15 @@ struct SDL_Surface;
 
 namespace Rhi {
 class Texture;
+enum class TextureFormat;
 }
 
 class Texture : public Surface, public Image {
 public:
 	// Create a new surface from an SDL_Surface. Ownership is taken.
-	explicit Texture(SDL_Surface* surface);
+	// 'intensity' selects a single-channel (R8) upload, used for the dither
+	// mask; false uploads RGBA8 (WP-16).
+	explicit Texture(SDL_Surface* surface, bool intensity = false);
 
 	// Create a new empty (that is randomly filled) Surface with the given
 	// dimensions.
@@ -88,7 +91,10 @@ public:
 private:
 	// Configures OpenGL to draw to this surface.
 	void setup_gl() const;
-	void init(uint16_t w, uint16_t h);
+	// Creates the GL texture (and, on the RHI path, the RHI texture handle:
+	// the GL-core wrap or a real Vulkan texture under --renderer=vulkan).
+	// 'format' is the RHI storage format (the dither mask is single-channel).
+	void init(uint16_t w, uint16_t h, Rhi::TextureFormat format);
 
 	// Runs 'draw' with this texture as the render target: on the core path it
 	// brackets the draw in the RHI's offscreen pass (begin_offscreen /

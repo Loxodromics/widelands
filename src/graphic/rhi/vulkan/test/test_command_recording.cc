@@ -422,7 +422,7 @@ struct TestTarget {
 		texture.reset(new Rhi::VulkanTexture(device, kTargetSize, kTargetSize, image, image_memory,
 		                                view, render_pass, framebuffer));
 
-		pipeline = create_fill_rect_pipeline(render_pass);
+		pipeline = create_fill_rect_pipeline(render_pass, VK_NULL_HANDLE);
 
 		VkCommandPoolCreateInfo pool_info{};
 		pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -530,7 +530,8 @@ struct TestTarget {
 		return pixels;
 	}
 
-	VkPipeline create_fill_rect_pipeline(VkRenderPass render_pass) const {
+	VkPipeline create_fill_rect_pipeline(VkRenderPass render_pass,
+	                                     VkDescriptorSetLayout set_layout) const {
 		const VkDevice device = context_.device;
 		const auto make_module = [device](const uint32_t* words, const size_t size) {
 			VkShaderModuleCreateInfo module_info{};
@@ -622,6 +623,13 @@ struct TestTarget {
 
 		VkPipelineLayoutCreateInfo layout_info{};
 		layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+		// A null set layout means the empty layout (fill_rect's real one); a
+		// set layout passed by the descriptor-binding testcase declares
+		// bindings the shader never samples, which Vulkan permits.
+		if (set_layout != VK_NULL_HANDLE) {
+			layout_info.setLayoutCount = 1;
+			layout_info.pSetLayouts = &set_layout;
+		}
 		VkPipelineLayout layout = VK_NULL_HANDLE;
 		if (vkCreatePipelineLayout(device, &layout_info, nullptr, &layout) != VK_SUCCESS) {
 			throw wexception("test_vulkan: vkCreatePipelineLayout failed");
@@ -668,10 +676,67 @@ struct TestTarget {
 	DISALLOW_COPY_AND_ASSIGN(TestTarget);
 };
 
+// The per-testcase upload environment for VulkanTexture::upload (WP-16):
+// the VulkanUploadContext (one-shot command pool + fence, staging buffer
+// grown on demand) and a linear clamp sampler.
+struct UploadFixture {
+	explicit UploadFixture(VulkanContext& context) : context_(context) {
+		const VkDevice device = context_.device;
+
+		VkCommandPoolCreateInfo pool_info{};
+		pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		pool_info.queueFamilyIndex = context_.queue_family;
+		if (vkCreateCommandPool(device, &pool_info, nullptr, &upload_context.command_pool) !=
+		    VK_SUCCESS) {
+			throw wexception("test_vulkan: vkCreateCommandPool (upload) failed");
+		}
+		upload_context.device = device;
+		upload_context.physical_device = context_.physical_device;
+		upload_context.queue = context_.queue;
+		VkFenceCreateInfo fence_info{};
+		fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+		fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+		if (vkCreateFence(device, &fence_info, nullptr, &upload_context.fence) != VK_SUCCESS) {
+			throw wexception("test_vulkan: vkCreateFence (upload) failed");
+		}
+
+		VkSamplerCreateInfo sampler_info{};
+		sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		sampler_info.magFilter = VK_FILTER_LINEAR;
+		sampler_info.minFilter = VK_FILTER_LINEAR;
+		sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+		sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sampler_info.maxLod = 0.0f;
+		if (vkCreateSampler(device, &sampler_info, nullptr, &sampler) != VK_SUCCESS) {
+			throw wexception("test_vulkan: vkCreateSampler failed");
+		}
+	}
+
+	~UploadFixture() {
+		const VkDevice device = context_.device;
+		vkDestroySampler(device, sampler, nullptr);
+		if (upload_context.staging_buffer != VK_NULL_HANDLE) {
+			vkUnmapMemory(device, upload_context.staging_memory);
+			vkDestroyBuffer(device, upload_context.staging_buffer, nullptr);
+			vkFreeMemory(device, upload_context.staging_memory, nullptr);
+		}
+		vkDestroyFence(device, upload_context.fence, nullptr);
+		vkDestroyCommandPool(device, upload_context.command_pool, nullptr);
+	}
+
+	VulkanContext& context_;
+	Rhi::VulkanUploadContext upload_context;
+	VkSampler sampler = VK_NULL_HANDLE;
+
+	DISALLOW_COPY_AND_ASSIGN(UploadFixture);
+};
+
 // Appends one quad (two triangles) in canonical clip space at depth 0.5 with
 // a uniform colour. The fill_rect shader bakes z into the vertex.
-void append_quad(std::vector<Vertex>& vertices,
-                 const float x0,
+void append_quad(std::vector<Vertex>& vertices,                 const float x0,
                  const float y0,
                  const float x1,
                  const float y1,
@@ -740,11 +805,11 @@ TESTSUITE_START(vulkan_command_buffer)
 /*
  * The whole recording path on one frame: clear, a viewport into the
  * canonical bottom-left quadrant (which exercises the SPIR-V Y-flip + the
- * negative-height viewport compensation), one arena-uploaded quad drawn with
- * the fill_rect pipeline, and the WP-15 skip rule on top (a pipeline that
- * requires descriptor bindings records nothing).
+ * flipped viewport compensation) and one arena-uploaded quad drawn with the
+ * fill_rect pipeline. Drawing a pipeline that requires descriptor bindings
+ * without a bound set is an error (WP-16), pinned separately below.
  */
-TESTCASE(records_a_flipped_viewport_draw_and_skips_unbindable_programs) {
+TESTCASE(records_a_flipped_viewport_draw) {
 	VulkanContext& context = VulkanContext::get();
 	if (!context.available()) {
 		return;
@@ -754,13 +819,9 @@ TESTCASE(records_a_flipped_viewport_draw_and_skips_unbindable_programs) {
 	TestTarget target(context);
 	Rhi::VulkanPipeline pipeline("fill_rect", Rhi::kBlendOpaque, /* requires_binding */ false,
 	                        target.pipeline);
-	// The same handle, but declared to require descriptor bindings: its draw
-	// must be skipped.
-	Rhi::VulkanPipeline unbindable("fill_rect", Rhi::kBlendOpaque, /* requires_binding */ true,
-	                          target.pipeline);
 
 	Rhi::VulkanCommandBuffer command_buffer(
-	   target.command_buffer, nullptr, target.target());
+	   context.device, target.command_buffer, nullptr, target.target());
 	command_buffer.begin_pass(target.texture.get(),
 	                          Rhi::PassClear{true, kClearR, kClearG, kClearB, 1.f});
 	command_buffer.set_viewport(Recti(16, 16, 32, 32));
@@ -769,14 +830,6 @@ TESTCASE(records_a_flipped_viewport_draw_and_skips_unbindable_programs) {
 	append_quad(vertices, -1.f, -1.f, 1.f, 1.f, 1.f, 0.f, 0.f);
 	target.vertex_buffer->update(vertices.data(), vertices.size() * sizeof(Vertex));
 	command_buffer.bind_pipeline(&pipeline);
-	command_buffer.bind_vertex_buffer(target.vertex_buffer.get());
-	command_buffer.draw(0, vertices.size());
-
-	// The skip rule: this green quad must not be recorded.
-	vertices.clear();
-	append_quad(vertices, -1.f, -1.f, 1.f, 1.f, 0.f, 1.f, 0.f);
-	target.vertex_buffer->update(vertices.data(), vertices.size() * sizeof(Vertex));
-	command_buffer.bind_pipeline(&unbindable);
 	command_buffer.bind_vertex_buffer(target.vertex_buffer.get());
 	command_buffer.draw(0, vertices.size());
 
@@ -812,7 +865,7 @@ TESTCASE(scissor_clips_to_the_flipped_rectangle) {
 	                        target.pipeline);
 
 	Rhi::VulkanCommandBuffer command_buffer(
-	   target.command_buffer, nullptr, target.target());
+	   context.device, target.command_buffer, nullptr, target.target());
 	command_buffer.begin_pass(target.texture.get(),
 	                          Rhi::PassClear{true, kClearR, kClearG, kClearB, 1.f});
 	command_buffer.set_viewport(Recti(0, 0, kTargetSize, kTargetSize));
@@ -871,7 +924,7 @@ TESTCASE(draw_offset_selects_vertices) {
 	                        target.pipeline);
 
 	Rhi::VulkanCommandBuffer command_buffer(
-	   target.command_buffer, nullptr, target.target());
+	   context.device, target.command_buffer, nullptr, target.target());
 	command_buffer.begin_pass(target.texture.get(),
 	                          Rhi::PassClear{true, kClearR, kClearG, kClearB, 1.f});
 	command_buffer.set_viewport(Recti(0, 0, kTargetSize, kTargetSize));
@@ -946,6 +999,261 @@ TESTCASE(arena_allocates_fresh_aligned_transient_regions) {
 	std::memcpy(region.mapped, pattern.data(), pattern.size());
 	check_equal(std::memcmp(region.mapped, pattern.data(), pattern.size()), 0);
 	arena.reset();
+}
+
+/*
+ * The texture upload path (WP-16): VulkanTexture::upload stages the pixels,
+ * transitions the image to shader-read-only and finishes before returning.
+ * The copyback asserts the image holds the uploaded bytes in the same row
+ * order (row 0 = the first uploaded row = shader v = 0), which is the
+ * canonical-orientation contract rhi.h pins for both backends.
+ */
+TESTCASE(texture_upload_is_byte_exact_and_row_ordered) {
+	VulkanContext& context = VulkanContext::get();
+	if (!context.available()) {
+		return;
+	}
+	const int errors_before = g_validation_errors;
+
+	constexpr uint32_t kTexW = 8;
+	constexpr uint32_t kTexH = 4;
+	UploadFixture fixture(context);
+	Rhi::VulkanTexture texture(context.device, kTexW, kTexH, Rhi::TextureFormat::kRGBA8,
+	                          Rhi::TextureFilter::kLinear, fixture.sampler,
+	                          &fixture.upload_context);
+
+	// Each row carries its own row index in the red channel, so a wrong row
+	// order is visible immediately.
+	std::vector<uint8_t> pixels(static_cast<size_t>(kTexW) * kTexH * 4);
+	for (uint32_t y = 0; y < kTexH; ++y) {
+		for (uint32_t x = 0; x < kTexW; ++x) {
+			const size_t i = (static_cast<size_t>(y) * kTexW + x) * 4;
+			pixels[i + 0] = static_cast<uint8_t>(y);
+			pixels[i + 1] = static_cast<uint8_t>(x);
+			pixels[i + 2] = 128;
+			pixels[i + 3] = 255;
+		}
+	}
+	texture.upload(pixels.data());
+
+	// Copy the image back through a one-shot command buffer.
+	const VkDevice device = context.device;
+	const VkDeviceSize copy_size = pixels.size();
+	VkBufferCreateInfo copy_buffer_info{};
+	copy_buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	copy_buffer_info.size = copy_size;
+	copy_buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	copy_buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	VkBuffer copy_buffer = VK_NULL_HANDLE;
+	if (vkCreateBuffer(device, &copy_buffer_info, nullptr, &copy_buffer) != VK_SUCCESS) {
+		throw wexception("test_vulkan: vkCreateBuffer (copyback) failed");
+	}
+	VkMemoryRequirements copy_requirements{};
+	vkGetBufferMemoryRequirements(device, copy_buffer, &copy_requirements);
+	VkMemoryAllocateInfo copy_allocate_info{};
+	copy_allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	copy_allocate_info.allocationSize = copy_requirements.size;
+	copy_allocate_info.memoryTypeIndex =
+	   find_memory_type(context.physical_device, copy_requirements.memoryTypeBits,
+	                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+	                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	VkDeviceMemory copy_memory = VK_NULL_HANDLE;
+	if (vkAllocateMemory(device, &copy_allocate_info, nullptr, &copy_memory) != VK_SUCCESS) {
+		throw wexception("test_vulkan: vkAllocateMemory (copyback) failed");
+	}
+	vkBindBufferMemory(device, copy_buffer, copy_memory, 0);
+
+	VkCommandBufferAllocateInfo allocate_info{};
+	allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocate_info.commandPool = fixture.upload_context.command_pool;
+	allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	allocate_info.commandBufferCount = 1;
+	VkCommandBuffer copy_commands = VK_NULL_HANDLE;
+	if (vkAllocateCommandBuffers(device, &allocate_info, &copy_commands) != VK_SUCCESS) {
+		throw wexception("test_vulkan: vkAllocateCommandBuffers (copyback) failed");
+	}
+	VkCommandBufferBeginInfo begin_info{};
+	begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(copy_commands, &begin_info);
+
+	const VkImageSubresourceRange subresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+	VkImageMemoryBarrier barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = texture.image();
+	barrier.subresourceRange = subresource;
+	barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	vkCmdPipelineBarrier(copy_commands, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+	                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+	VkBufferImageCopy region{};
+	region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	region.imageExtent = {kTexW, kTexH, 1};
+	vkCmdCopyImageToBuffer(copy_commands, texture.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+	                       copy_buffer, 1, &region);
+
+	barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	vkCmdPipelineBarrier(copy_commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
+	                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+	                     &barrier);
+	vkEndCommandBuffer(copy_commands);
+
+	VkSubmitInfo submit_info{};
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.commandBufferCount = 1;
+	submit_info.pCommandBuffers = &copy_commands;
+	// The upload above left the shared fence signaled; a submit needs it
+	// unsignaled.
+	vkResetFences(device, 1, &fixture.upload_context.fence);
+	if (vkQueueSubmit(context.queue, 1, &submit_info, fixture.upload_context.fence) != VK_SUCCESS) {
+		throw wexception("test_vulkan: vkQueueSubmit (copyback) failed");
+	}
+	vkWaitForFences(device, 1, &fixture.upload_context.fence, VK_TRUE, UINT64_MAX);
+
+	void* mapped = nullptr;
+	vkMapMemory(device, copy_memory, 0, VK_WHOLE_SIZE, 0, &mapped);
+	check_equal(std::memcmp(mapped, pixels.data(), pixels.size()), 0);
+	vkUnmapMemory(device, copy_memory);
+
+	vkDestroyBuffer(device, copy_buffer, nullptr);
+	vkFreeMemory(device, copy_memory, nullptr);
+	vkFreeCommandBuffers(device, fixture.upload_context.command_pool, 1, &copy_commands);
+
+	check_equal(g_validation_errors, errors_before);
+}
+
+/*
+ * The descriptor binding path (WP-16): a descriptor set whose layout
+ * declares one sampler (binding 0) and one uniform buffer (binding 1, after
+ * the sampler in the manifest's shared counter - the terrain-like
+ * translation). Drawing without a bound set throws; with the set bound the
+ * draw records and the descriptors pass validation.
+ */
+TESTCASE(descriptor_set_binding_allocates_writes_and_binds) {
+	VulkanContext& context = VulkanContext::get();
+	if (!context.available()) {
+		return;
+	}
+	const int errors_before = g_validation_errors;
+
+	TestTarget target(context);
+	UploadFixture fixture(context);
+
+	// A 4x4 texture (content is irrelevant - the fill_rect shader never
+	// samples; the descriptor write must still be valid).
+	std::vector<uint8_t> texels(4u * 4 * 4, 0x7fu);
+	Rhi::VulkanTexture texture(context.device, 4, 4, Rhi::TextureFormat::kRGBA8,
+	                          Rhi::TextureFilter::kLinear, fixture.sampler,
+	                          &fixture.upload_context);
+	texture.upload(texels.data());
+
+	// The descriptor set layout: sampler at binding 0 (fragment stage), a
+	// uniform buffer at binding 1 (vertex stage) - bindings the shader does
+	// not use, but the pipeline layout may declare.
+	VkDescriptorSetLayoutBinding layout_bindings[2] {};
+	layout_bindings[0].binding = 0;
+	layout_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	layout_bindings[0].descriptorCount = 1;
+	layout_bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	layout_bindings[1].binding = 1;
+	layout_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	layout_bindings[1].descriptorCount = 1;
+	layout_bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	VkDescriptorSetLayoutCreateInfo set_layout_info{};
+	set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	set_layout_info.bindingCount = 2;
+	set_layout_info.pBindings = layout_bindings;
+	VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+	if (vkCreateDescriptorSetLayout(context.device, &set_layout_info, nullptr, &set_layout) !=
+	    VK_SUCCESS) {
+		throw wexception("test_vulkan: vkCreateDescriptorSetLayout failed");
+	}
+	VkPipelineLayoutCreateInfo pipeline_layout_info{};
+	pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	pipeline_layout_info.setLayoutCount = 1;
+	pipeline_layout_info.pSetLayouts = &set_layout;
+	VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+	if (vkCreatePipelineLayout(context.device, &pipeline_layout_info, nullptr, &pipeline_layout) !=
+	    VK_SUCCESS) {
+		throw wexception("test_vulkan: vkCreatePipelineLayout failed");
+	}
+
+	const VkPipeline fill_rect_with_bindings =
+	   target.create_fill_rect_pipeline(target.texture->render_pass(), set_layout);
+	Rhi::VulkanPipeline pipeline("fill_rect", Rhi::kBlendOpaque, /* requires_binding */ true,
+	                        fill_rect_with_bindings);
+
+	// The manifest entry the set translates through: sampler index 0 at
+	// Vulkan binding 0, uniform buffer index 0 at Vulkan binding 1.
+	Rhi::ManifestProgram manifest{};
+	manifest.samplers.emplace_back("u_test", 0u);
+	manifest.uniform_blocks.push_back({"test_block", 1u, true, false});
+
+	Rhi::VulkanDescriptorSet descriptor_set(
+	   "fill_rect", &manifest, set_layout, pipeline_layout, /* requires_binding */ true);
+
+	// The per-frame descriptor pool (the device owns one; the headless test
+	// creates its own for the command buffer to allocate from).
+	VkDescriptorPoolSize pool_sizes[2] {};
+	pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	pool_sizes[0].descriptorCount = 8;
+	pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	pool_sizes[1].descriptorCount = 8;
+	VkDescriptorPoolCreateInfo pool_info{};
+	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	pool_info.maxSets = 8;
+	pool_info.poolSizeCount = 2;
+	pool_info.pPoolSizes = pool_sizes;
+	VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+	if (vkCreateDescriptorPool(context.device, &pool_info, nullptr, &descriptor_pool) !=
+	    VK_SUCCESS) {
+		throw wexception("test_vulkan: vkCreateDescriptorPool failed");
+	}
+
+	Rhi::VulkanCommandBuffer command_buffer(
+	   context.device, target.command_buffer, nullptr, target.target(), descriptor_pool, nullptr);
+	command_buffer.begin_pass(target.texture.get(),
+	                          Rhi::PassClear{true, kClearR, kClearG, kClearB, 1.f});
+	command_buffer.set_viewport(Recti(0, 0, kTargetSize, kTargetSize));
+
+	// A quad and a uniform buffer region (256 bytes, the arena alignment).
+	std::vector<Vertex> vertices;
+	append_quad(vertices, -1.f, -1.f, 1.f, 1.f, 0.f, 0.f, 1.f);
+	target.vertex_buffer->update(vertices.data(), vertices.size() * sizeof(Vertex));
+
+	command_buffer.bind_pipeline(&pipeline);
+	// Drawing without a bound descriptor set is an error, not a silent skip.
+	check_error(WException, "requires a bound descriptor set",
+	            [&command_buffer]() { command_buffer.draw(0, 6); });
+
+	descriptor_set.set_texture(0, &texture);
+	descriptor_set.set_uniform_buffer(0, target.vertex_buffer.get(), 0, 256);
+	command_buffer.bind_descriptor_set(&descriptor_set);
+	command_buffer.bind_vertex_buffer(target.vertex_buffer.get());
+	command_buffer.draw(0, vertices.size());
+
+	command_buffer.end_pass();
+	const std::vector<uint8_t> pixels = target.read_back();
+
+	// The blue quad covered the whole viewport.
+	check_pixel(pixels, 8, 8, 0, 0, 255);
+	check_pixel(pixels, 32, 32, 0, 0, 255);
+	check_pixel(pixels, 63, 63, 0, 0, 255);
+
+	check_equal(g_validation_errors, errors_before);
+
+	vkDestroyDescriptorPool(context.device, descriptor_pool, nullptr);
+	vkDestroyPipeline(context.device, fill_rect_with_bindings, nullptr);
+	vkDestroyPipelineLayout(context.device, pipeline_layout, nullptr);
+	vkDestroyDescriptorSetLayout(context.device, set_layout, nullptr);
 }
 
 TESTSUITE_END()

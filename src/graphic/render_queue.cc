@@ -172,6 +172,14 @@ RenderQueue& RenderQueue::instance() {
 	return render_queue;
 }
 
+void RenderQueue::set_dither_mask(const std::string& filepath) {
+	dither_program_->set_dither_mask(filepath);
+}
+
+void RenderQueue::release_dither_mask() {
+	dither_program_->clear_dither_mask();
+}
+
 void RenderQueue::set_terrain_noise_strength(const float strength) {
 	terrain_program_->set_noise_strength(strength);
 	dither_program_->set_noise_strength(strength);

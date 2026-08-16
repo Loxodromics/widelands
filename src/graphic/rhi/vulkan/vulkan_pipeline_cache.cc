@@ -129,6 +129,11 @@ struct VulkanPipelineCache::Impl {
 	VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
 	VkRenderPass render_pass = VK_NULL_HANDLE;
 
+	// The parsed bindings manifest (WP-13): the single source of truth for
+	// descriptor layouts and attribute locations, kept for the whole device
+	// lifetime so the command buffer can translate binding indices (WP-16).
+	VulkanManifest manifest;
+
 	// Per program (all in descriptor set 0): the set layout, the pipeline
 	// layout, and the pipelines keyed by blend state. Keys are the program
 	// name; every program in the pipeline catalog is present.
@@ -136,8 +141,8 @@ struct VulkanPipelineCache::Impl {
 		VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
 		VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
 		std::vector<std::pair<BlendState, VkPipeline>> pipelines;
-		// Whether the descriptor set layout declares any bindings (WP-15's
-		// draw-skip rule needs this; see has_descriptor_bindings()).
+		// Whether the descriptor set layout declares any bindings (the
+		// command buffer needs to know whether a draw requires a bound set).
 		bool has_bindings = false;
 	};
 	std::map<std::string, ProgramPipelines> programs;
@@ -157,7 +162,7 @@ VulkanPipelineCache::Impl::Impl(const VkDevice init_device,
 	// for vertex layouts, topology and blend state (WP-14). Both are loaded
 	// here and must agree - a mismatch is a startup error, not a runtime
 	// mystery.
-	const VulkanManifest manifest = load_manifest();
+	manifest = load_manifest();
 
 	VkPipelineCacheCreateInfo cache_create_info{};
 	cache_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
@@ -526,6 +531,19 @@ VulkanPipelineCache::descriptor_set_layout(const std::string& program_name) cons
 		throw wexception("Vulkan: no descriptor set layout for program '%s'", program_name.c_str());
 	}
 	return program_it->second.descriptor_set_layout;
+}
+
+VkPipelineLayout VulkanPipelineCache::pipeline_layout(const std::string& program_name) const {
+	const auto program_it = impl_->programs.find(program_name);
+	if (program_it == impl_->programs.end()) {
+		throw wexception("Vulkan: no pipeline layout for program '%s'", program_name.c_str());
+	}
+	return program_it->second.pipeline_layout;
+}
+
+const ManifestProgram*
+VulkanPipelineCache::manifest_program(const std::string& program_name) const {
+	return impl_->manifest.find_program(program_name);
 }
 
 bool VulkanPipelineCache::has_descriptor_bindings(const std::string& program_name) const {

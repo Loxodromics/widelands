@@ -20,6 +20,7 @@
 #define WL_GRAPHIC_GL_DITHER_PROGRAM_H
 
 #include <memory>
+#include <string>
 
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
@@ -28,6 +29,8 @@
 #include "graphic/rhi/rhi.h"
 #include "logic/map_objects/description_maintainer.h"
 #include "logic/map_objects/world/terrain_description.h"
+
+class Texture;
 
 class DitherProgram {
 public:
@@ -40,6 +43,13 @@ public:
 	          const FieldsToDraw& fields_to_draw,
 	          float z_value,
 	          const Widelands::Player*);
+
+	void set_dither_mask(const std::string& filepath);
+
+	// Frees the dither mask texture. The program is a singleton inside the
+	// static RenderQueue, so without this the mask's RHI texture would be
+	// destroyed at static teardown, after the Vulkan device is gone (WP-16).
+	void clear_dither_mask();
 
 	// Sets the terrain-noise strength multiplier (0 disables, 1 is the default
 	// look). Backlog item 2 / WP-8 of the renderer modernization plan.
@@ -162,6 +172,9 @@ private:
 	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
 	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
+
+	// The dither mask texture set via set_dither_mask(); null until then.
+	std::unique_ptr<Texture> dither_mask_;
 
 	// The terrain-noise strength multiplier, see set_noise_strength().
 	float noise_strength_ = 1.0f;

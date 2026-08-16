@@ -77,9 +77,9 @@ void WorkareaProgram::gl_draw(const BlitData& texture, const float z_value) {
 		state.z_value = z_value;
 		uniform_rhi_buffer_->update(&state, sizeof(state));
 
-		// workarea.fp never samples a texture; the binding is inert and kept
-		// only to match the legacy path's Gl::State bookkeeping (see §6.1).
-		descriptor_set_->set_texture(0, texture.texture);
+		// workarea.fp never samples a texture; the legacy path's texture
+		// binding is inert and deliberately not reproduced here (the Vulkan
+		// descriptor layout declares no sampler, so binding 0 is the UBO).
 		descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
 
 		auto& command_buffer = Rhi::command_buffer();

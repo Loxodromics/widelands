@@ -59,24 +59,26 @@ enum class Backend {
 	kVulkan,
 };
 
-// Texture storage formats. The renderer uploads exactly one today
-// (src/graphic/texture.cc): RGBA8 for images. These enum values are not
-// consumed until WP-16 (Vulkan texture upload); the GL backend creates
-// textures in graphic::Texture, not here. Add formats only when a caller
-// needs one.
+// Texture storage formats. The renderer uploads exactly two today
+// (src/graphic/texture.cc): RGBA8 for images, R8 for the single-channel
+// dither mask. Consumed by the Vulkan backend (WP-16); the GL backend
+// creates textures in graphic::Texture, not here.
+// Add formats only when a caller needs one.
 enum class TextureFormat {
 	kRGBA8,
+	kR8,
 };
 
 // Texture addressing mode. Every texture in the tree uses clamp-to-edge
 // (texture.cc); kept explicit so the contract does not assume it. Consumed by
-// WP-16 (Vulkan sampler/upload); the GL backend always clamps.
+// the Vulkan backend (WP-16 sampler/upload); the GL backend always clamps.
 enum class TextureWrap {
 	kClampToEdge,
 };
 
 // Texture filtering. Every texture uses linear filtering (texture.cc:220).
-// Consumed by WP-16 (Vulkan sampler); the GL backend always filters linearly.
+// Consumed by the Vulkan backend (WP-16 sampler); the GL backend always
+// filters linearly.
 enum class TextureFilter {
 	kLinear,
 	kNearest,
@@ -88,7 +90,7 @@ enum class TextureFilter {
 // interface would omit it and pay for the retrofit at every call site later
 // (plan WP-9, leak 1). A texture is kUndefined on creation and must be
 // transitioned before it is written or sampled. kUndefined is the initial
-// state (WP-16) and kPresentSource the swapchain-present state (WP-17); the GL
+// state and kPresentSource the swapchain-present state (WP-17); the GL
 // backend only ever observes kColorAttachment / kShaderReadOnly.
 enum class TextureLayout {
 	kUndefined,       // contents unspecified; the only valid destination
@@ -291,8 +293,9 @@ public:
 	// canonical row order (see the design notes). Callers that upload in
 	// row-reversed order (Gl::swap_rows today) are told which order by the
 	// contract; the backend compensates so that shader v=0 is the same texel
-	// row on every backend. Unused until WP-16: the GL backend creates and
-	// uploads textures in graphic::Texture (WP-10 moved only the draw path).
+	// row on every backend. The GL backend still creates and uploads its
+	// textures in graphic::Texture (WP-10 moved only the draw path); the
+	// Vulkan backend consumes this since WP-16.
 	virtual void upload(const void* pixels) = 0;
 
 	// Reads the whole texture back into 'pixels', RGBA8, row-major, 4 *
@@ -359,9 +362,9 @@ public:
 // re-pointed (set_texture / set_uniform_buffer) and re-bound freely between
 // draws, and each recorded draw reads the bindings that were current when it
 // was recorded — which is how the eight programs use it today (one set,
-// re-pointed per draw). The Vulkan backend (WP-16) must allocate the set's
-// storage from a per-frame descriptor pool at bind time so that mutating the
-// set after a recorded draw does not disturb that draw.
+// re-pointed per draw). The Vulkan backend allocates the set's storage from
+// a per-frame descriptor pool at bind time so that mutating the set after a
+// recorded draw does not disturb that draw.
 class DescriptorSet {
 public:
 	DescriptorSet() = default;
@@ -475,9 +478,10 @@ public:
 
 	// Factories. Resource creation may happen on the initializer thread (as
 	// texture creation does today); see the threading contract in the design
-	// notes. create_texture / create_texture_view are unused until WP-16 (the
-	// GL backend creates textures in graphic::Texture and models sub-textures
-	// via BlitData), and read_back_swapchain until WP-18.
+	// notes. create_texture is consumed by the Vulkan backend (WP-16);
+	// create_texture_view is unused (the GL backend creates textures in
+	// graphic::Texture and models sub-textures via BlitData), and
+	// read_back_swapchain until WP-18.
 	virtual std::unique_ptr<Texture> create_texture(const TextureDescriptor& desc) = 0;
 	virtual std::unique_ptr<Texture>
 	create_texture_view(Texture& parent, const Recti& subrect) = 0;

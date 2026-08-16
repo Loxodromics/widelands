@@ -107,8 +107,8 @@ VulkanArena::Region VulkanArena::allocate(const uint32_t size) {
 		VkBufferCreateInfo buffer_create_info{};
 		buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		buffer_create_info.size = chunk_size;
-		buffer_create_info.usage =
-		   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+		buffer_create_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+		                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 		buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		ArenaChunk chunk{};
 		chunk.size = chunk_size;
@@ -122,8 +122,11 @@ VulkanArena::Region VulkanArena::allocate(const uint32_t size) {
 		allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocate_info.allocationSize = memory_requirements.size;
 		allocate_info.memoryTypeIndex = memory_type_index_;
-		if (vkAllocateMemory(device_, &allocate_info, nullptr, &chunk.memory) != VK_SUCCESS) {
-			throw wexception("Vulkan: vkAllocateMemory failed for the staging arena");
+		const VkResult allocate_result =
+		   vkAllocateMemory(device_, &allocate_info, nullptr, &chunk.memory);
+		if (allocate_result != VK_SUCCESS) {
+			throw wexception("Vulkan: vkAllocateMemory failed for the staging arena (result %d)",
+			                 static_cast<int>(allocate_result));
 		}
 		if (vkBindBufferMemory(device_, chunk.buffer, chunk.memory, 0) != VK_SUCCESS) {
 			throw wexception("Vulkan: vkBindBufferMemory failed for the staging arena");

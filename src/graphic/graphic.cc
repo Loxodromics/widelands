@@ -162,6 +162,11 @@ void Graphic::initialize(const TraceGl& trace_gl,
 	// can unwind through the normal startup error path.
 	if (requested_backend == RenderBackend::kVulkan) {
 		vulkan_device_.reset(new Rhi::VulkanDevice(sdl_window_));
+		// Textures are created and uploaded through the RHI under Vulkan
+		// (WP-16), so the atlas builder sizes itself against the physical
+		// device's maxImageDimension2D rather than the hidden GL context's
+		// GL_MAX_TEXTURE_SIZE.
+		max_texture_size_ = static_cast<int>(vulkan_device_->max_texture_size());
 	}
 
 	// Record what was actually created, not what was requested (WP-3/WP-4 of
@@ -222,6 +227,10 @@ void Graphic::rebuild_texture_atlas() const {
 }
 
 Graphic::~Graphic() {
+	// The render queue is a function-local static whose own teardown would
+	// run after the graphics device is gone; release the one texture it owns
+	// (the dither mask) while the device is still alive (WP-16).
+	RenderQueue::instance().release_dither_mask();
 	delete g_animation_manager;
 	g_animation_manager = nullptr;
 	delete g_image_cache;

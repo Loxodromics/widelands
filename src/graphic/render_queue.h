@@ -177,6 +177,14 @@ public:
 	// Clear the render queue without drawing anything.
 	void clear();
 
+	void set_dither_mask(const std::string& filepath);
+
+	// Frees the dither mask's texture while the graphics device is still
+	// alive (WP-16): the queue is a function-local static, so without an
+	// explicit release the mask's RHI texture would die at static teardown,
+	// after the Vulkan device.
+	void release_dither_mask();
+
 	// Sets the terrain-noise strength multiplier forwarded to the terrain and
 	// dither programs (0 disables, 1 is the default look). Backlog item 2 /
 	// WP-8 of the renderer modernization plan.

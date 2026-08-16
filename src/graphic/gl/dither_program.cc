@@ -25,6 +25,7 @@
 #include "graphic/gl/terrain_lighting.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
+#include "graphic/image_io.h"
 #include "graphic/rhi/device.h"
 #include "graphic/rhi/pipeline_catalog.h"
 #include "graphic/texture.h"
@@ -132,6 +133,27 @@ bool DitherProgram::TerrainSet::contains(const Widelands::DescriptionIndex terra
 		}
 	}
 	return false;
+}
+
+void DitherProgram::set_dither_mask(const std::string& filepath) {
+	dither_mask_.reset(new Texture(load_image_as_sdl_surface(filepath, g_fs), true));
+	// The glTexParameteri block below is skipped on the core path because the
+	// RHI descriptor-set binding handles the texture as-is. It is redundant on
+	// *both* paths: Texture::init (texture.cc) already sets wrap=clamp-to-edge
+	// and filter=linear for every texture it creates, including this mask. It
+	// stays on the legacy path because decision 4 freezes that path; do not
+	// delete it (Phase C review, C12).
+	if (!Rhi::has_device()) {
+		Gl::State::instance().bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_CLAMP_TO_EDGE));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_CLAMP_TO_EDGE));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+	}
+}
+
+void DitherProgram::clear_dither_mask() {
+	dither_mask_.reset(nullptr);
 }
 
 void DitherProgram::add_vertex(const FieldsToDraw::Field& field,

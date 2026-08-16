@@ -597,6 +597,15 @@ WLApplication::~WLApplication() {
 	}
 	set_config_bool("maximized", g_gr->maximized());
 
+	// The font handler's texture cache must be destroyed while the graphics
+	// device (and its GL context) is still alive: its textures are freed by
+	// the RHI backends, and under Vulkan freeing an image after the device is
+	// gone is a validation error, not a silent leak (renderer modernization
+	// plan, WP-16).
+	assert(UI::g_fh);
+	delete UI::g_fh;
+	UI::g_fh = nullptr;
+
 	shutdown_hardware();
 	shutdown_settings();
 
@@ -609,10 +618,6 @@ WLApplication::~WLApplication() {
 
 	// To be proper, release our textdomain
 	i18n::release_textdomain();
-
-	assert(UI::g_fh);
-	delete UI::g_fh;
-	UI::g_fh = nullptr;
 
 	TTF_Quit();  // TODO(unknown): not here
 

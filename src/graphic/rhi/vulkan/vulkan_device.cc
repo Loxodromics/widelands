@@ -55,6 +55,11 @@ constexpr bool kEnableValidation = true;
 // chunks when a frame exceeds it.
 constexpr VkDeviceSize kInitialArenaSize = 32u * 1024u * 1024u;
 
+// The floor the renderer needs from maxImageDimension2D - the same number as
+// graphic.h's kMinimumSizeForTextures (the atlas builder throws below it).
+// Duplicated locally so the RHI library does not depend on the graphic layer.
+constexpr uint32_t kMinimumVulkanTextureSize = 2048;
+
 // Names the VkResult codes the bootstrap can surface; anything else is
 // reported numerically. A hand-rolled subset rather than the full
 // vulkan_to_string.hpp, which drags in the complete C++ Vulkan bindings.
@@ -252,6 +257,28 @@ struct VulkanDevice::Impl {
 	// wait in begin_frame.
 	std::unique_ptr<VulkanArena> arena;
 
+	// WP-16: the texture-upload machinery. One-shot command buffers come from
+	// a dedicated pool (never the frame's), and the single fence serializes
+	// uploads and makes them finish before a later frame samples the texture.
+	VulkanUploadContext upload_context;
+
+	// WP-16: the per-frame descriptor pool. Sets are allocated at
+	// bind_descriptor_set time and the pool resets in begin_frame alongside
+	// the arena - same lifetime argument (the previous frame's submit fence
+	// has been waited, so no recorded draw references a set from this pool).
+	VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+
+	// The samplers the descriptor writes reference: one per texture filter
+	// (every texture in the tree clamps to edge). Created once at device
+	// startup; the textures share them by filter.
+	VkSampler sampler_linear = VK_NULL_HANDLE;
+	VkSampler sampler_nearest = VK_NULL_HANDLE;
+
+	// A 1x1 white texture bound wherever the RHI records a null texture (the
+	// blit program's absent mask). Vulkan validation rejects a null image
+	// view in a statically used binding, so the write substitutes this.
+	std::unique_ptr<VulkanTexture> dummy_texture;
+
 	// Set when begin_frame dropped the frame (swapchain recreation); end_frame
 	// then submits nothing.
 	bool frame_dropped_ = false;
@@ -259,6 +286,12 @@ struct VulkanDevice::Impl {
 	// The swapchain image index the current frame acquired and end_frame must
 	// present.
 	uint32_t frame_image_index_ = 0;
+
+	// The physical device's maxImageDimension2D (WP-16): what the atlas
+	// builder sizes itself against under Vulkan.
+	uint32_t max_texture_size_ = 0;
+
+	VkSampler create_sampler(TextureFilter filter) const;
 };
 
 VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
@@ -471,9 +504,86 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	arena.reset(new VulkanArena(
 	   device, find_arena_memory_type(physical_device), arena_alignment, kInitialArenaSize));
 
+	max_texture_size_ = properties.limits.maxImageDimension2D;
+	if (max_texture_size_ < kMinimumVulkanTextureSize) {
+		throw wexception("Vulkan: maxImageDimension2D (%u) is below the %u the renderer needs",
+		                 max_texture_size_, kMinimumVulkanTextureSize);
+	}
+
+	// The upload path (WP-16): a dedicated one-shot command pool and a fence
+	// that serializes uploads. The physical device travels with it so a
+	// sampled texture can pick its own device-local memory type.
+	VkCommandPoolCreateInfo upload_pool_create_info{};
+	upload_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+	upload_pool_create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT |
+	                                VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+	upload_pool_create_info.queueFamilyIndex = queue_family;
+	check_vulkan_result(
+	   vkCreateCommandPool(device, &upload_pool_create_info, nullptr, &upload_context.command_pool),
+	   "vkCreateCommandPool (upload)");
+	upload_context.device = device;
+	upload_context.physical_device = physical_device;
+	upload_context.queue = queue;
+	VkFenceCreateInfo upload_fence_create_info{};
+	upload_fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	upload_fence_create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+	check_vulkan_result(
+	   vkCreateFence(device, &upload_fence_create_info, nullptr, &upload_context.fence),
+	   "vkCreateFence (upload)");
+
+	// The per-frame descriptor pool (WP-16). The counts are generous upper
+	// bounds for one frame of Widelands: sets are allocated per
+	// bind_descriptor_set call (draw batches), a set carries at most 2
+	// samplers + 1 uniform buffer. The pool resets in begin_frame.
+	VkDescriptorPoolSize pool_sizes[2] {};
+	pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	pool_sizes[0].descriptorCount = 4096;
+	pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	pool_sizes[1].descriptorCount = 4096;
+	VkDescriptorPoolCreateInfo descriptor_pool_create_info{};
+	descriptor_pool_create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	descriptor_pool_create_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	descriptor_pool_create_info.maxSets = 4096;
+	descriptor_pool_create_info.poolSizeCount = 2;
+	descriptor_pool_create_info.pPoolSizes = pool_sizes;
+	check_vulkan_result(
+	   vkCreateDescriptorPool(device, &descriptor_pool_create_info, nullptr, &descriptor_pool),
+	   "vkCreateDescriptorPool");
+
+	sampler_linear = create_sampler(TextureFilter::kLinear);
+	sampler_nearest = create_sampler(TextureFilter::kNearest);
+
+	// The 1x1 white dummy texture for null texture bindings (the blit
+	// program's absent mask), uploaded once at startup through the real
+	// upload path.
+	const uint8_t kWhitePixel[4] = {255, 255, 255, 255};
+	dummy_texture.reset(new VulkanTexture(
+	   device, 1, 1, TextureFormat::kRGBA8, TextureFilter::kLinear, sampler_linear, &upload_context));
+	dummy_texture->upload(kWhitePixel);
+
 	if (!recreate_swapchain()) {
 		throw wexception("Vulkan: the window has no drawable size.");
 	}
+}
+
+VkSampler VulkanDevice::Impl::create_sampler(const TextureFilter filter) const {
+	// Every texture in the tree clamps to edge (texture.cc sets
+	// GL_CLAMP_TO_EDGE for all of them), so the wrap mode is a constant; only
+	// the filter varies, and the RHI declares exactly two of those.
+	VkSamplerCreateInfo sampler_create_info{};
+	sampler_create_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	sampler_create_info.magFilter =
+	   filter == TextureFilter::kLinear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+	sampler_create_info.minFilter = sampler_create_info.magFilter;
+	sampler_create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+	sampler_create_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	sampler_create_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	sampler_create_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	sampler_create_info.maxLod = 0.0f;
+	VkSampler sampler = VK_NULL_HANDLE;
+	check_vulkan_result(vkCreateSampler(device, &sampler_create_info, nullptr, &sampler),
+	                    "vkCreateSampler");
+	return sampler;
 }
 
 VulkanDevice::Impl::~Impl() {
@@ -509,6 +619,21 @@ VulkanDevice::Impl::~Impl() {
 		vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, nullptr);
 	}
 	vkDestroySurfaceKHR(instance, surface, nullptr);
+	// WP-16 objects: the dummy texture (whose upload command buffers are long
+	// submitted and waited), the descriptor pool, the samplers, the upload
+	// staging buffer, fence and pool. All die after the idle wait and before
+	// the device.
+	dummy_texture.reset();
+	vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+	vkDestroySampler(device, sampler_linear, nullptr);
+	vkDestroySampler(device, sampler_nearest, nullptr);
+	if (upload_context.staging_buffer != VK_NULL_HANDLE) {
+		vkUnmapMemory(device, upload_context.staging_memory);
+		vkDestroyBuffer(device, upload_context.staging_buffer, nullptr);
+		vkFreeMemory(device, upload_context.staging_memory, nullptr);
+	}
+	vkDestroyFence(device, upload_context.fence, nullptr);
+	vkDestroyCommandPool(device, upload_context.command_pool, nullptr);
 	vkDestroyDevice(device, nullptr);
 	vkDestroyInstance(instance, nullptr);
 }
@@ -741,6 +866,11 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 	check_vulkan_result(vkWaitForFences(device, 1, &frame_fence, VK_TRUE, UINT64_MAX),
 	                    "vkWaitForFences");
 	arena->reset();
+	// The descriptor pool has the same lifetime as the arena (WP-16): every
+	// set a recorded draw references came from this pool, and the fence wait
+	// above guarantees the queue is done with all of them.
+	check_vulkan_result(vkResetDescriptorPool(device, descriptor_pool, 0),
+	                    "vkResetDescriptorPool");
 
 	check_vulkan_result(vkResetFences(device, 1, &acquire_fence), "vkResetFences");
 	uint32_t image_index = 0;
@@ -778,8 +908,8 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 	frame_image_index_ = image_index;
 	const VulkanCommandBuffer::Target target{
 	   pipelines->render_pass(), framebuffers[image_index], extent, 2};
-	return std::unique_ptr<CommandBuffer>(
-	   new VulkanCommandBuffer(command_buffer, pipelines.get(), target));
+	return std::unique_ptr<CommandBuffer>(new VulkanCommandBuffer(
+	   device, command_buffer, pipelines.get(), target, descriptor_pool, dummy_texture.get()));
 }
 
 void VulkanDevice::Impl::end_frame(std::unique_ptr<CommandBuffer> command_buffer_wrapper) {
@@ -826,6 +956,10 @@ Backend VulkanDevice::backend() const {
 	return Backend::kVulkan;
 }
 
+uint32_t VulkanDevice::max_texture_size() const {
+	return impl_->max_texture_size_;
+}
+
 std::unique_ptr<CommandBuffer> VulkanDevice::begin_frame() {
 	std::unique_ptr<CommandBuffer> command_buffer = impl_->begin_frame();
 	push_command_buffer(command_buffer.get());
@@ -863,8 +997,20 @@ void VulkanDevice::read_back_swapchain(uint8_t* /* pixels */) {
 	throw wexception("Rhi::VulkanDevice::read_back_swapchain: swapchain readback is WP-18");
 }
 
-std::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDescriptor& /* desc */) {
-	throw wexception("Rhi::VulkanDevice::create_texture: texture creation and upload are WP-16");
+std::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDescriptor& desc) {
+	if (desc.width == 0 || desc.height == 0) {
+		throw wexception("Rhi::VulkanDevice::create_texture: zero-size texture");
+	}
+	if (desc.width > impl_->max_texture_size_ || desc.height > impl_->max_texture_size_) {
+		throw wexception("Rhi::VulkanDevice::create_texture: %ux%u exceeds maxImageDimension2D %u",
+		                 desc.width, desc.height, impl_->max_texture_size_);
+	}
+	const VkSampler sampler = desc.filter == TextureFilter::kLinear ?
+	                             impl_->sampler_linear :
+	                             impl_->sampler_nearest;
+	return std::unique_ptr<Texture>(new VulkanTexture(impl_->device, desc.width, desc.height,
+	                                                  desc.format, desc.filter, sampler,
+	                                                  &impl_->upload_context));
 }
 
 std::unique_ptr<Texture>
@@ -887,8 +1033,19 @@ std::unique_ptr<Pipeline> VulkanDevice::create_pipeline(const PipelineDescriptor
 
 std::unique_ptr<DescriptorSet> VulkanDevice::create_descriptor_set(const Pipeline& pipeline) {
 	const VulkanPipeline& vulkan_pipeline = static_cast<const VulkanPipeline&>(pipeline);
-	return std::unique_ptr<DescriptorSet>(
-	   new VulkanDescriptorSet(vulkan_pipeline.requires_binding()));
+	const std::string& program_name = vulkan_pipeline.program_name();
+	// The set carries the pieces the command buffer's bind path needs: the
+	// manifest entry (binding translation), the set layout (allocation) and
+	// the pipeline layout (binding). All come from the pipeline cache, which
+	// built them from the manifest at startup.
+	const ManifestProgram* manifest = impl_->pipelines->manifest_program(program_name);
+	if (manifest == nullptr) {
+		throw wexception("Vulkan: program '%s' has no bindings manifest entry",
+		                 program_name.c_str());
+	}
+	return std::unique_ptr<DescriptorSet>(new VulkanDescriptorSet(
+	   program_name, manifest, impl_->pipelines->descriptor_set_layout(program_name),
+	   impl_->pipelines->pipeline_layout(program_name), vulkan_pipeline.requires_binding()));
 }
 
 }  // namespace Rhi
