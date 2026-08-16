@@ -83,12 +83,21 @@ void VulkanCommandBuffer::begin_pass(const Texture* target, const PassClear& cle
 		framebuffer = screen_target_.framebuffer;
 		extent = screen_target_.extent;
 		clear_value_count = screen_target_.clear_value_count;
+		offscreen_pass_ = false;
+		current_target_ = nullptr;
 	} else {
-		const VulkanTexture* texture = static_cast<const VulkanTexture*>(target);
+		VulkanTexture* texture = const_cast<VulkanTexture*>(static_cast<const VulkanTexture*>(target));
+		// The framebuffer is built on first use, so a texture that is never
+		// drawn into never allocates one. The const_cast is the RHI
+		// signature's doing (begin_pass takes a const Texture*); ensure_*
+		// mutates lazily.
+		texture->ensure_framebuffer();
 		render_pass = texture->render_pass();
 		framebuffer = texture->framebuffer();
 		extent = {texture->width(), texture->height()};
 		clear_value_count = 1;
+		offscreen_pass_ = true;
+		current_target_ = texture;
 	}
 	if (render_pass == VK_NULL_HANDLE || framebuffer == VK_NULL_HANDLE) {
 		throw wexception("Vulkan: begin_pass without a valid render target");
@@ -96,7 +105,10 @@ void VulkanCommandBuffer::begin_pass(const Texture* target, const PassClear& cle
 
 	// The screen render pass clears colour and depth via loadOp; depth always
 	// clears to 1.0 = far (RHI_INTERFACE.md §2.5). The clear colour comes from
-	// the caller's PassClear.
+	// the caller's PassClear. The offscreen pass bakes LOAD, so any clear
+	// values passed for it are ignored - texture.cc always draws over
+	// existing contents (clear=false), which is the contract the pass is
+	// built for.
 	VkClearValue clear_values[2] {};
 	clear_values[0].color = {{clear.r, clear.g, clear.b, clear.a}};
 	clear_values[1].depthStencil = {1.0f, 0};
@@ -116,6 +128,14 @@ void VulkanCommandBuffer::begin_pass(const Texture* target, const PassClear& cle
 	// A new pass starts with the scissor "disabled" (covering the whole
 	// framebuffer), matching the GL scissor-test default.
 	record_scissor(Recti(0, 0, static_cast<int>(extent.width), static_cast<int>(extent.height)));
+
+	// A texture-target pass starts with the full-extent viewport, exactly
+	// like GlCoreCommandBuffer::begin_pass (the screen path gets its viewport
+	// from RenderQueue::set_viewport instead). For the full extent the
+	// canonical -> Vulkan flip maps the rect onto itself.
+	if (target != nullptr) {
+		set_viewport(Recti(0, 0, static_cast<int>(extent.width), static_cast<int>(extent.height)));
+	}
 }
 
 void VulkanCommandBuffer::set_viewport(const Recti& viewport) {
@@ -154,7 +174,13 @@ void VulkanCommandBuffer::bind_pipeline(const Pipeline* pipeline) {
 			throw wexception("Vulkan: cache-resolved pipeline '%s' with no pipeline cache",
 			                 vulkan_pipeline->program_name().c_str());
 		}
-		handle = cache_->pipeline(vulkan_pipeline->program_name(), vulkan_pipeline->blend());
+		// Pipelines bake in their render pass, so a draw into a texture
+		// resolves the offscreen variant (WP-16b): same program and blend,
+		// depth test off, against the colour-only pass.
+		handle = offscreen_pass_ ?
+		            cache_->pipeline_for_offscreen(vulkan_pipeline->program_name(),
+		                                           vulkan_pipeline->blend()) :
+		            cache_->pipeline(vulkan_pipeline->program_name(), vulkan_pipeline->blend());
 	}
 	vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, handle);
 	current_pipeline_ = vulkan_pipeline;
@@ -295,9 +321,49 @@ void VulkanCommandBuffer::draw(const uint32_t vertex_offset, const uint32_t vert
 	vkCmdDraw(command_buffer_, vertex_count, 1, vertex_offset, 0);
 }
 
-void VulkanCommandBuffer::transition(const Texture* /* texture */, const TextureLayout /* layout */) {
-	// Image-layout barriers are WP-16b's; the screen render pass owns its
-	// attachment transitions, and nothing renders into a VulkanTexture yet.
+void VulkanCommandBuffer::transition(const Texture* texture, const TextureLayout layout) {
+	// The explicit resource-state contract (WP-16b): a real image-layout
+	// barrier, recorded outside any render pass. The texture tracks the
+	// layout it is currently in (upload, the render pass's final layout and
+	// this method all update it), so a redundant transition - the
+	// post-pass kShaderReadOnly after a pass whose finalLayout is already
+	// shader-read-only - records nothing.
+	VulkanTexture* vulkan_texture = const_cast<VulkanTexture*>(static_cast<const VulkanTexture*>(texture));
+	VkImageLayout vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+	switch (layout) {
+	case TextureLayout::kUndefined:
+		vk_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+		break;
+	case TextureLayout::kColorAttachment:
+		vk_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		break;
+	case TextureLayout::kShaderReadOnly:
+		vk_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		break;
+	case TextureLayout::kPresentSource:
+		vk_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		break;
+	}
+	if (vk_layout == vulkan_texture->current_layout()) {
+		return;
+	}
+
+	const VkImageSubresourceRange subresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+	VkImageMemoryBarrier barrier{};
+	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image = vulkan_texture->image();
+	barrier.subresourceRange = subresource;
+	const LayoutTransitionInfo source = layout_transition_source(vulkan_texture->current_layout());
+	const LayoutTransitionInfo destination = layout_transition_destination(vk_layout);
+	barrier.srcAccessMask = source.access;
+	barrier.dstAccessMask = destination.access;
+	barrier.oldLayout = vulkan_texture->current_layout();
+	barrier.newLayout = vk_layout;
+	vkCmdPipelineBarrier(command_buffer_, source.stage, destination.stage, 0, 0, nullptr, 0,
+	                     nullptr, 1, &barrier);
+	vulkan_texture->set_current_layout(vk_layout);
 }
 
 void VulkanCommandBuffer::end_pass() {
@@ -306,6 +372,14 @@ void VulkanCommandBuffer::end_pass() {
 	}
 	vkCmdEndRenderPass(command_buffer_);
 	pass_open_ = false;
+	if (current_target_ != nullptr) {
+		// The offscreen render pass leaves its attachment shader-read-only;
+		// record that so the caller's post-pass transition(kShaderReadOnly)
+		// becomes a no-op and later transitions start from the real layout.
+		current_target_->set_current_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		current_target_ = nullptr;
+	}
+	offscreen_pass_ = false;
 }
 
 bool VulkanCommandBuffer::pass_open() const {
@@ -319,9 +393,18 @@ void VulkanCommandBuffer::finish() {
 	if (pass_open_) {
 		vkCmdEndRenderPass(command_buffer_);
 		pass_open_ = false;
+		if (current_target_ != nullptr) {
+			current_target_->set_current_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			current_target_ = nullptr;
+		}
+		offscreen_pass_ = false;
 	}
 	vkEndCommandBuffer(command_buffer_);
 	finished_ = true;
+}
+
+VkCommandBuffer VulkanCommandBuffer::vk_command_buffer() const {
+	return command_buffer_;
 }
 
 void VulkanCommandBuffer::record_scissor(const Recti& rect) {

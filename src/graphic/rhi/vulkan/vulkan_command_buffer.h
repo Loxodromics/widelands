@@ -39,7 +39,8 @@ class VulkanTexture;
 // into a VkCommandBuffer. The pass state (render pass, framebuffer, extent)
 // comes from a Target so the recording logic is target-agnostic - the screen
 // variant carries the acquired swapchain framebuffer, the offscreen variant
-// (the headless test, WP-16b) a VulkanTexture.
+// (WP-16b's immediate render-to-texture submits and the headless test) a
+// VulkanTexture.
 //
 // Viewport and scissor are dynamic pipeline state (WP-14). The canonical
 // coordinates (RHI_INTERFACE.md §2.4: clip Y up, window origin bottom-left)
@@ -55,6 +56,12 @@ class VulkanTexture;
 // writes the descriptors and records vkCmdBindDescriptorSets. A draw of a
 // pipeline whose layout declares bindings without a bound set is an error,
 // not a skip - the WP-15 skip rule is gone.
+//
+// WP-16b offscreen passes: a pass targeting a texture builds the texture's
+// framebuffer on first use, records the full-extent viewport, resolves the
+// draw's pipeline through the offscreen variants (depth off, colour-only
+// pass), and implements transition() as a real image-layout barrier with the
+// texture's tracked layout as the source.
 class VulkanCommandBuffer : public CommandBuffer {
 public:
 	// A render target to record into.
@@ -95,6 +102,10 @@ public:
 	// by the device's end_frame before submitting; a no-op once finished.
 	void finish();
 
+	// The underlying VkCommandBuffer, for the device's submit and return to
+	// the pool (WP-16b's offscreen submits).
+	VkCommandBuffer vk_command_buffer() const;
+
 private:
 	void record_scissor(const Recti& rect);
 
@@ -110,18 +121,22 @@ private:
 	const VulkanPipeline* current_pipeline_ = nullptr;
 	const VulkanDescriptorSet* current_descriptor_set_ = nullptr;
 
+	// The render pass currently open: null while none is. offscreen_pass_
+	// says whether it targets a texture (pipeline resolution and the
+	// end_pass layout bookkeeping branch on it); current_target_ is the
+	// texture itself, so end_pass can record the pass's final layout.
+	bool offscreen_pass_ = false;
+	VulkanTexture* current_target_ = nullptr;
+
 	bool pass_open_ = false;
 	bool finished_ = false;
 
 	DISALLOW_COPY_AND_ASSIGN(VulkanCommandBuffer);
 };
 
-// The command buffer for paths Vulkan does not implement yet (WP-15): the
-// immediate render-to-texture path (texture.cc's do_* methods, WP-16b) and
-// frames dropped by a swapchain recreation. Every method is a no-op so the
-// game keeps running - textures rendered into this way stay blank, which is
-// invisible while nothing samples textures (no descriptor binding until
-// WP-16).
+// The command buffer for paths Vulkan does not implement yet: frames dropped
+// by a swapchain recreation (WP-15). Every method is a no-op so the game
+// keeps running through the dropped frame.
 class VulkanNoOpCommandBuffer : public CommandBuffer {
 public:
 	VulkanNoOpCommandBuffer() = default;

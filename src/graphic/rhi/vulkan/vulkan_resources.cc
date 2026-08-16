@@ -131,13 +131,47 @@ VkFormat to_vk_format(const TextureFormat format) {
 
 }  // namespace
 
+LayoutTransitionInfo layout_transition_source(const VkImageLayout layout) {
+	switch (layout) {
+	case VK_IMAGE_LAYOUT_UNDEFINED:
+		return {VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0};
+	case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+		return {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT};
+	case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+		return {VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT};
+	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+		return {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT};
+	default:
+		throw wexception("Vulkan: no transition source stage/access for image layout %d",
+		                 static_cast<int>(layout));
+	}
+}
+
+LayoutTransitionInfo layout_transition_destination(const VkImageLayout layout) {
+	switch (layout) {
+	case VK_IMAGE_LAYOUT_UNDEFINED:
+		return {VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0};
+	case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+		return {VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT};
+	case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+		return {VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT};
+	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+		return {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT};
+	default:
+		throw wexception("Vulkan: no transition destination stage/access for image layout %d",
+		                 static_cast<int>(layout));
+	}
+}
+
 VulkanTexture::VulkanTexture(const VkDevice device,
                              const uint32_t width,
                              const uint32_t height,
                              const TextureFormat format,
                              const TextureFilter /* filter */,
                              const VkSampler sampler,
-                             VulkanUploadContext* const upload)
+                             VulkanUploadContext* const upload,
+                             const VkRenderPass render_pass)
    : device_(device),
      width_(width),
      height_(height),
@@ -146,15 +180,19 @@ VulkanTexture::VulkanTexture(const VkDevice device,
      image_memory_(VK_NULL_HANDLE),
      view_(VK_NULL_HANDLE),
      sampler_(sampler),
-     render_pass_(VK_NULL_HANDLE),
+     render_pass_(render_pass),
      framebuffer_(VK_NULL_HANDLE),
+     owns_render_pass_(false),
      upload_(upload),
      current_layout_(VK_IMAGE_LAYOUT_UNDEFINED) {
 	// A sampled texture: TRANSFER_DST for upload, SAMPLED for descriptor
 	// binding, TRANSFER_SRC so the WP-18 read_back copy (and the headless
-	// test's copyback) can read it. No colour-attachment usage - a texture
-	// that becomes a render target is created by WP-16b's offscreen path,
-	// not here.
+	// test's copyback) can read it. Since WP-16b every RGBA8 texture is also
+	// a potential immediate render-to-texture target (texture.cc's do_*
+	// methods draw into arbitrary textures), so RGBA8 images additionally get
+	// colour-attachment usage; the framebuffer itself is built lazily by
+	// ensure_framebuffer. The R8 dither mask is never drawn into and keeps
+	// the sampled-only usage.
 	VkImageCreateInfo image_create_info{};
 	image_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	image_create_info.imageType = VK_IMAGE_TYPE_2D;
@@ -166,6 +204,9 @@ VulkanTexture::VulkanTexture(const VkDevice device,
 	image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
 	image_create_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
 	                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	if (format_ == VK_FORMAT_R8G8B8A8_UNORM) {
+		image_create_info.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+	}
 	image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	if (vkCreateImage(device, &image_create_info, nullptr, &image_) != VK_SUCCESS) {
 		throw wexception("Vulkan: vkCreateImage failed for a %ux%u texture", width, height);
@@ -235,6 +276,7 @@ VulkanTexture::VulkanTexture(const VkDevice device,
      sampler_(VK_NULL_HANDLE),
      render_pass_(render_pass),
      framebuffer_(framebuffer),
+     owns_render_pass_(true),
      upload_(nullptr),
      current_layout_(VK_IMAGE_LAYOUT_UNDEFINED) {
 }
@@ -243,7 +285,7 @@ VulkanTexture::~VulkanTexture() {
 	if (framebuffer_ != VK_NULL_HANDLE) {
 		vkDestroyFramebuffer(device_, framebuffer_, nullptr);
 	}
-	if (render_pass_ != VK_NULL_HANDLE) {
+	if (owns_render_pass_ && render_pass_ != VK_NULL_HANDLE) {
 		vkDestroyRenderPass(device_, render_pass_, nullptr);
 	}
 	vkDestroyImageView(device_, view_, nullptr);
@@ -362,9 +404,12 @@ void VulkanTexture::upload(const void* pixels) {
 		throw wexception("Vulkan: vkBeginCommandBuffer failed for a texture upload");
 	}
 
-	// UNDEFINED -> TRANSFER_DST_OPTIMAL, copy, TRANSFER_DST_OPTIMAL ->
-	// SHADER_READ_ONLY_OPTIMAL: the image is sampled by later frames, so the
-	// second transition is not deferred to a future submit.
+	// The source layout is whatever the texture was last left in (WP-16b):
+	// UNDEFINED for a fresh texture, SHADER_READ_ONLY for an uploaded one -
+	// and SHADER_READ_ONLY again for a texture that was drawn into and is
+	// re-uploaded through unlock(Unlock_Update) (the minimap flow), because
+	// the offscreen render pass leaves its attachment shader-read-only. A
+	// hard UNDEFINED oldLayout would trip the validation layer on re-upload.
 	const VkImageSubresourceRange subresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 	VkImageMemoryBarrier barrier{};
 	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -372,12 +417,15 @@ void VulkanTexture::upload(const void* pixels) {
 	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	barrier.image = image_;
 	barrier.subresourceRange = subresource;
-	barrier.srcAccessMask = 0;
-	barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	const LayoutTransitionInfo source = layout_transition_source(current_layout_);
+	const LayoutTransitionInfo transfer_dst =
+	   layout_transition_destination(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	barrier.srcAccessMask = source.access;
+	barrier.dstAccessMask = transfer_dst.access;
+	barrier.oldLayout = current_layout_;
 	barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	vkCmdPipelineBarrier(upload_commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-	                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+	vkCmdPipelineBarrier(upload_commands, source.stage, transfer_dst.stage, 0, 0, nullptr, 0, nullptr,
+	                     1, &barrier);
 
 	VkBufferImageCopy copy_region{};
 	copy_region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -385,13 +433,14 @@ void VulkanTexture::upload(const void* pixels) {
 	vkCmdCopyBufferToImage(upload_commands, context.staging_buffer, image_,
 	                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
 
-	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-	barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+	const LayoutTransitionInfo shader_read =
+	   layout_transition_destination(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	barrier.srcAccessMask = transfer_dst.access;
+	barrier.dstAccessMask = shader_read.access;
 	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-	vkCmdPipelineBarrier(upload_commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
-	                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-	                     &barrier);
+	vkCmdPipelineBarrier(upload_commands, transfer_dst.stage, shader_read.stage, 0, 0, nullptr, 0,
+	                     nullptr, 1, &barrier);
 	if (vkEndCommandBuffer(upload_commands) != VK_SUCCESS) {
 		throw wexception("Vulkan: vkEndCommandBuffer failed for a texture upload");
 	}
@@ -441,6 +490,37 @@ VkFramebuffer VulkanTexture::framebuffer() const {
 
 VkImageLayout VulkanTexture::current_layout() const {
 	return current_layout_;
+}
+
+void VulkanTexture::ensure_framebuffer() {
+	if (framebuffer_ != VK_NULL_HANDLE) {
+		return;
+	}
+	if (render_pass_ == VK_NULL_HANDLE) {
+		throw wexception(
+		   "Vulkan: texture %ux%u has no offscreen render pass and cannot be a render target",
+		   width_, height_);
+	}
+	// Built lazily on the first draw into the texture: most textures are
+	// never render targets, and a framebuffer per texture costs little while
+	// thousands of them would cost a lot.
+	VkFramebufferCreateInfo framebuffer_create_info{};
+	framebuffer_create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+	framebuffer_create_info.renderPass = render_pass_;
+	framebuffer_create_info.attachmentCount = 1;
+	framebuffer_create_info.pAttachments = &view_;
+	framebuffer_create_info.width = width_;
+	framebuffer_create_info.height = height_;
+	framebuffer_create_info.layers = 1;
+	if (vkCreateFramebuffer(device_, &framebuffer_create_info, nullptr, &framebuffer_) !=
+	    VK_SUCCESS) {
+		throw wexception("Vulkan: vkCreateFramebuffer failed for a %ux%u render target", width_,
+		                 height_);
+	}
+}
+
+void VulkanTexture::set_current_layout(const VkImageLayout layout) {
+	current_layout_ = layout;
 }
 
 }  // namespace Rhi

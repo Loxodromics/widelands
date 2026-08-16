@@ -129,6 +129,11 @@ struct VulkanPipelineCache::Impl {
 	VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
 	VkRenderPass render_pass = VK_NULL_HANDLE;
 
+	// The shared offscreen render pass (WP-16b): one RGBA8 attachment,
+	// LOAD -> SHADER_READ_ONLY, no depth. Independent of the swapchain
+	// format, so the offscreen pipelines are built once per cache rebuild.
+	VkRenderPass offscreen_render_pass = VK_NULL_HANDLE;
+
 	// The parsed bindings manifest (WP-13): the single source of truth for
 	// descriptor layouts and attribute locations, kept for the whole device
 	// lifetime so the command buffer can translate binding indices (WP-16).
@@ -147,10 +152,19 @@ struct VulkanPipelineCache::Impl {
 	};
 	std::map<std::string, ProgramPipelines> programs;
 
+	// The offscreen pipeline variants (WP-16b): the three programs that draw
+	// into textures, keyed by program name, each against the offscreen
+	// render pass with the depth test off. The descriptor set and pipeline
+	// layouts are shared with the screen variants (they are render-pass
+	// independent), so lookups above still resolve there.
+	std::map<std::string, std::vector<std::pair<BlendState, VkPipeline>>> offscreen_pipelines;
+
 	VkDescriptorSetLayout make_descriptor_set_layout(const ManifestProgram& program) const;
 	VkPipeline create_pipeline(const PipelineDescriptor& desc,
 	                           const ManifestProgram& manifest_program,
-	                           VkPipelineLayout pipeline_layout) const;
+	                           VkPipelineLayout pipeline_layout,
+	                           VkRenderPass target_render_pass,
+	                           bool depth_enabled) const;
 };
 
 VulkanPipelineCache::Impl::Impl(const VkDevice init_device,
@@ -258,12 +272,102 @@ VulkanPipelineCache::Impl::Impl(const VkDevice init_device,
 				                 desc.program_name.c_str());
 			}
 		}
-		program.pipelines.emplace_back(
-		   desc.blend, create_pipeline(desc, *manifest_program, program.pipeline_layout));
+		program.pipelines.emplace_back(desc.blend,
+		                               create_pipeline(desc, *manifest_program,
+		                                               program.pipeline_layout, render_pass,
+		                                               desc.depth.test_enabled));
 		verb_log_info("Graphics: Vulkan: Pipeline: %s (blend %d)\n", desc.program_name.c_str(),
 		              static_cast<int>(desc.blend.src_factor) * 100 +
 		                 static_cast<int>(desc.blend.dst_factor) * 10 +
 		                 static_cast<int>(desc.blend.op));
+	}
+
+	// The offscreen render pass (WP-16b): one RGBA8 colour attachment - the
+	// fixed format graphic::Texture creates its Vulkan textures with - loaded
+	// on entry (the immediate render-to-texture path draws over existing
+	// contents; texture.cc passes clear=false and a "clear" is a Copy
+	// fill_rect) and left shader-read-only, so the image is sampleable the
+	// moment end_pass runs. No depth attachment: the GL offscreen FBO has
+	// none, so there is nothing to depth-test against on either backend and
+	// draws resolve in submission order.
+	{
+		VkAttachmentDescription attachment{};
+		attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+		attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		VkAttachmentReference color_reference{};
+		color_reference.attachment = 0;
+		color_reference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		VkSubpassDescription subpass{};
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &color_reference;
+
+		// The LOAD must wait for the image's previous use (a color write
+		// from an earlier offscreen pass or a shader read from sampling),
+		// and the writes must be visible to the sampling that follows the
+		// pass - the finalLayout transition alone does not order memory, so
+		// the write -> fragment-shader-read dependency lives here.
+		VkSubpassDependency dependencies[2] {};
+		dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[0].dstSubpass = 0;
+		dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+		                               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		dependencies[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+		                                VK_ACCESS_SHADER_READ_BIT;
+		dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+		                                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+		dependencies[1].srcSubpass = 0;
+		dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+		dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+		VkRenderPassCreateInfo render_pass_create_info{};
+		render_pass_create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		render_pass_create_info.attachmentCount = 1;
+		render_pass_create_info.pAttachments = &attachment;
+		render_pass_create_info.subpassCount = 1;
+		render_pass_create_info.pSubpasses = &subpass;
+		render_pass_create_info.dependencyCount = 2;
+		render_pass_create_info.pDependencies = dependencies;
+		if (vkCreateRenderPass(device, &render_pass_create_info, nullptr,
+		                       &offscreen_render_pass) != VK_SUCCESS) {
+			throw wexception("Vulkan: vkCreateRenderPass failed for the offscreen pass");
+		}
+	}
+
+	// The offscreen pipelines: the three programs texture.cc's do_* methods
+	// draw with, against the offscreen pass, depth test off. The descriptor
+	// set and pipeline layouts are the ones already built above (they are
+	// render-pass independent).
+	for (const PipelineDescriptor& desc : pipeline_catalog()) {
+		if (desc.program_name != "blit" && desc.program_name != "fill_rect" &&
+		    desc.program_name != "draw_line") {
+			continue;
+		}
+		const ManifestProgram* manifest_program = manifest.find_program(desc.program_name);
+		// Existence was asserted in the screen loop above.
+		const ProgramPipelines& program = programs.at(desc.program_name);
+		offscreen_pipelines[desc.program_name].emplace_back(
+		   desc.blend,
+		   create_pipeline(desc, *manifest_program, program.pipeline_layout, offscreen_render_pass,
+		                   false));
+		verb_log_info("Graphics: Vulkan: Offscreen pipeline: %s (blend %d)\n",
+		              desc.program_name.c_str(), static_cast<int>(desc.blend.src_factor) * 100 +
+		                                             static_cast<int>(desc.blend.dst_factor) * 10 +
+		                                             static_cast<int>(desc.blend.op));
 	}
 }
 
@@ -278,6 +382,14 @@ VulkanPipelineCache::Impl::~Impl() {
 		if (entry.second.descriptor_set_layout != VK_NULL_HANDLE) {
 			vkDestroyDescriptorSetLayout(device, entry.second.descriptor_set_layout, nullptr);
 		}
+	}
+	for (auto& entry : offscreen_pipelines) {
+		for (auto& variant : entry.second) {
+			vkDestroyPipeline(device, variant.second, nullptr);
+		}
+	}
+	if (offscreen_render_pass != VK_NULL_HANDLE) {
+		vkDestroyRenderPass(device, offscreen_render_pass, nullptr);
 	}
 	if (render_pass != VK_NULL_HANDLE) {
 		vkDestroyRenderPass(device, render_pass, nullptr);
@@ -329,8 +441,10 @@ VulkanPipelineCache::Impl::make_descriptor_set_layout(const ManifestProgram& pro
 }
 
 VkPipeline VulkanPipelineCache::Impl::create_pipeline(const PipelineDescriptor& desc,
-                                                      const ManifestProgram& manifest_program,
-                                                      const VkPipelineLayout pipeline_layout) const {
+                                                       const ManifestProgram& manifest_program,
+                                                       const VkPipelineLayout pipeline_layout,
+                                                       const VkRenderPass target_render_pass,
+                                                       const bool depth_enabled) const {
 	// Shader stages from the committed SPIR-V. Modules are destroyed right
 	// after pipeline creation - the pipeline keeps everything it needs.
 	const std::vector<uint32_t> vertex_spirv = load_spirv(desc.program_name, "vert");
@@ -458,11 +572,16 @@ VkPipeline VulkanPipelineCache::Impl::create_pipeline(const PipelineDescriptor& 
 	color_blend.pAttachments = &blend_attachment;
 
 	// Depth: test and write on, LESS_OR_EQUAL - the renderer's one depth state
-	// (the blended pass writes depth too; reproduced, not "cleaned up").
+	// (the blended pass writes depth too; reproduced, not "cleaned up"). The
+	// offscreen variants (WP-16b) disable it: the offscreen render pass has no
+	// depth attachment (the GL offscreen FBO has none either), and a pipeline
+	// that tests depth against a nonexistent attachment is a validation error.
 	VkPipelineDepthStencilStateCreateInfo depth_stencil{};
 	depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-	depth_stencil.depthTestEnable = desc.depth.test_enabled ? VK_TRUE : VK_FALSE;
-	depth_stencil.depthWriteEnable = desc.depth.write_enabled ? VK_TRUE : VK_FALSE;
+	depth_stencil.depthTestEnable = depth_enabled ? (desc.depth.test_enabled ? VK_TRUE : VK_FALSE) :
+	                                                VK_FALSE;
+	depth_stencil.depthWriteEnable = depth_enabled ? (desc.depth.write_enabled ? VK_TRUE : VK_FALSE) :
+	                                                 VK_FALSE;
 	depth_stencil.depthCompareOp = to_vk_compare_op(desc.depth.compare_op);
 	depth_stencil.depthBoundsTestEnable = VK_FALSE;
 	depth_stencil.stencilTestEnable = VK_FALSE;
@@ -482,7 +601,7 @@ VkPipeline VulkanPipelineCache::Impl::create_pipeline(const PipelineDescriptor& 
 	pipeline_create_info.pColorBlendState = &color_blend;
 	pipeline_create_info.pDynamicState = &dynamic_state;
 	pipeline_create_info.layout = pipeline_layout;
-	pipeline_create_info.renderPass = render_pass;
+	pipeline_create_info.renderPass = target_render_pass;
 	pipeline_create_info.subpass = 0;
 
 	VkPipeline pipeline = VK_NULL_HANDLE;
@@ -509,6 +628,10 @@ VkRenderPass VulkanPipelineCache::render_pass() const {
 	return impl_->render_pass;
 }
 
+VkRenderPass VulkanPipelineCache::offscreen_render_pass() const {
+	return impl_->offscreen_render_pass;
+}
+
 VkPipeline
 VulkanPipelineCache::pipeline(const std::string& program_name, const BlendState& blend) const {
 	const auto program_it = impl_->programs.find(program_name);
@@ -522,6 +645,24 @@ VulkanPipelineCache::pipeline(const std::string& program_name, const BlendState&
 	}
 	throw wexception("Vulkan: no pipeline for program '%s' with the requested blend state",
 	                 program_name.c_str());
+}
+
+VkPipeline VulkanPipelineCache::pipeline_for_offscreen(const std::string& program_name,
+                                                       const BlendState& blend) const {
+	const auto program_it = impl_->offscreen_pipelines.find(program_name);
+	if (program_it == impl_->offscreen_pipelines.end()) {
+		throw wexception("Vulkan: no offscreen pipelines built for program '%s' (it never draws "
+		                 "into textures)",
+		                 program_name.c_str());
+	}
+	for (const auto& variant : program_it->second) {
+		if (same_blend(variant.first, blend)) {
+			return variant.second;
+		}
+	}
+	throw wexception(
+	   "Vulkan: no offscreen pipeline for program '%s' with the requested blend state",
+	   program_name.c_str());
 }
 
 VkDescriptorSetLayout

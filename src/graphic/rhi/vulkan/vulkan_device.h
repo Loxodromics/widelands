@@ -38,15 +38,16 @@ struct SDL_Window;
 // the loader.
 //
 // Registered with Rhi::set_device in the constructor, so the eight programs
-// route their draws here from the first frame on. What is deliberately
-// missing until the WPs named below, all implemented as loud or quiet stubs
+// route their draws here from the first frame on. WP-16b added the immediate
+// render-to-texture path: begin_offscreen hands out a one-shot command buffer
+// from a dedicated pool and submit_offscreen submits it and fence-waits, so
+// the drawn result is visible to sampling in the current frame. What is
+// deliberately missing until the WPs named below, implemented as loud stubs
 // rather than crashes:
-//   - immediate render-to-texture (WP-16b): begin_offscreen returns a no-op
-//     command buffer,
 //   - swapchain readback (WP-18): read_back_swapchain throws.
 // The hidden GL window (graphic.cc) stays under Vulkan solely so
 // Texture::lock()'s glReadPixels readback keeps returning its (blank, until
-// WP-16b) data; texture creation and upload went to Vulkan in WP-16.
+// WP-18) data; texture creation and upload went to Vulkan in WP-16.
 //
 // All Vulkan types stay out of this header (pimpl); only the .cc includes
 // volk and the Vulkan headers.

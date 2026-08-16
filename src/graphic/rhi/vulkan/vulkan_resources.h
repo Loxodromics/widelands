@@ -150,24 +150,32 @@ private:
 // sampled texture with a real upload path. Two construction shapes:
 //   - the sampled texture create_texture produces: the class owns the image,
 //     its memory and its view, uploads through the VulkanUploadContext, and
-//     carries the device's sampler for its filter;
-//   - the offscreen target the headless test (and WP-16b) builds: wraps
-//     already-created image/view/render pass/framebuffer handles, exactly as
-//     in WP-15.
-// The render pass and framebuffer are VK_NULL_HANDLE for a sampled texture
-// (it is not a render target).
+//     carries the device's sampler for its filter. Since WP-16b every RGBA8
+//     texture is *also* a potential render target: the image is created with
+//     colour-attachment usage and 'render_pass' is the device's shared
+//     colour-only offscreen render pass (not owned), against which the
+//     framebuffer is built lazily on first use (ensure_framebuffer).
+//   - the offscreen target the headless test builds: wraps already-created
+//     image/view/render pass/framebuffer handles, owning all of them.
+// The render pass and framebuffer are VK_NULL_HANDLE until the texture is
+// first drawn into (a texture that is never a render target never builds a
+// framebuffer).
 class VulkanTexture : public Texture {
 public:
 	// The sampled-texture shape (create_texture): creates the image, memory,
 	// view and sampler for 'format'/'filter' and uploads through 'upload'.
+	// 'render_pass' is the device's shared offscreen render pass for render
+	// targets (VK_NULL_HANDLE in headless tests that never render into the
+	// texture); the texture does not own it.
 	VulkanTexture(VkDevice device,
 	              uint32_t width,
 	              uint32_t height,
 	              TextureFormat format,
 	              TextureFilter filter,
 	              VkSampler sampler,
-	              VulkanUploadContext* upload);
-	// The offscreen-target shape (the headless test, WP-16b): wraps the given
+	              VulkanUploadContext* upload,
+	              VkRenderPass render_pass = VK_NULL_HANDLE);
+	// The offscreen-target shape (the headless test): wraps the given
 	// handles, owns all of them. 'sampler' is null until the target is also
 	// sampled.
 	VulkanTexture(VkDevice device,
@@ -191,8 +199,18 @@ public:
 	VkRenderPass render_pass() const;
 	VkFramebuffer framebuffer() const;
 	// The image layout the texture is currently in (WP-16: upload leaves it
-	// shader-read-only; WP-16b will build its transitions on this).
+	// shader-read-only; WP-16b builds its transitions on this).
 	VkImageLayout current_layout() const;
+
+	// Creates the framebuffer against the shared render pass, if the texture
+	// has not been a render target before. WP-16b: command buffers call this
+	// from begin_pass, so a texture that is never drawn into never allocates
+	// one. Throws when the texture was created without a render pass.
+	void ensure_framebuffer();
+
+	// WP-16b: the render pass's final layout after end_pass, recorded by the
+	// command buffer so later transitions start from the real layout.
+	void set_current_layout(VkImageLayout layout);
 
 private:
 	VkDevice device_;
@@ -205,11 +223,25 @@ private:
 	VkSampler sampler_;
 	VkRenderPass render_pass_;
 	VkFramebuffer framebuffer_;
+	// Whether this texture owns render_pass_ (the offscreen-target shape) or
+	// borrows the device's shared pass (the sampled-texture shape).
+	bool owns_render_pass_;
 	VulkanUploadContext* upload_;
 	VkImageLayout current_layout_;
 
 	DISALLOW_COPY_AND_ASSIGN(VulkanTexture);
 };
+
+// The pipeline stage and access mask a layout transition needs on one side,
+// used by both VulkanTexture::upload and VulkanCommandBuffer::transition
+// (WP-16b). UNDEFINED has no source stage/access; TRANSFER_DST covers the
+// upload copy.
+struct LayoutTransitionInfo {
+	VkPipelineStageFlags stage;
+	VkAccessFlags access;
+};
+LayoutTransitionInfo layout_transition_source(VkImageLayout layout);
+LayoutTransitionInfo layout_transition_destination(VkImageLayout layout);
 
 }  // namespace Rhi
 
