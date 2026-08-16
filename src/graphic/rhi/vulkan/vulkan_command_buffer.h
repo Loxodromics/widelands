@@ -22,7 +22,6 @@
 #ifdef WL_BUILD_VULKAN
 
 #include <memory>
-#include <set>
 #include <string>
 
 #include <volk.h>
@@ -31,8 +30,10 @@
 
 namespace Rhi {
 
+class VulkanDescriptorSet;
 class VulkanPipeline;
 class VulkanPipelineCache;
+class VulkanTexture;
 
 // The Vulkan command buffer (WP-15): records the RenderQueue's draw calls
 // into a VkCommandBuffer. The pass state (render pass, framebuffer, extent)
@@ -48,10 +49,12 @@ class VulkanPipelineCache;
 // height - and the scissor gets the same flip. The depth range is 0..1; the
 // z remap lives in the SPIR-V wrapper main.
 //
-// WP-15 draw-skip rule: a pipeline whose descriptor set layout declares
-// bindings cannot draw yet (descriptor sets are WP-16), so draws of those
-// pipelines are dropped with a one-time warning per program. This keeps the
-// validation layers silent while the game runs to completion.
+// WP-16 descriptor binding: bind_descriptor_set allocates a VkDescriptorSet
+// from the device's per-frame pool, translates the recorded RHI binding
+// indices onto the manifest's Vulkan bindings (through the pipeline cache),
+// writes the descriptors and records vkCmdBindDescriptorSets. A draw of a
+// pipeline whose layout declares bindings without a bound set is an error,
+// not a skip - the WP-15 skip rule is gone.
 class VulkanCommandBuffer : public CommandBuffer {
 public:
 	// A render target to record into.
@@ -65,9 +68,13 @@ public:
 	};
 
 	// 'cache' may be null when every bound pipeline carries a direct handle
-	// (the headless test); the screen path always passes the real cache.
-	VulkanCommandBuffer(VkCommandBuffer command_buffer, const VulkanPipelineCache* cache,
-	                    Target screen_target);
+	// and no descriptor set is ever bound (the headless test's
+	// descriptor-less cases); the screen path always passes the real cache,
+	// the per-frame descriptor pool and the dummy texture.
+	VulkanCommandBuffer(VkDevice device, VkCommandBuffer command_buffer,
+	                    const VulkanPipelineCache* cache, Target screen_target,
+	                    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE,
+	                    const VulkanTexture* dummy_texture = nullptr);
 	~VulkanCommandBuffer() override;
 
 	void begin_pass(const Texture* target, const PassClear& clear) override;
@@ -91,13 +98,17 @@ public:
 private:
 	void record_scissor(const Recti& rect);
 
+	VkDevice device_;
 	VkCommandBuffer command_buffer_;
 	const VulkanPipelineCache* cache_;
+	VkDescriptorPool descriptor_pool_;
+	const VulkanTexture* dummy_texture_;
 
 	Target screen_target_;
 	VkExtent2D current_extent_{};
 
 	const VulkanPipeline* current_pipeline_ = nullptr;
+	const VulkanDescriptorSet* current_descriptor_set_ = nullptr;
 
 	bool pass_open_ = false;
 	bool finished_ = false;

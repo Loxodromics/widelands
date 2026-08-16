@@ -98,21 +98,30 @@ bool is_bgr_surface(const SDL_PixelFormat& fmt) {
 	return (fmt.Bmask == 0x000000ff && fmt.Gmask == 0x0000ff00 && fmt.Rmask == 0x00ff0000);
 }
 
+// Whether the active RHI device is the Vulkan backend (WP-16: texture
+// creation and upload moved to the RHI there, while the GL paths stay for
+// the frozen 2.1 backend and the GL-core wrap).
+bool backend_is_vulkan() {
+	return Rhi::has_device() && Rhi::device().backend() == Rhi::Backend::kVulkan;
+}
+
 }  // namespace
 
 Texture::Texture(int w, int h) : owns_texture_(false) {
-	init(w, h);
+	init(w, h, Rhi::TextureFormat::kRGBA8);
 
 	if (!has_texture(blit_data_)) {
 		return;
 	}
 
+	// The GL texture backing the lock()/unlock() readback path (the RHI
+	// texture on the core path is created in init()).
 	glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA), width(), height(), 0, GL_RGBA,
 	             GL_UNSIGNED_BYTE, nullptr);
 }
 
 Texture::Texture(SDL_Surface* surface, bool intensity) : owns_texture_(false) {
-	init(surface->w, surface->h);
+	init(surface->w, surface->h, intensity ? Rhi::TextureFormat::kR8 : Rhi::TextureFormat::kRGBA8);
 
 	// Convert image data. BGR Surface support is an extension for
 	// OpenGL ES 2, which we rather not rely on. So we convert our
@@ -162,9 +171,19 @@ Texture::Texture(SDL_Surface* surface, bool intensity) : owns_texture_(false) {
 		glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_R8), width(), height(), 0, GL_RED,
 		             GL_UNSIGNED_BYTE, packed.data());
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		if (backend_is_vulkan()) {
+			// The RHI texture knows its own row order (rhi.h: shader v = 0 is
+			// the first row of the uploaded data - the swap_rows convention).
+			// The GL upload above stays because Texture::lock()'s readback
+			// goes through the GL texture until WP-18.
+			rhi_texture_->upload(packed.data());
+		}
 	} else {
 		glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA), width(), height(), 0, GL_RGBA,
 		             GL_UNSIGNED_BYTE, surface->pixels);
+		if (backend_is_vulkan()) {
+			rhi_texture_->upload(surface->pixels);
+		}
 	}
 
 	SDL_UnlockSurface(surface);
@@ -206,7 +225,7 @@ int Texture::height() const {
 	return blit_data_.rect.h;
 }
 
-void Texture::init(uint16_t w, uint16_t h) {
+void Texture::init(uint16_t w, uint16_t h, const Rhi::TextureFormat format) {
 	assert(is_initializer_thread());
 
 	blit_data_ = {
@@ -221,6 +240,26 @@ void Texture::init(uint16_t w, uint16_t h) {
 	}
 
 	owns_texture_ = true;
+
+	if (backend_is_vulkan()) {
+		// The Vulkan backend owns texture creation (WP-16): the image, view
+		// and sampler are created through the RHI, and every upload goes
+		// through Rhi::Texture::upload. The GL texture below still exists so
+		// Texture::lock()'s glReadPixels readback keeps working until WP-18.
+		Rhi::TextureDescriptor descriptor{static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+		                                   format, Rhi::TextureWrap::kClampToEdge,
+		                                   Rhi::TextureFilter::kLinear};
+		rhi_texture_ = Rhi::device().create_texture(descriptor);
+		blit_data_.texture = rhi_texture_.get();
+		// Zero-fill so the image is in a defined, samplable layout from the
+		// start: a texture created without an upload (the minimap and font
+		// render targets) must still be valid to sample - its GL counterpart
+		// is "undefined contents", so zeros are as good as anything.
+		const uint32_t bytes_per_texel = format == Rhi::TextureFormat::kR8 ? 1u : 4u;
+		const std::vector<uint8_t> zeroes(static_cast<size_t>(w) * h * bytes_per_texel, 0);
+		rhi_texture_->upload(zeroes.data());
+	}
+
 	glGenTextures(1, &blit_data_.texture_id);
 	Gl::State::instance().bind(GL_TEXTURE0, blit_data_.texture_id);
 
@@ -232,11 +271,12 @@ void Texture::init(uint16_t w, uint16_t h) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_CLAMP_TO_EDGE));
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_CLAMP_TO_EDGE));
 
-	// On the core path, expose this GL texture as an RHI handle for the draw
-	// code (descriptor-set binding). It stays non-owning: the GL texture's
-	// lifecycle is managed here, not by the RHI (WP-10 moves the draw path, not
-	// texture creation).
-	if (Rhi::has_device()) {
+	// On the GL-core path, expose this GL texture as an RHI handle for the
+	// draw code (descriptor-set binding). It stays non-owning: the GL
+	// texture's lifecycle is managed here, not by the RHI (WP-10 moves the
+	// draw path, not texture creation). Under Vulkan the handle is the real
+	// VulkanTexture created above.
+	if (Rhi::has_device() && !backend_is_vulkan()) {
 		rhi_texture_ = Rhi::wrap_gl_texture(blit_data_.texture_id, w, h);
 		blit_data_.texture = rhi_texture_.get();
 	}
@@ -274,6 +314,11 @@ void Texture::unlock(UnlockMode mode) {
 		Gl::State::instance().bind(GL_TEXTURE0, blit_data_.texture_id);
 		glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA), width(), height(), 0, GL_RGBA,
 		             GL_UNSIGNED_BYTE, pixels_.get());
+		if (backend_is_vulkan()) {
+			// The pixel data changed on the CPU; push it into the RHI texture
+			// (WP-16). The GL upload above stays for lock() readback only.
+			rhi_texture_->upload(pixels_.get());
+		}
 	}
 
 	pixels_.reset(nullptr);

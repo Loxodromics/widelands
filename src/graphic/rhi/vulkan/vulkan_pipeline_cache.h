@@ -28,6 +28,10 @@
 
 #include "graphic/rhi/rhi.h"
 
+namespace Rhi {
+
+struct ManifestProgram;
+
 // The Vulkan pipeline factory (renderer modernization plan, WP-14): loads the
 // committed SPIR-V (data/shaders/vulkan/) and the bindings manifest, and
 // pre-builds the twelve VkPipeline objects the renderer needs - the pipeline
@@ -41,8 +45,6 @@
 // descriptors the eight programs use - WP-14's acceptance criterion) and the
 // attribute locations from the manifest, so the shader source remains the
 // single source of truth and a renamed attribute throws here at startup.
-namespace Rhi {
-
 class VulkanPipelineCache {
 public:
 	// Builds everything for the given device and attachment formats. Throws
@@ -64,11 +66,21 @@ public:
 	// The descriptor set layout (set 0) for 'program_name'; throws on unknown.
 	VkDescriptorSetLayout descriptor_set_layout(const std::string& program_name) const;
 
+	// The pipeline layout for 'program_name' (the layout the command buffer
+	// binds descriptor sets against); throws on unknown.
+	VkPipelineLayout pipeline_layout(const std::string& program_name) const;
+
+	// The manifest entry for 'program_name' - the binding translation the
+	// command buffer needs when writing descriptor sets (WP-16: the RHI's
+	// per-type binding indices map onto the manifest's shared Vulkan
+	// bindings). Never null for a program the catalog knows.
+	const ManifestProgram* manifest_program(const std::string& program_name) const;
+
 	// Whether the program's descriptor set layout declares any bindings (any
-	// sampler or uniform block in the manifest). Used by the command buffer's
-	// WP-15 draw-skip rule: a pipeline whose layout is empty (fill_rect,
-	// draw_line) can draw without a bound descriptor set, one with bindings
-	// cannot until WP-16 allocates them.
+	// sampler or uniform block in the manifest). The command buffer needs it
+	// to know whether a draw requires a bound descriptor set (WP-16); a
+	// pipeline whose layout is empty (fill_rect, draw_line) draws without
+	// one.
 	bool has_descriptor_bindings(const std::string& program_name) const;
 
 private:

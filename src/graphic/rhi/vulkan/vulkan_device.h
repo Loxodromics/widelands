@@ -31,22 +31,22 @@ struct SDL_Window;
 // window, the screen render pass with its depth attachment and framebuffers,
 // the twelve pre-built pipelines, and - since WP-15 - the frame loop
 // (begin_frame/end_frame) and the recording path (VulkanCommandBuffer) plus
-// the per-frame staging arena (VulkanBuffer). volk
-// (src/third_party/volk) is the loader.
+// the per-frame staging arena (VulkanBuffer). WP-16 adds descriptor sets
+// (per-frame descriptor pool, binding via the manifest), texture creation
+// and upload (VulkanTexture + the one-shot upload command pool), and the
+// samplers the descriptor writes reference. volk (src/third_party/volk) is
+// the loader.
 //
 // Registered with Rhi::set_device in the constructor, so the eight programs
 // route their draws here from the first frame on. What is deliberately
 // missing until the WPs named below, all implemented as loud or quiet stubs
 // rather than crashes:
-//   - descriptor sets / texture upload (WP-16): the descriptor set stores
-//     bindings, nothing binds; draws of pipelines that need bindings are
-//     skipped with a warning (VulkanCommandBuffer),
 //   - immediate render-to-texture (WP-16b): begin_offscreen returns a no-op
 //     command buffer,
 //   - swapchain readback (WP-18): read_back_swapchain throws.
-// The GL context stays on a hidden SDL window (graphic.cc) purely so
-// texture upload still works (glTexImage2D) until WP-16; nothing draws
-// through GL anymore.
+// The hidden GL window (graphic.cc) stays under Vulkan solely so
+// Texture::lock()'s glReadPixels readback keeps returning its (blank, until
+// WP-16b) data; texture creation and upload went to Vulkan in WP-16.
 //
 // All Vulkan types stay out of this header (pimpl); only the .cc includes
 // volk and the Vulkan headers.
@@ -62,6 +62,11 @@ public:
 	~VulkanDevice() override;
 
 	Backend backend() const override;
+
+	// The physical device's maxImageDimension2D - the Vulkan-side replacement
+	// for the GL_MAX_TEXTURE_SIZE the atlas builder has sized itself against
+	// until now (WP-16 moves texture creation to Vulkan).
+	[[nodiscard]] uint32_t max_texture_size() const;
 
 	std::unique_ptr<CommandBuffer> begin_frame() override;
 	void end_frame(std::unique_ptr<CommandBuffer> command_buffer) override;

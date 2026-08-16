@@ -42,6 +42,11 @@ public:
 
 	void set_dither_mask(const std::string& filepath);
 
+	// Frees the dither mask texture. The program is a singleton inside the
+	// static RenderQueue, so without this the mask's RHI texture would be
+	// destroyed at static teardown, after the Vulkan device is gone (WP-16).
+	void clear_dither_mask();
+
 	// Sets the terrain-noise strength multiplier (0 disables, 1 is the default
 	// look). Backlog item 2 / WP-8 of the renderer modernization plan.
 	void set_noise_strength(float strength) {

@@ -86,7 +86,6 @@ DitherProgram::DitherProgram() {
 
 void DitherProgram::set_dither_mask(const std::string& filepath) {
 	dither_mask_.reset(new Texture(load_image_as_sdl_surface(filepath, g_fs), true));
-
 	// The glTexParameteri block below is skipped on the core path because the
 	// RHI descriptor-set binding handles the texture as-is. It is redundant on
 	// *both* paths: Texture::init (texture.cc) already sets wrap=clamp-to-edge
@@ -100,6 +99,10 @@ void DitherProgram::set_dither_mask(const std::string& filepath) {
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
 	}
+}
+
+void DitherProgram::clear_dither_mask() {
+	dither_mask_.reset(nullptr);
 }
 
 void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
