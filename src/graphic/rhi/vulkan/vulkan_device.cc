@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <vector>
 
@@ -502,6 +503,11 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	// points through vkGetDeviceProcAddr when the device was created with it
 	// enabled, and without them volk leaves the function pointers null - a
 	// jump to zero at vkCreateSwapchainKHR. Check support and enable it.
+	// VK_KHR_maintenance1 is the second required extension: it allows a
+	// negative viewport height, which is how a render-to-texture pass undoes
+	// the committed SPIR-V's Y negation (see VulkanCommandBuffer::set_viewport).
+	// It is core since Vulkan 1.1 and universally available, but the instance
+	// is created at API 1.0, so it has to be enabled explicitly.
 	{
 		uint32_t extension_count = 0;
 		check_vulkan_result(vkEnumerateDeviceExtensionProperties(
@@ -512,24 +518,32 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 		                       physical_device, nullptr, &extension_count, extensions.data()),
 		                    "vkEnumerateDeviceExtensionProperties");
 		bool swapchain_supported = false;
+		bool maintenance1_supported = false;
 		for (const VkExtensionProperties& extension : extensions) {
 			if (strncmp(extension.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 			            VK_MAX_EXTENSION_NAME_SIZE) == 0) {
 				swapchain_supported = true;
-				break;
+			} else if (strncmp(extension.extensionName, VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+			                   VK_MAX_EXTENSION_NAME_SIZE) == 0) {
+				maintenance1_supported = true;
 			}
 		}
 		if (!swapchain_supported) {
 			throw wexception("Vulkan: the physical device does not support VK_KHR_swapchain.");
 		}
+		if (!maintenance1_supported) {
+			throw wexception("Vulkan: the physical device does not support VK_KHR_maintenance1.");
+		}
 	}
 
-	const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+	const char* device_extensions[] = {
+	   VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_MAINTENANCE1_EXTENSION_NAME};
 	VkDeviceCreateInfo device_create_info{};
 	device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 	device_create_info.queueCreateInfoCount = 1;
 	device_create_info.pQueueCreateInfos = &queue_create_info;
-	device_create_info.enabledExtensionCount = 1;
+	device_create_info.enabledExtensionCount =
+	   static_cast<uint32_t>(std::size(device_extensions));
 	device_create_info.ppEnabledExtensionNames = device_extensions;
 	check_vulkan_result(vkCreateDevice(physical_device, &device_create_info, nullptr, &device),
 	                    "vkCreateDevice");

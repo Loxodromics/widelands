@@ -272,10 +272,16 @@ struct VulkanContext {
 			queue_info.queueFamilyIndex = queue_family;
 			queue_info.queueCount = 1;
 			queue_info.pQueuePriorities = &priority;
+			// The render-to-texture path records a negative viewport height, so
+			// the headless device needs the same extension the real one enables
+			// (VulkanDevice::create_device).
+			const char* device_extensions[] = {VK_KHR_MAINTENANCE1_EXTENSION_NAME};
 			VkDeviceCreateInfo device_info{};
 			device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 			device_info.queueCreateInfoCount = 1;
 			device_info.pQueueCreateInfos = &queue_info;
+			device_info.enabledExtensionCount = 1;
+			device_info.ppEnabledExtensionNames = device_extensions;
 			if (vkCreateDevice(physical_device, &device_info, nullptr, &device) != VK_SUCCESS) {
 				throw wexception("vkCreateDevice failed");
 			}
@@ -1071,7 +1077,10 @@ TESTCASE(records_a_flipped_viewport_draw) {
 	   context.device, target.command_buffer, nullptr, target.target());
 	command_buffer.begin_pass(target.texture.get(),
 	                          Rhi::PassClear{true, kClearR, kClearG, kClearB, 1.f});
-	command_buffer.set_viewport(Recti(16, 16, 32, 32));
+	// Deliberately off-centre in y: a vertically centred rect maps onto itself
+	// under a flip, which is exactly how the wrong compensation survived the
+	// first version of this test (the WP-15 lesson, and again the WP-16b one).
+	command_buffer.set_viewport(Recti(16, 8, 32, 24));
 
 	std::vector<Vertex> vertices;
 	append_quad(vertices, -1.f, -1.f, 1.f, 1.f, 1.f, 0.f, 0.f);
@@ -1083,13 +1092,16 @@ TESTCASE(records_a_flipped_viewport_draw) {
 	command_buffer.end_pass();
 	const std::vector<uint8_t> pixels = target.read_back();
 
-	// The viewport rect (16,16)-(48,48) in canonical bottom-left coordinates
-	// is rows 16..47 from the top in the copyback.
-	check_pixel(pixels, 8, 8, clear_r(), clear_g(), clear_b());
-	check_pixel(pixels, 16, 16, 255, 0, 0);
-	check_pixel(pixels, 32, 32, 255, 0, 0);
-	check_pixel(pixels, 47, 47, 255, 0, 0);
-	check_pixel(pixels, 48, 48, clear_r(), clear_g(), clear_b());
+	// A texture target renders through a y-flipped viewport, so a canonical
+	// (bottom-left origin) row *is* the image row of the same index: the
+	// viewport rect (16, 8) 32x24 covers columns 16..47 and top-origin rows
+	// 8..31. That is what makes "canonical clip +1 samples at v = 1" hold on
+	// both backends.
+	check_pixel(pixels, 8, 16, clear_r(), clear_g(), clear_b());
+	check_pixel(pixels, 24, 8, 255, 0, 0);
+	check_pixel(pixels, 24, 31, 255, 0, 0);
+	check_pixel(pixels, 24, 7, clear_r(), clear_g(), clear_b());
+	check_pixel(pixels, 24, 32, clear_r(), clear_g(), clear_b());
 	check_pixel(pixels, 63, 63, clear_r(), clear_g(), clear_b());
 
 	check_equal(g_validation_errors, errors_before);
@@ -1124,8 +1136,9 @@ TESTCASE(scissor_clips_to_the_flipped_rectangle) {
 	command_buffer.bind_vertex_buffer(target.vertex_buffer.get());
 	command_buffer.draw(0, vertices.size());
 
-	// Red quad clipped to the canonical bottom-left block.
-	command_buffer.set_scissor(Recti(16, 16, 32, 32));
+	// Red quad clipped to a canonical block that is off-centre in y, so the
+	// scissor's orientation is actually pinned rather than mapped onto itself.
+	command_buffer.set_scissor(Recti(16, 8, 32, 24));
 	vertices.clear();
 	append_quad(vertices, -1.f, -1.f, 1.f, 1.f, 1.f, 0.f, 0.f);
 	target.vertex_buffer->update(vertices.data(), vertices.size() * sizeof(Vertex));
@@ -1144,13 +1157,15 @@ TESTCASE(scissor_clips_to_the_flipped_rectangle) {
 	command_buffer.end_pass();
 	const std::vector<uint8_t> pixels = target.read_back();
 
-	// Canonical bottom-left block: top-origin rows 16..47.
-	check_pixel(pixels, 32, 32, 255, 0, 0);
+	// The scissored block: columns 16..47, top-origin rows 8..31 (a texture
+	// target's scissor is not flipped - see VulkanCommandBuffer::record_scissor).
+	check_pixel(pixels, 24, 16, 255, 0, 0);
 	// Outside the scissor, outside the blue quad: still green.
 	check_pixel(pixels, 8, 8, 0, 255, 0);
-	// The blue quad: canonical top-right quarter, top-origin rows 0..31,
+	check_pixel(pixels, 24, 40, 0, 255, 0);
+	// The blue quad: canonical top-right quarter, top-origin rows 32..63,
 	// columns 32..63.
-	check_pixel(pixels, 56, 16, 0, 0, 255);
+	check_pixel(pixels, 56, 48, 0, 0, 255);
 
 	check_equal(g_validation_errors, errors_before);
 }
@@ -1189,11 +1204,11 @@ TESTCASE(draw_offset_selects_vertices) {
 	command_buffer.end_pass();
 	const std::vector<uint8_t> pixels = target.read_back();
 
-	// The green quad: canonical top-right quarter = top-origin rows 0..31,
+	// The green quad: canonical top-right quarter = top-origin rows 32..63,
 	// columns 32..63.
-	check_pixel(pixels, 48, 16, 0, 255, 0);
+	check_pixel(pixels, 48, 48, 0, 255, 0);
 	// The red quad's region was not drawn.
-	check_pixel(pixels, 16, 48, clear_r(), clear_g(), clear_b());
+	check_pixel(pixels, 16, 16, clear_r(), clear_g(), clear_b());
 
 	check_equal(g_validation_errors, errors_before);
 }
@@ -1591,12 +1606,13 @@ TESTCASE(offscreen_pass_loads_preserves_and_transitions) {
 
 	const std::vector<uint8_t> result = target.read_back(commands);
 
-	// The canonical bottom-left quarter: top-origin rows 32..63, columns
-	// 0..31, red.
-	check_rgba_pixel(result, 16, 48, 255, 0, 0);
-	check_rgba_pixel(result, 31, 63, 255, 0, 0);
+	// The canonical bottom-left quarter: top-origin rows 0..31, columns
+	// 0..31, red. Row 0 of the image is v = 0 is canonical clip y = -1 - the
+	// same texel the uploaded pre-fill's first row landed in.
+	check_rgba_pixel(result, 16, 16, 255, 0, 0);
+	check_rgba_pixel(result, 31, 0, 255, 0, 0);
 	// Outside the quad: the left half stays blue, the right half green.
-	check_rgba_pixel(result, 16, 16, 0, 0, 255);
+	check_rgba_pixel(result, 16, 48, 0, 0, 255);
 	check_rgba_pixel(result, 48, 16, 0, 255, 0);
 	check_rgba_pixel(result, 48, 48, 0, 255, 0);
 

@@ -33,13 +33,11 @@ namespace Rhi {
 
 namespace {
 
-// The canonical -> Vulkan window-space flip for scissor rectangles (the
-// plain rect flip; the clip-space half of the compensation is the shader's
-// Y-negation plus the flipped viewport rect). Intersects the rect with the
-// framebuffer first, so the scissor VUIDs (non-negative offset, offset +
-// extent within the framebuffer) hold even for partially off-screen
-// rectangles; an empty intersection becomes a zero-size scissor.
-Recti flip_rect(const Recti& rect, const VkExtent2D extent) {
+// Intersects a scissor rectangle with the framebuffer, so the scissor VUIDs
+// (non-negative offset, offset + extent within the framebuffer) hold even for
+// partially off-screen rectangles; an empty intersection becomes a zero-size
+// scissor.
+Recti clip_rect(const Recti& rect, const VkExtent2D extent) {
 	const int framebuffer_width = static_cast<int>(extent.width);
 	const int framebuffer_height = static_cast<int>(extent.height);
 	const int x0 = std::max(rect.x, 0);
@@ -49,7 +47,17 @@ Recti flip_rect(const Recti& rect, const VkExtent2D extent) {
 	if (x1 <= x0 || y1 <= y0) {
 		return Recti(0, 0, 0, 0);
 	}
-	return Recti(x0, framebuffer_height - y1, x1 - x0, y1 - y0);
+	return Recti(x0, y0, x1 - x0, y1 - y0);
+}
+
+// The canonical (bottom-left origin) -> Vulkan (top-left origin) window-space
+// flip for an already clipped scissor rectangle. Only the screen pass needs
+// it; see record_scissor.
+Recti flip_rect(const Recti& rect, const VkExtent2D extent) {
+	if (rect.w == 0 || rect.h == 0) {
+		return rect;
+	}
+	return Recti(rect.x, static_cast<int>(extent.height) - rect.y - rect.h, rect.w, rect.h);
 }
 
 }  // namespace
@@ -139,21 +147,37 @@ void VulkanCommandBuffer::begin_pass(const Texture* target, const PassClear& cle
 }
 
 void VulkanCommandBuffer::set_viewport(const Recti& viewport) {
-	// The viewport compensates the committed SPIR-V Y-flip (WP-13): Vulkan's
-	// window origin is top-left and its clip-space y points down, so a
-	// canonical bottom-left rect (x, y, w, h) maps to the top-origin rect
-	// (x, H - y - h) with a *positive* height. The clip-space half of the
-	// compensation (the y negation) happens in the shader wrapper; flipping
-	// the rect here completes it. Depth is 0..1 - the z remap to [0, 1]
-	// happens in the shader wrapper too.
+	/*
+	 * The viewport compensates the committed SPIR-V Y-flip (WP-13), and what
+	 * it has to compensate *for* differs between the two kinds of target.
+	 *
+	 * Screen: Vulkan's window origin is top-left while the canonical (GL)
+	 * one is bottom-left, so the shader's y negation is what puts canonical
+	 * clip +1 at the top of the screen, and the viewport rect is flipped to
+	 * match: canonical (x, y, w, h) -> (x, H - y - h, w, +h).
+	 *
+	 * Texture target: a sampled image's v axis runs the same way as Vulkan's
+	 * window y (v = 0 is image row 0 is window y 0), so *raw* Vulkan clip
+	 * space already agrees with GL's "canonical clip +1 lands at v = 1" - and
+	 * the shader's negation has to be undone rather than completed. That is a
+	 * negative viewport height (VK_KHR_maintenance1): canonical (x, y, w, h)
+	 * -> (x, y + h, w, -h), which also leaves the scissor unflipped
+	 * (record_scissor). Getting this wrong writes every render-to-texture
+	 * upside down, which for the texture atlas means every sub-rect lookup
+	 * lands on a different image.
+	 *
+	 * Depth is 0..1 - the z remap to [0, 1] happens in the shader wrapper.
+	 */
 	const float framebuffer_height = static_cast<float>(current_extent_.height);
-	const VkViewport vk_viewport{static_cast<float>(viewport.x),
-	                             framebuffer_height - static_cast<float>(viewport.y) -
-	                                static_cast<float>(viewport.h),
-	                             static_cast<float>(viewport.w),
-	                             static_cast<float>(viewport.h),
-	                             0.0f,
-	                             1.0f};
+	const VkViewport vk_viewport{
+	   static_cast<float>(viewport.x),
+	   offscreen_pass_ ?
+	      static_cast<float>(viewport.y) + static_cast<float>(viewport.h) :
+	      framebuffer_height - static_cast<float>(viewport.y) - static_cast<float>(viewport.h),
+	   static_cast<float>(viewport.w),
+	   offscreen_pass_ ? -static_cast<float>(viewport.h) : static_cast<float>(viewport.h),
+	   0.0f,
+	   1.0f};
 	vkCmdSetViewport(command_buffer_, 0, 1, &vk_viewport);
 }
 
@@ -408,9 +432,16 @@ VkCommandBuffer VulkanCommandBuffer::vk_command_buffer() const {
 }
 
 void VulkanCommandBuffer::record_scissor(const Recti& rect) {
-	const Recti flipped = flip_rect(rect, current_extent_);
-	const VkRect2D scissor{{flipped.x, flipped.y},
-	                       {static_cast<uint32_t>(flipped.w), static_cast<uint32_t>(flipped.h)}};
+	// A texture target renders through a y-flipped viewport (set_viewport), so
+	// its canonical row r *is* Vulkan window row r and the scissor must not be
+	// flipped - only clipped to the framebuffer. The screen pass keeps the
+	// bottom-left -> top-left flip.
+	const Recti clipped = clip_rect(rect, current_extent_);
+	const Recti final_rect =
+	   offscreen_pass_ ? clipped : flip_rect(clipped, current_extent_);
+	const VkRect2D scissor{
+	   {final_rect.x, final_rect.y},
+	   {static_cast<uint32_t>(final_rect.w), static_cast<uint32_t>(final_rect.h)}};
 	vkCmdSetScissor(command_buffer_, 0, 1, &scissor);
 }
 
