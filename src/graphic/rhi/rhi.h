@@ -59,14 +59,13 @@ enum class Backend {
 	kVulkan,
 };
 
-// Texture storage formats. The renderer uploads exactly two today
-// (src/graphic/texture.cc): RGBA8 for images, R8 for the single-channel
-// dither mask. These enum values are not consumed until WP-16 (Vulkan texture
-// upload); the GL backend creates textures in graphic::Texture, not here.
-// Add formats only when a caller needs one.
+// Texture storage formats. The renderer uploads exactly one today
+// (src/graphic/texture.cc): RGBA8 for images. These enum values are not
+// consumed until WP-16 (Vulkan texture upload); the GL backend creates
+// textures in graphic::Texture, not here. Add formats only when a caller
+// needs one.
 enum class TextureFormat {
 	kRGBA8,
-	kR8,
 };
 
 // Texture addressing mode. Every texture in the tree uses clamp-to-edge

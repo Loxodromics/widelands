@@ -111,7 +111,7 @@ Texture::Texture(int w, int h) : owns_texture_(false) {
 	             GL_UNSIGNED_BYTE, nullptr);
 }
 
-Texture::Texture(SDL_Surface* surface, bool intensity) : owns_texture_(false) {
+Texture::Texture(SDL_Surface* surface) : owns_texture_(false) {
 	init(surface->w, surface->h);
 
 	// Convert image data. BGR Surface support is an extension for
@@ -142,30 +142,8 @@ Texture::Texture(SDL_Surface* surface, bool intensity) : owns_texture_(false) {
 
 	Gl::swap_rows(width(), height(), surface->pitch, bpp, static_cast<uint8_t*>(surface->pixels));
 
-	if (intensity) {
-		// The dither mask is single-channel, but surface->pixels is a 4-byte-per-
-		// pixel RGBA buffer. Uploading it with a GL_RED format would make GL read
-		// 'width' bytes per row out of a 'width * 4'-byte row, unpacking the mask
-		// as an interleaved R,G,B,A sequence. Pack the red channel (the first
-		// byte of each pixel, Rshift == 0) into a tight buffer honouring
-		// surface->pitch instead. GL_UNPACK_ALIGNMENT must be 1 because the packed
-		// rows are 'width' bytes with no row padding.
-		std::vector<uint8_t> packed(static_cast<size_t>(width()) * height());
-		const uint8_t* src = static_cast<const uint8_t*>(surface->pixels);
-		uint8_t* dst = packed.data();
-		for (int y = 0; y < height(); ++y) {
-			for (int x = 0; x < width(); ++x) {
-				dst[y * width() + x] = src[y * surface->pitch + x * bpp];
-			}
-		}
-		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-		glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_R8), width(), height(), 0, GL_RED,
-		             GL_UNSIGNED_BYTE, packed.data());
-		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-	} else {
-		glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA), width(), height(), 0, GL_RGBA,
-		             GL_UNSIGNED_BYTE, surface->pixels);
-	}
+	glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA), width(), height(), 0, GL_RGBA,
+	             GL_UNSIGNED_BYTE, surface->pixels);
 
 	SDL_UnlockSurface(surface);
 	SDL_FreeSurface(surface);
