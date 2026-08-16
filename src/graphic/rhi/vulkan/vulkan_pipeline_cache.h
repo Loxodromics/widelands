@@ -32,10 +32,8 @@
 // committed SPIR-V (data/shaders/vulkan/) and the bindings manifest, and
 // pre-builds the twelve VkPipeline objects the renderer needs - the pipeline
 // catalog's eight programs times their blend states - all against the screen
-// render pass (colour + depth). Built once at device startup; nothing draws
-// with the pipelines until WP-15, but every boot already exercises the whole
-// set, which is what "the pipeline cache builds without validation errors"
-// is verified by.
+// render pass (colour + depth). Built once at device startup; the command
+// buffer resolves its draws through here (WP-15).
 //
 // Pipelines are tied to the swapchain image format (they bake in the render
 // pass), so a format change on swapchain recreation means rebuilding this
@@ -65,6 +63,13 @@ public:
 
 	// The descriptor set layout (set 0) for 'program_name'; throws on unknown.
 	VkDescriptorSetLayout descriptor_set_layout(const std::string& program_name) const;
+
+	// Whether the program's descriptor set layout declares any bindings (any
+	// sampler or uniform block in the manifest). Used by the command buffer's
+	// WP-15 draw-skip rule: a pipeline whose layout is empty (fill_rect,
+	// draw_line) can draw without a bound descriptor set, one with bindings
+	// cannot until WP-16 allocates them.
+	bool has_descriptor_bindings(const std::string& program_name) const;
 
 private:
 	struct Impl;

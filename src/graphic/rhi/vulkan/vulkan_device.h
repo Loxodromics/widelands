@@ -21,42 +21,58 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "graphic/rhi/rhi.h"
 
 struct SDL_Window;
 
-// The Vulkan bootstrap device (renderer modernization plan, WP-12, WP-14): an
-// instance, a physical/logical device, a surface and a swapchain wired to the
-// SDL window. Since WP-14 it also owns the screen render pass (colour +
-// depth), the depth attachment and framebuffers, and the pipeline cache -
-// the twelve VkPipeline objects pre-built from the pipeline catalog - and
-// presents the placeholder clear through a real render pass. volk
+// The Vulkan implementation of the RHI (renderer modernization plan, WP-12
+// bootstrap, WP-14 pipelines/render pass, WP-15 conversion): an instance, a
+// physical/logical device, a surface and a swapchain wired to the SDL
+// window, the screen render pass with its depth attachment and framebuffers,
+// the twelve pre-built pipelines, and - since WP-15 - the frame loop
+// (begin_frame/end_frame) and the recording path (VulkanCommandBuffer) plus
+// the per-frame staging arena (VulkanBuffer). volk
 // (src/third_party/volk) is the loader.
 //
-// Deliberately *not* a Rhi::Device yet, and not registered with
-// Rhi::set_device: the eight programs would route their draws into an
-// implementation that has no command recording. WP-15 converts this class
-// into the Vulkan Rhi::Device; until then the GL pipeline keeps rendering -
-// invisibly, into the GL backbuffer of the hidden window - as a stand-in so
-// all game machinery keeps working, and only the presentation is swapped
-// over to Vulkan by Graphic::refresh.
+// Registered with Rhi::set_device in the constructor, so the eight programs
+// route their draws here from the first frame on. What is deliberately
+// missing until the WPs named below, all implemented as loud or quiet stubs
+// rather than crashes:
+//   - descriptor sets / texture upload (WP-16): the descriptor set stores
+//     bindings, nothing binds; draws of pipelines that need bindings are
+//     skipped with a warning (VulkanCommandBuffer),
+//   - immediate render-to-texture (WP-16b): begin_offscreen returns a no-op
+//     command buffer,
+//   - swapchain readback (WP-18): read_back_swapchain throws.
+// The GL context stays on a hidden SDL window (graphic.cc) purely so
+// texture upload still works (glTexImage2D) until WP-16; nothing draws
+// through GL anymore.
 //
 // All Vulkan types stay out of this header (pimpl); only the .cc includes
 // volk and the Vulkan headers.
 namespace Rhi {
 
-class VulkanDevice {
+class VulkanDevice : public Device {
 public:
 	// Creates the instance, device, surface and swapchain for 'window' (which
-	// must have been created with the SDL_WINDOW_VULKAN flag). Throws
-	// wexception on any failure, so the game fails with a clear error rather
-	// than half-initializing.
+	// must have been created with the SDL_WINDOW_VULKAN flag), and registers
+	// this object as the active RHI device. Throws wexception on any failure,
+	// so the game fails with a clear error rather than half-initializing.
 	explicit VulkanDevice(SDL_Window* window);
-	~VulkanDevice();
+	~VulkanDevice() override;
 
-	// Acquires the next swapchain image, clears it to the placeholder colour
-	// and presents it. Called once per Graphic::refresh from the UI thread.
-	void present();
+	Backend backend() const override;
+
+	std::unique_ptr<CommandBuffer> begin_frame() override;
+	void end_frame(std::unique_ptr<CommandBuffer> command_buffer) override;
+	std::unique_ptr<CommandBuffer> begin_offscreen() override;
+	void submit_offscreen(std::unique_ptr<CommandBuffer> command_buffer) override;
+	void read_back_swapchain(uint8_t* pixels) override;
+	std::unique_ptr<Texture> create_texture(const TextureDescriptor& desc) override;
+	std::unique_ptr<Texture> create_texture_view(Texture& parent, const Recti& subrect) override;
+	std::unique_ptr<Buffer> create_buffer(uint32_t size, BufferUsage usage) override;
+	std::unique_ptr<Pipeline> create_pipeline(const PipelineDescriptor& desc) override;
+	std::unique_ptr<DescriptorSet> create_descriptor_set(const Pipeline& pipeline) override;
 
 	DISALLOW_COPY_AND_ASSIGN(VulkanDevice);
 

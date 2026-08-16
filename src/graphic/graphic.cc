@@ -108,9 +108,10 @@ void Graphic::initialize(const TraceGl& trace_gl,
 
 	// SDL forbids combining SDL_WINDOW_OPENGL and SDL_WINDOW_VULKAN on one
 	// window, so --renderer=vulkan (WP-12) gives the GL context a hidden
-	// window of its own: the visible window is Vulkan-only, and the GL
-	// pipeline keeps rendering - invisibly - into the hidden window's
-	// backbuffer as a stand-in until WP-14/15 draw through Vulkan for real.
+	// window of its own: the visible window is Vulkan-only. Since WP-15 the
+	// Vulkan device owns all drawing; the GL context lives on the hidden
+	// window solely because texture upload is still glTexImage2D (WP-16
+	// moves it), and nothing draws through GL anymore.
 	const bool want_vulkan = requested_backend == RenderBackend::kVulkan;
 	uint32_t window_flags = want_vulkan ? SDL_WINDOW_VULKAN : SDL_WINDOW_OPENGL;
 #ifdef RESIZABLE_WINDOW
@@ -133,10 +134,9 @@ void Graphic::initialize(const TraceGl& trace_gl,
 	}
 	SDL_Window* const gl_window = want_vulkan ? gl_context_window_ : sdl_window_;
 
-	// The GL context flavour behind the requested render backend. The Vulkan
-	// bootstrap keeps a legacy GL context as the invisible stand-in (above),
-	// so everything the frozen 2.1 path assumes stays true until WP-14/15
-	// route the drawing into Vulkan for real.
+	// The GL context flavour behind the requested render backend. Under
+	// Vulkan a legacy 2.1 context on the hidden window backs texture upload
+	// (glTexImage2D) only, until WP-16.
 	const Gl::Backend gl_requested =
 	   requested_backend == RenderBackend::kOpenGLCore ? Gl::Backend::kOpenGLCore :
 	                                                     Gl::Backend::kOpenGL21;
@@ -155,10 +155,11 @@ void Graphic::initialize(const TraceGl& trace_gl,
 		rhi_device_.reset(new Rhi::GlCoreDevice());
 	}
 
-	// The Vulkan bootstrap (WP-12). Not registered as the RHI device: the eight
-	// programs must keep their GL paths until Vulkan can actually draw
-	// (WP-14/15). Created after the GL context so a Vulkan failure can unwind
-	// through the normal startup error path.
+	// The Vulkan backend (WP-12 bootstrap, WP-14 pipelines, WP-15 conversion
+	// into the RHI device): its constructor registers itself with
+	// Rhi::set_device, so the eight programs record their draws into it from
+	// the first frame on. Created after the GL context so a Vulkan failure
+	// can unwind through the normal startup error path.
 	if (requested_backend == RenderBackend::kVulkan) {
 		vulkan_device_.reset(new Rhi::VulkanDevice(sdl_window_));
 	}
@@ -184,9 +185,10 @@ void Graphic::initialize(const TraceGl& trace_gl,
 	SDL_SetWindowTitle(sdl_window_, ("Widelands " + build_ver_details()).c_str());
 	set_icon(sdl_window_);
 
-	if (vulkan_device_ != nullptr) {
-		vulkan_device_->present();
-	} else {
+	// Vulkan presents inside Rhi::Device::end_frame (WP-15); the GL backends
+	// swap their backbuffer here. Nothing to do at this point beyond the
+	// first refresh that follows shortly.
+	if (vulkan_device_ == nullptr) {
 		SDL_GL_SwapWindow(sdl_window_);
 	}
 
@@ -461,12 +463,10 @@ void Graphic::refresh() {
 		screenshot_filename_.clear();
 	}
 
-	// Under --renderer=vulkan the Vulkan swapchain owns the visible output
-	// (a clear colour until WP-14/15 draw for real); the GL backbuffer the
-	// renderer drew into is never swapped.
-	if (vulkan_device_ != nullptr) {
-		vulkan_device_->present();
-	} else {
+	// Under --renderer=vulkan the frame was already submitted and presented
+	// by Rhi::Device::end_frame inside RenderQueue::draw (WP-15); the hidden
+	// GL backbuffer is never swapped. The GL backends swap here.
+	if (vulkan_device_ == nullptr) {
 		SDL_GL_SwapWindow(sdl_window_);
 	}
 }
