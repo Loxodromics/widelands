@@ -592,7 +592,8 @@ struct TestTarget {
 		                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
 		                            std::max<VkDeviceSize>(properties.limits.minUniformBufferOffsetAlignment, 256u),
 		                            1u << 20));
-		vertex_buffer.reset(new Rhi::VulkanBuffer(*arena));
+		arena_ptr = arena.get();
+		vertex_buffer.reset(new Rhi::VulkanBuffer(arena_ptr));
 
 		// The copyback buffer: TRANSFER_DST, host-visible coherent.
 		VkBufferCreateInfo copy_buffer_info{};
@@ -677,6 +678,10 @@ struct TestTarget {
 	VkBuffer copy_buffer = VK_NULL_HANDLE;
 	VkDeviceMemory copy_memory = VK_NULL_HANDLE;
 	std::unique_ptr<Rhi::VulkanArena> arena;
+	// The buffers route through this pointer the way VulkanDevice's
+	// current_arena_ works (WP-17): update() always allocates from the arena
+	// the pointer names.
+	Rhi::VulkanArena* arena_ptr = nullptr;
 	std::unique_ptr<Rhi::VulkanBuffer> vertex_buffer;
 
 	DISALLOW_COPY_AND_ASSIGN(TestTarget);
@@ -1212,7 +1217,8 @@ TESTCASE(arena_allocates_fresh_aligned_transient_regions) {
 	                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
 	                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
 	                  alignment, 1u << 20);
-	Rhi::VulkanBuffer buffer(arena);
+	Rhi::VulkanArena* current_arena = &arena;
+	Rhi::VulkanBuffer buffer(current_arena);
 
 	std::vector<uint8_t> data(1000, 0xabu);
 	// Measure from a reset state: offsets are chunk-relative, and the
@@ -1569,7 +1575,8 @@ TESTCASE(offscreen_pass_loads_preserves_and_transitions) {
 	   find_memory_type(context.physical_device, ~0u,
 	                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
 	   std::max<VkDeviceSize>(properties.limits.minUniformBufferOffsetAlignment, 256u), 1u << 20);
-	Rhi::VulkanBuffer vertex_buffer(arena);
+	Rhi::VulkanArena* current_arena = &arena;
+	Rhi::VulkanBuffer vertex_buffer(current_arena);
 	vertex_buffer.update(vertices.data(), vertices.size() * sizeof(Vertex));
 	command_buffer.bind_pipeline(&pipeline);
 	command_buffer.bind_vertex_buffer(&vertex_buffer);
@@ -1636,7 +1643,8 @@ TESTCASE(reupload_after_render_transitions_from_the_current_layout) {
 	   find_memory_type(context.physical_device, ~0u,
 	                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
 	   256u, 1u << 20);
-	Rhi::VulkanBuffer vertex_buffer(arena);
+	Rhi::VulkanArena* current_arena = &arena;
+	Rhi::VulkanBuffer vertex_buffer(current_arena);
 	vertex_buffer.update(vertices.data(), vertices.size() * sizeof(Vertex));
 	command_buffer.bind_pipeline(&pipeline);
 	command_buffer.bind_vertex_buffer(&vertex_buffer);

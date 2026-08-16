@@ -21,6 +21,7 @@
 
 #ifdef WL_BUILD_VULKAN
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -146,6 +147,15 @@ private:
 	DISALLOW_COPY_AND_ASSIGN(VulkanDescriptorSet);
 };
 
+// The image, its memory and its view, handed back to the device for deferred
+// destruction (WP-17): a texture destroyed while frames are in flight may
+// still be referenced by a recorded descriptor set, so its image resources
+// must not be freed until the frames that could reference them have
+// completed. The device queues the triple and frees it kFramesInFlight frame
+// boundaries later. An empty callback (the headless test's shapes) frees
+// immediately - valid there because the test fence-waits every submit.
+using RetireImageResources = std::function<void(VkImage, VkDeviceMemory, VkImageView)>;
+
 // A Vulkan image usable as a render target (WP-16b) and, since WP-16, as a
 // sampled texture with a real upload path. Two construction shapes:
 //   - the sampled texture create_texture produces: the class owns the image,
@@ -166,7 +176,9 @@ public:
 	// view and sampler for 'format'/'filter' and uploads through 'upload'.
 	// 'render_pass' is the device's shared offscreen render pass for render
 	// targets (VK_NULL_HANDLE in headless tests that never render into the
-	// texture); the texture does not own it.
+	// texture); the texture does not own it. 'retire' receives the image
+	// resources on destruction for deferred freeing (WP-17); empty means
+	// free immediately.
 	VulkanTexture(VkDevice device,
 	              uint32_t width,
 	              uint32_t height,
@@ -174,7 +186,8 @@ public:
 	              TextureFilter filter,
 	              VkSampler sampler,
 	              VulkanUploadContext* upload,
-	              VkRenderPass render_pass = VK_NULL_HANDLE);
+	              VkRenderPass render_pass = VK_NULL_HANDLE,
+	              RetireImageResources retire = RetireImageResources());
 	// The offscreen-target shape (the headless test): wraps the given
 	// handles, owns all of them. 'sampler' is null until the target is also
 	// sampled.
@@ -227,6 +240,9 @@ private:
 	// borrows the device's shared pass (the sampled-texture shape).
 	bool owns_render_pass_;
 	VulkanUploadContext* upload_;
+	// WP-17: hands the image resources to the device for deferred freeing;
+	// empty when this texture is not device-tracked (headless tests).
+	RetireImageResources retire_;
 	VkImageLayout current_layout_;
 
 	DISALLOW_COPY_AND_ASSIGN(VulkanTexture);

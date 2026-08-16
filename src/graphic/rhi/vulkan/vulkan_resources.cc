@@ -171,7 +171,8 @@ VulkanTexture::VulkanTexture(const VkDevice device,
                              const TextureFilter /* filter */,
                              const VkSampler sampler,
                              VulkanUploadContext* const upload,
-                             const VkRenderPass render_pass)
+                             const VkRenderPass render_pass,
+                             RetireImageResources retire)
    : device_(device),
      width_(width),
      height_(height),
@@ -184,6 +185,7 @@ VulkanTexture::VulkanTexture(const VkDevice device,
      framebuffer_(VK_NULL_HANDLE),
      owns_render_pass_(false),
      upload_(upload),
+     retire_(std::move(retire)),
      current_layout_(VK_IMAGE_LAYOUT_UNDEFINED) {
 	// A sampled texture: TRANSFER_DST for upload, SAMPLED for descriptor
 	// binding, TRANSFER_SRC so the WP-18 read_back copy (and the headless
@@ -282,15 +284,26 @@ VulkanTexture::VulkanTexture(const VkDevice device,
 }
 
 VulkanTexture::~VulkanTexture() {
+	// The framebuffer and (owned) render pass are only ever referenced by
+	// offscreen command buffers, which fence-wait before the texture can be
+	// destroyed, so they are freed immediately. The image, its memory and
+	// its view are different (WP-17): with frames in flight, a recorded
+	// descriptor set may still reference the view, so they go through the
+	// device's deferred-free queue when one is registered - and are freed
+	// immediately otherwise (the headless test fence-waits everything).
 	if (framebuffer_ != VK_NULL_HANDLE) {
 		vkDestroyFramebuffer(device_, framebuffer_, nullptr);
 	}
 	if (owns_render_pass_ && render_pass_ != VK_NULL_HANDLE) {
 		vkDestroyRenderPass(device_, render_pass_, nullptr);
 	}
-	vkDestroyImageView(device_, view_, nullptr);
-	vkFreeMemory(device_, image_memory_, nullptr);
-	vkDestroyImage(device_, image_, nullptr);
+	if (retire_ != nullptr) {
+		retire_(image_, image_memory_, view_);
+	} else {
+		vkDestroyImageView(device_, view_, nullptr);
+		vkFreeMemory(device_, image_memory_, nullptr);
+		vkDestroyImage(device_, image_, nullptr);
+	}
 }
 
 uint32_t VulkanTexture::width() const {
