@@ -18,6 +18,7 @@
 
 #include "logic/map_objects/world/terrain_description.h"
 
+#include <algorithm>
 #include <memory>
 
 #include <SDL_surface.h>
@@ -110,7 +111,14 @@ TerrainDescription::TerrainDescription(const LuaTable& table,
                    dither_layer_disambiguator),
      temperature_(table.get_int("temperature")),
      fertility_(table.get_int("fertility")),
-     humidity_(table.get_int("humidity")) {
+     humidity_(table.get_int("humidity")),
+     dither_amplitude_(
+        table.has_key("dither_amplitude") ?
+           static_cast<float>(table.get_double("dither_amplitude")) :
+           1.f),
+     dither_softness_(
+        table.has_key("dither_softness") ? static_cast<float>(table.get_double("dither_softness")) :
+                                           1.f) {
 	if (dither_layer_disambiguator >= kMaxDitherLayerDisambiguator) {
 		throw wexception("Terrain %s: dither layer disambiguator %u exceeds maximum of %u",
 		                 name_.c_str(), dither_layer_disambiguator, kMaxDitherLayerDisambiguator);
@@ -140,6 +148,13 @@ TerrainDescription::TerrainDescription(const LuaTable& table,
 	if (temperature_ < 0) {
 		throw GameDataError("%s: temperature is not possible.", name_.c_str());
 	}
+
+	// Keep the dither band inside the emitted triangle (V1 design constraint):
+	// kDitherCentre - 0.23 * amplitude - softness * kDitherSoftness must stay
+	// positive, where 0.23 is the sum of the shape and stipple amplitudes in
+	// terrain_noise_params.glsl. 0.86 / 0.23 ≈ 3.7 is the hard amplitude limit.
+	dither_amplitude_ = std::clamp(dither_amplitude_, 0.f, 3.f);
+	dither_softness_ = std::clamp(dither_softness_, 0.f, 10.f);
 
 	for (const std::string& resource :
 	     table.get_table("valid_resources")->array_entries<std::string>()) {
@@ -325,6 +340,14 @@ int TerrainDescription::humidity() const {
 
 int TerrainDescription::fertility() const {
 	return fertility_;
+}
+
+float TerrainDescription::dither_amplitude() const {
+	return dither_amplitude_;
+}
+
+float TerrainDescription::dither_softness() const {
+	return dither_softness_;
 }
 
 std::string TerrainDescription::enhancement(const std::string& category) const {

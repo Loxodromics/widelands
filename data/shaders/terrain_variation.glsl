@@ -110,6 +110,21 @@ vec2 terrain_warp(vec2 world_pos) {
 		snoise(world_pos * kWarpFrequency + vec2(-9.7, 23.4)));
 }
 
+// Terrain-transition ("dither") field, sampled in dither.fp only. Two
+// frequencies, two jobs: the low-frequency term displaces the whole boundary
+// so it wanders across the map, the high-frequency term breaks it into a
+// stipple. The amplitude is not global -- dither.vp supplies it per vertex
+// from the overlay terrain's dither_amplitude (default 1.0), so only the
+// frequencies stay constant here; a per-terrain *frequency* would put a seam
+// wherever two overlay terrains meet. kDitherOffset parks the field in an
+// unrelated part of the simplex domain so the border shape shares no
+// structure with the terrain's colour variation. The constants live in
+// terrain_noise_params.glsl.
+float dither_field(vec2 p) {
+	return kDitherShapeAmp * snoise(p * kDitherShapeFreq + kDitherOffset)
+	     + kDitherStippleAmp * snoise(p * kDitherStippleFreq + kDitherOffset);
+}
+
 // Multiplier applied to the terrain texture colour, keyed on world position
 // in field units (var_texture_position). The mix extrapolates for negative
 // tint, giving a cool shift on one side and a warm shift on the other.

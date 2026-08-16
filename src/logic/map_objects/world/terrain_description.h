@@ -113,6 +113,14 @@ public:
 	/// texture should be drawn.
 	[[nodiscard]] int32_t dither_layer() const;
 
+	/// Multipliers on the global dither-band noise amplitude and softness for
+	/// this terrain's transition borders (V1, VISUAL_FIDELITY_RANKED.md §4.1).
+	/// 1.0 is the default look; the noise amplitude is clamped so the band
+	/// stays inside the emitted triangle. Keyed on the overlay terrain, the one
+	/// whose texture is feathered in.
+	[[nodiscard]] float dither_amplitude() const;
+	[[nodiscard]] float dither_softness() const;
+
 	/// Parameters for terrain affinity of immovables.
 	/// Temperature is in arbitrary units.
 	[[nodiscard]] int temperature() const;
@@ -145,6 +153,8 @@ private:
 	int temperature_;
 	int fertility_;
 	int humidity_;
+	float dither_amplitude_;
+	float dither_softness_;
 	std::map<std::string, std::string> enhancement_;
 	std::vector<std::string> texture_paths_;
 	std::vector<const Image*> textures_;

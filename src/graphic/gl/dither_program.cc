@@ -18,15 +18,11 @@
 
 #include "graphic/gl/dither_program.h"
 
-#include "base/wexception.h"
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
-#include "graphic/image_io.h"
 #include "graphic/rhi/device.h"
-#include "graphic/texture.h"
-#include "io/filesystem/layered_filesystem.h"
 #include "logic/player.h"
 
 DitherProgram::DitherProgram() {
@@ -36,18 +32,18 @@ DitherProgram::DitherProgram() {
 		desc.vertex_layout.stride = sizeof(PerVertexData);
 		desc.vertex_layout.attributes = {
 		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
-		   {"attr_dither_texture_position", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, dither_texture_x)},
+		   {"attr_dither_ramp", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, dither_ramp)},
 		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
 		   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
 		    offsetof(PerVertexData, texture_offset_x)},
 		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
 		    offsetof(PerVertexData, texture_x)},
+		   {"attr_dither_params", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, dither_amp)},
 		};
 		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
 		desc.blend = Rhi::kBlendAlpha;
 		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
-		desc.samplers = {{0, "u_dither_texture"}, {1, "u_terrain_texture"}};
+		desc.samplers = {{0, "u_terrain_texture"}};
 		desc.uniform_block = Rhi::UniformBlockBinding{
 		   0, "per_program_state", sizeof(Gl::PerProgramState)};
 		pipeline_ = Rhi::device().create_pipeline(desc);
@@ -60,7 +56,6 @@ DitherProgram::DitherProgram() {
 
 	gl_program_.build("dither");
 
-	u_dither_texture_ = glGetUniformLocation(gl_program_.object(), "u_dither_texture");
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
 	u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
@@ -72,37 +67,22 @@ DitherProgram::DitherProgram() {
 	vao_.define_attributes({
 	   {gl_program_.attribute_location("attr_brightness"), 1, sizeof(PerVertexData),
 	    offsetof(PerVertexData, brightness)},
-	   {gl_program_.attribute_location("attr_dither_texture_position"), 2, sizeof(PerVertexData),
-	    offsetof(PerVertexData, dither_texture_x)},
+	   {gl_program_.attribute_location("attr_dither_ramp"), 1, sizeof(PerVertexData),
+	    offsetof(PerVertexData, dither_ramp)},
 	   {gl_program_.attribute_location("attr_position"), 2, sizeof(PerVertexData),
 	    offsetof(PerVertexData, gl_x)},
 	   {gl_program_.attribute_location("attr_texture_offset"), 2, sizeof(PerVertexData),
 	    offsetof(PerVertexData, texture_offset_x)},
 	   {gl_program_.attribute_location("attr_texture_position"), 2, sizeof(PerVertexData),
 	    offsetof(PerVertexData, texture_x)},
+	   {gl_program_.attribute_location("attr_dither_params"), 2, sizeof(PerVertexData),
+	    offsetof(PerVertexData, dither_amp)},
 	});
-}
-
-void DitherProgram::set_dither_mask(const std::string& filepath) {
-	dither_mask_.reset(new Texture(load_image_as_sdl_surface(filepath, g_fs), true));
-
-	// The glTexParameteri block below is skipped on the core path because the
-	// RHI descriptor-set binding handles the texture as-is. It is redundant on
-	// *both* paths: Texture::init (texture.cc) already sets wrap=clamp-to-edge
-	// and filter=linear for every texture it creates, including this mask. It
-	// stays on the legacy path because decision 4 freezes that path; do not
-	// delete it (Phase C review, C12).
-	if (!Rhi::has_device()) {
-		Gl::State::instance().bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_CLAMP_TO_EDGE));
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_CLAMP_TO_EDGE));
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
-	}
 }
 
 void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
                                const TrianglePoint triangle_point,
+                               const Widelands::TerrainDescription& terrain,
                                const Vector2f& texture_offset) {
 	vertices_.emplace_back();
 	PerVertexData& back = vertices_.back();
@@ -112,21 +92,18 @@ void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
 	back.texture_x = field.texture_coords.x;
 	back.texture_y = field.texture_coords.y;
 	back.brightness = field.brightness;
+	back.dither_amp = terrain.dither_amplitude();
+	back.dither_soft = terrain.dither_softness();
 	back.texture_offset_x = texture_offset.x;
 	back.texture_offset_y = texture_offset.y;
 
 	switch (triangle_point) {
 	case TrianglePoint::kTopRight:
-		back.dither_texture_x = 1.;
-		back.dither_texture_y = 1.;
-		break;
 	case TrianglePoint::kTopLeft:
-		back.dither_texture_x = 0.;
-		back.dither_texture_y = 1.;
+		back.dither_ramp = 1.;
 		break;
 	case TrianglePoint::kBottomMiddle:
-		back.dither_texture_x = 0.5;
-		back.dither_texture_y = 0.;
+		back.dither_ramp = 0.;
 		break;
 	default:
 		NEVER_HERE();
@@ -162,9 +139,9 @@ void DitherProgram::maybe_add_dithering_triangle(
 
 		const Vector2f texture_offset =
 		   to_gl_texture(other_terrain_description.get_texture(gametime).blit_data()).origin();
-		add_vertex(f1, TrianglePoint::kTopRight, texture_offset);
-		add_vertex(f2, TrianglePoint::kTopLeft, texture_offset);
-		add_vertex(f3, TrianglePoint::kBottomMiddle, texture_offset);
+		add_vertex(f1, TrianglePoint::kTopRight, other_terrain_description, texture_offset);
+		add_vertex(f2, TrianglePoint::kTopLeft, other_terrain_description, texture_offset);
+		add_vertex(f3, TrianglePoint::kBottomMiddle, other_terrain_description, texture_offset);
 	}
 }
 
@@ -172,8 +149,6 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
                             const float texture_w,
                             const float texture_h,
                             const float z_value) {
-	assert(dither_mask_ != nullptr);
-
 	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
@@ -186,8 +161,7 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
 		state.texture_h = texture_h;
 		uniform_rhi_buffer_->update(&state, sizeof(state));
 
-		descriptor_set_->set_texture(0, dither_mask_->blit_data().texture);
-		descriptor_set_->set_texture(1, blit_data.texture);
+		descriptor_set_->set_texture(0, blit_data.texture);
 		descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
 
 		auto& command_buffer = Rhi::command_buffer();
@@ -206,11 +180,9 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
 	gl_array_buffer_.update(vertices_);
 	vao_.bind();
 
-	gl_state.bind(GL_TEXTURE0, dither_mask_->blit_data().texture_id);
-	gl_state.bind(GL_TEXTURE1, blit_data.texture_id);
+	gl_state.bind(GL_TEXTURE0, blit_data.texture_id);
 
-	glUniform1i(u_dither_texture_, 0);
-	glUniform1i(u_terrain_texture_, 1);
+	glUniform1i(u_terrain_texture_, 0);
 
 	glUniform1f(u_z_value_, z_value);
 	glUniform2f(u_texture_dimensions_, texture_w, texture_h);

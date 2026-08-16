@@ -284,16 +284,13 @@ wl_library(graphic_terrain_programs
     gl/workarea_program.h
   USES_ATOMIC
   DEPENDS
-    base_exceptions
     base_geometry
     base_macros
     graphic
     graphic_fields_to_draw
     graphic_gl_utils
-    graphic_image_io
     graphic_rhi
     graphic_surface
-    io_filesystem
     logic
     logic_map_objects
     logic_map_objects_description_maintainer

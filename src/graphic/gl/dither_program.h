@@ -40,8 +40,6 @@ public:
 	          float z_value,
 	          const Widelands::Player*);
 
-	void set_dither_mask(const std::string& filepath);
-
 	// Sets the terrain-noise strength multiplier (0 disables, 1 is the default
 	// look). Backlog item 2 / WP-8 of the renderer modernization plan.
 	void set_noise_strength(float strength) {
@@ -68,11 +66,14 @@ private:
 	   int my_terrain,
 	   int other_terrain);
 
-	// Adds the 'field' as an vertex to the 'vertices_'. The 'order_index'
-	// defines which texture position in the dithering texture will be used for
-	// this vertex.
+	// Adds the 'field' as an vertex to the 'vertices_'. The 'triangle_point'
+	// defines the dither ramp value (1.0 at the two top corners, 0.0 at the
+	// bottom-middle), and 'terrain' supplies the per-terrain dither amplitude
+	// and softness. 'texture_offset' is the overlay terrain's origin in the
+	// texture atlas.
 	void add_vertex(const FieldsToDraw::Field& field,
 	                TrianglePoint triangle_point,
+	                const Widelands::TerrainDescription& terrain,
 	                const Vector2f& texture_offset);
 
 	struct PerVertexData {
@@ -81,8 +82,9 @@ private:
 		float texture_x;
 		float texture_y;
 		float brightness;
-		float dither_texture_x;
-		float dither_texture_y;
+		float dither_ramp;
+		float dither_amp;
+		float dither_soft;
 		float texture_offset_x;
 		float texture_offset_y;
 	};
@@ -105,7 +107,6 @@ private:
 
 	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
 	// reads these from the uniform block instead).
-	GLint u_dither_texture_;
 	GLint u_terrain_texture_;
 	GLint u_texture_dimensions_;
 	GLint u_z_value_;
@@ -114,15 +115,12 @@ private:
 	GLint u_warp_amplitude_;
 
 	// RHI resources for the core path (the legacy members above are unused
-	// there). dither reads two textures (u_dither_texture, u_terrain_texture)
-	// and the full per_program_state block.
+	// there). dither reads the terrain atlas and the full per_program_state
+	// block.
 	std::unique_ptr<Rhi::Pipeline> pipeline_;
 	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
 	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
-
-	// The texture mask for the dithering step.
-	std::unique_ptr<Texture> dither_mask_;
 
 	// The terrain-noise strength multiplier, see set_noise_strength().
 	float noise_strength_ = 1.0f;

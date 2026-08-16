@@ -55,3 +55,28 @@ const float kWarpFrequency = 8.5;
 // swing because it is heavily blue-weighted, which is what sets the ceiling.
 // Clipping is not a constraint anywhere in that range (+0.24 points at worst).
 const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
+
+// Dither-band (terrain-transition) parameters, see
+// Claude/VISUAL_FIDELITY_RANKED.md §4.1. Replaces the stretched 1-bit edge.png
+// mask with a world-space noise threshold. Ramp units: 1 at the triangle's
+// shared edge (where the overlay terrain is fully opaque), 0 at the far
+// vertex. Measured profile of edge.png: 89% coverage at the shared edge, zero
+// by ramp 0.75, 50% point at ramp 0.86 -- the constants below start from that
+// centre, not the doc's (2*ramp - 1) form, which would sit at ramp 0.5 and
+// roughly double the band. The starting amplitudes land the band on the
+// measured mask: the shape term makes the boundary wander, the stipple term
+// breaks it into the Settlers-2 grain. kDitherCentre + kDitherShapeAmp +
+// kDitherStippleAmp + kDitherSoftness = 1.00 touches the shared edge by design
+// (clipping flat there is fine); the lower side 0.86 - 0.23 = 0.62 keeps the
+// noise from retracting the band to nothing, the failure that would look
+// wrong.
+const float kDitherCentre = 0.86;
+const float kDitherStippleAmp = 0.13;
+const float kDitherStippleFreq = 5.0;
+const float kDitherShapeAmp = 0.10;
+const float kDitherShapeFreq = 0.40;
+const float kDitherSoftness = 0.01;
+
+// Arbitrary; only needs to land far from p=0 so the border shape shares no
+// structure with the value/tint/warp fields (same technique as kTintOffset).
+const vec2 kDitherOffset = vec2(73.1, -41.8);
