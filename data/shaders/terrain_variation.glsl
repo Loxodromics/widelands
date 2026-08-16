@@ -37,26 +37,63 @@ float snoise(vec2 v) {
 // Terrain variation. The input is var_texture_position, which is world position
 // in units of one field. See Claude/TERRAIN_NOISE.md.
 //
-// Both fields are weighted sums of the same three octaves, so the pair costs no
-// extra snoise calls.
+// Value (brightness) and tint (warm/cool hue) are two independently sampled
+// noise fields -- terrain_value_field() and terrain_tint_field() below --
+// composed by terrain_variation(). They used to share the same three raw
+// snoise() samples via two fixed linear-combination weightings (a cost-saving
+// trick, see Claude/TERRAIN_NOISE.md §6 "Phase 1b"); Phase 1c replaced that
+// with a dedicated field for tint, sampled at its own offset domain, since the
+// shared scheme was only statistically decorrelated in aggregate, not
+// independent per pixel.
 //
 // The value, tint and warp amplitudes (u_value_amplitude, u_tint_amplitude,
 // u_warp_amplitude) are uniforms, fed from C++ as members of the
 // "per_program_state" block declared in terrain.fp/dither.fp. They scale with
 // the terrain_noise_strength config option (see Claude/TERRAIN_NOISE.md).
 //
-// The tunable constants this function uses (octave frequencies, rotation,
+// The tunable constants these functions use (octave frequencies, rotation,
 // weights) live in terrain_noise_params.glsl, included ahead of this file.
-vec2 terrain_fields(vec2 p) {
+
+// Brightness ("value") field: 3-octave fBm, unchanged since Phase 1. Octave 3
+// carries most of the weight and its frequency is pinned to the antiphase
+// rule (see the comment above kOctave3Frequency in terrain_noise_params.glsl)
+// because it also has to fight the terrain's 1-field UV repeat. Octaves 1 and
+// 2 are free parameters tuned for regional/mid-scale grain.
+float terrain_value_field(vec2 p) {
 	mat2 rot = kOctaveRotation;
 	float o1 = snoise(p * kOctave1Frequency);
 	p = rot * p;
 	float o2 = snoise(p * kOctave2Frequency);
 	p = rot * p;
 	float o3 = snoise(p * kOctave3Frequency);
-	float value = (kValueWeight1 * o1 + kValueWeight2 * o2 + kValueWeight3 * o3) / kValueWeightSum;
-	float tint = (kTintWeight1 * o1 + kTintWeight2 * o2 + kTintWeight3 * o3) / kTintWeightSum;
-	return vec2(value, tint);
+	return (kValueWeight1 * o1 + kValueWeight2 * o2 + kValueWeight3 * o3) / kValueWeightSum;
+}
+
+// Warm/cool ("tint") field: an independently sampled 2-octave fBm, offset into
+// an unrelated part of the simplex domain (kTintOffset below) so it shares no
+// structure with terrain_value_field() -- the same technique terrain_warp()
+// uses below to keep its x/y displacement independent of the colour
+// variation. Low octave dominates and gives tint its slow, broad "material"
+// read (drier patches yellower, shaded growth cooler and greener -- see
+// Claude/TERRAIN_NOISE.md §6); the high octave is a smaller admixture that
+// breaks up the low octave's smooth, rounded undulation. Neither carries the
+// antiphase constraint that pins value's octave 3 and the warp frequency --
+// tint has no repeat-breaking job (§16) -- so both are free parameters, tuned
+// by eye, exactly like value's octaves 1 and 2.
+//
+// Because the two fields no longer share raw samples, there is no
+// orthogonality constraint on the weights either: the old scheme needed a
+// negative weight purely to keep its two projections of the same three
+// numbers decorrelated. That requirement is gone -- these two weights just
+// say how much each tint octave contributes.
+const vec2 kTintOffset = vec2(41.7, -13.2);  // arbitrary; only needs to land far from p=0
+
+float terrain_tint_field(vec2 p) {
+	mat2 rot = kOctaveRotation;
+	float lo = snoise(p * kTintFrequencyLow + kTintOffset);
+	p = rot * p;
+	float hi = snoise(p * kTintFrequencyHigh + kTintOffset);
+	return (kTintWeightLow * lo + kTintWeightHigh * hi) / kTintWeightSum;
 }
 
 // Domain warp, applied to var_texture_position before the fract() in both
@@ -77,7 +114,8 @@ vec2 terrain_warp(vec2 world_pos) {
 // in field units (var_texture_position). The mix extrapolates for negative
 // tint, giving a cool shift on one side and a warm shift on the other.
 vec3 terrain_variation(vec2 world_pos) {
-	vec2 fields = terrain_fields(world_pos);
-	return (1.0 + u_value_amplitude * fields.x) *
-	       mix(vec3(1.0), kWarmTint, u_tint_amplitude * fields.y);
+	float value = terrain_value_field(world_pos);
+	float tint = terrain_tint_field(world_pos);
+	return (1.0 + u_value_amplitude * value) *
+	       mix(vec3(1.0), kWarmTint, u_tint_amplitude * tint);
 }
