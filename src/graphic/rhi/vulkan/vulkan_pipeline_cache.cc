@@ -136,6 +136,9 @@ struct VulkanPipelineCache::Impl {
 		VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
 		VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
 		std::vector<std::pair<BlendState, VkPipeline>> pipelines;
+		// Whether the descriptor set layout declares any bindings (WP-15's
+		// draw-skip rule needs this; see has_descriptor_bindings()).
+		bool has_bindings = false;
 	};
 	std::map<std::string, ProgramPipelines> programs;
 
@@ -237,6 +240,8 @@ VulkanPipelineCache::Impl::Impl(const VkDevice init_device,
 		ProgramPipelines& program = programs[desc.program_name];
 		if (program.descriptor_set_layout == VK_NULL_HANDLE) {
 			program.descriptor_set_layout = make_descriptor_set_layout(*manifest_program);
+			program.has_bindings = !manifest_program->samplers.empty() ||
+			                       !manifest_program->uniform_blocks.empty();
 			VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
 			pipeline_layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 			pipeline_layout_create_info.setLayoutCount = 1;
@@ -521,6 +526,16 @@ VulkanPipelineCache::descriptor_set_layout(const std::string& program_name) cons
 		throw wexception("Vulkan: no descriptor set layout for program '%s'", program_name.c_str());
 	}
 	return program_it->second.descriptor_set_layout;
+}
+
+bool VulkanPipelineCache::has_descriptor_bindings(const std::string& program_name) const {
+	const auto program_it = impl_->programs.find(program_name);
+	if (program_it == impl_->programs.end()) {
+		throw wexception("Vulkan: no pipelines built for program '%s'", program_name.c_str());
+	}
+	// The layout was built from the manifest, so asking whether the program
+	// has any samplers/UBOs is cheaper than reflecting over the layout.
+	return program_it->second.has_bindings;
 }
 
 }  // namespace Rhi

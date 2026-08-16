@@ -148,10 +148,11 @@ private:
 	/// null on the frozen legacy 2.1 path.
 	std::unique_ptr<Rhi::Device> rhi_device_;
 
-	/// The Vulkan bootstrap device (WP-12). Only created for
-	/// --renderer=vulkan; it owns the surface/swapchain and the per-frame
-	/// clear-colour present, while the GL context above keeps running as an
-	/// invisible stand-in. Must be destroyed before sdl_window_.
+	/// The Vulkan RHI device (WP-12 bootstrap, WP-15 conversion). Only
+	/// created for --renderer=vulkan; it registers itself with
+	/// Rhi::set_device and owns the surface/swapchain, the pipelines and the
+	/// per-frame recording/present loop. Must be destroyed before
+	/// sdl_window_.
 	std::unique_ptr<Rhi::VulkanDevice> vulkan_device_;
 };
 

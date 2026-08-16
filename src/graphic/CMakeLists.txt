@@ -33,22 +33,28 @@ wl_library(graphic_rhi_gl
     graphic_rhi
 )
 
-# The Vulkan bootstrap (WP-12) and its render pass / pipeline cache (WP-14):
-# instance, device, surface, swapchain, the screen render pass with its depth
-# attachment, and the twelve pre-built pipelines. Not a Rhi::Device yet
-# (WP-15 converts it), so the eight programs keep their GL paths; the pipeline
-# cache consumes the pipeline catalog and the bindings manifest. The library
-# exists in every configuration so 'graphic' can depend on it
+# The Vulkan backend: instance, device, surface, swapchain (WP-12), the
+# screen render pass with its depth attachment and the twelve pre-built
+# pipelines (WP-14), and the frame loop with the staging arena and the
+# command recording (WP-15) - the Vulkan implementation of the RHI. The
+# pipeline cache consumes the pipeline catalog and the bindings manifest.
+# The library exists in every configuration so 'graphic' can depend on it
 # unconditionally; without OPTION_BUILD_VULKAN the .cc files compile to stubs
 # that throw (see the WL_BUILD_VULKAN splits), and only then is volk linked.
 wl_library(graphic_rhi_vulkan
   SRCS
+    rhi/vulkan/vulkan_buffer.cc
+    rhi/vulkan/vulkan_buffer.h
+    rhi/vulkan/vulkan_command_buffer.cc
+    rhi/vulkan/vulkan_command_buffer.h
     rhi/vulkan/vulkan_device.cc
     rhi/vulkan/vulkan_device.h
     rhi/vulkan/vulkan_manifest.cc
     rhi/vulkan/vulkan_manifest.h
     rhi/vulkan/vulkan_pipeline_cache.cc
     rhi/vulkan/vulkan_pipeline_cache.h
+    rhi/vulkan/vulkan_resources.cc
+    rhi/vulkan/vulkan_resources.h
   DEPENDS
     base
     base_exceptions
@@ -60,6 +66,7 @@ wl_library(graphic_rhi_vulkan
 )
 if (OPTION_BUILD_VULKAN)
   target_link_libraries(graphic_rhi_vulkan third_party_volk)
+  add_subdirectory(rhi/vulkan/test)
 endif()
 
 # SPIR-V generation for the eight shader programs (renderer modernization

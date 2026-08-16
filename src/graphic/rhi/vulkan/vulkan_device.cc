@@ -32,17 +32,15 @@
 #include <SDL_vulkan.h>
 
 #include "base/log.h"
+#include "graphic/rhi/device.h"
+#include "graphic/rhi/vulkan/vulkan_buffer.h"
+#include "graphic/rhi/vulkan/vulkan_command_buffer.h"
 #include "graphic/rhi/vulkan/vulkan_pipeline_cache.h"
+#include "graphic/rhi/vulkan/vulkan_resources.h"
 
 namespace Rhi {
 
 namespace {
-
-// The placeholder fill colour presented until real drawing lands (WP-14
-// onwards). Deliberately not black: a dark purple is unmistakably the
-// bootstrap clear, so a present that silently stops drawing is distinguishable
-// from an unrendered black window.
-const VkClearColorValue kClearColor = {{0.15f, 0.05f, 0.20f, 1.0f}};
 
 // Validation layers are a debug-build feature (plan WP-12 scope): release
 // builds pay nothing and never depend on the layer being installed.
@@ -51,6 +49,11 @@ constexpr bool kEnableValidation = false;
 #else
 constexpr bool kEnableValidation = true;
 #endif
+
+// The initial staging-arena size (WP-15): one full frame's vertex traffic is
+// well below this even on dense scenes; the arena grows by allocating more
+// chunks when a frame exceeds it.
+constexpr VkDeviceSize kInitialArenaSize = 32u * 1024u * 1024u;
 
 // Names the VkResult codes the bootstrap can surface; anything else is
 // reported numerically. A hand-rolled subset rather than the full
@@ -150,6 +153,33 @@ uint32_t find_memory_type(const VkPhysicalDevice physical_device,
 	throw wexception("Vulkan: no suitable memory type found.");
 }
 
+// The memory type for the staging arena: prefer device-local host-visible
+// coherent memory (BAR memory on the primary box), fall back to plain
+// host-visible coherent. Every driver the plan targets offers at least one
+// of the two.
+uint32_t find_arena_memory_type(const VkPhysicalDevice physical_device) {
+	VkPhysicalDeviceMemoryProperties memory_properties{};
+	vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+	uint32_t fallback = UINT32_MAX;
+	for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+		const VkMemoryPropertyFlags flags = memory_properties.memoryTypes[i].propertyFlags;
+		if ((flags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) !=
+		    (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+			continue;
+		}
+		if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0u) {
+			return i;
+		}
+		if (fallback == UINT32_MAX) {
+			fallback = i;
+		}
+	}
+	if (fallback != UINT32_MAX) {
+		return fallback;
+	}
+	throw wexception("Vulkan: no host-visible coherent memory type for the staging arena.");
+}
+
 }  // namespace
 
 // All Vulkan handles and state live here so vulkan_device.h stays free of
@@ -160,11 +190,16 @@ struct VulkanDevice::Impl {
 
 	// Creates (or re-creates after a resize) the swapchain, the depth
 	// attachment and the per-frame framebuffers. Returns false if the surface
-	// is currently unusable (e.g. minimized to a zero-size extent); present()
-	// skips the frame then.
+	// is currently unusable (e.g. minimized to a zero-size extent); the
+	// frame loop skips the frame then.
 	bool recreate_swapchain();
 
-	void present();
+	// The frame loop (WP-15): acquire, record, submit, present. begin_frame
+	// returns a VulkanCommandBuffer bound to the acquired framebuffer, or a
+	// no-op buffer when the frame is dropped (resize, lost surface).
+	// end_frame finishes the recording and presents.
+	std::unique_ptr<CommandBuffer> begin_frame();
+	void end_frame(std::unique_ptr<CommandBuffer> command_buffer);
 
 	// Creates the depth image, its memory and view, plus one framebuffer per
 	// swapchain image (colour view + the shared depth view). 'pipeline' must
@@ -211,6 +246,19 @@ struct VulkanDevice::Impl {
 	// so it can be re-signaled.
 	VkFence frame_fence = VK_NULL_HANDLE;
 	VkFence acquire_fence = VK_NULL_HANDLE;
+
+	// The per-frame staging arena (WP-15): every vertex and uniform update
+	// allocates a fresh region here; reset after the previous frame's fence
+	// wait in begin_frame.
+	std::unique_ptr<VulkanArena> arena;
+
+	// Set when begin_frame dropped the frame (swapchain recreation); end_frame
+	// then submits nothing.
+	bool frame_dropped_ = false;
+
+	// The swapchain image index the current frame acquired and end_frame must
+	// present.
+	uint32_t frame_image_index_ = 0;
 };
 
 VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
@@ -416,6 +464,13 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	check_vulkan_result(vkCreateFence(device, &fence_create_info, nullptr, &acquire_fence),
 	                    "vkCreateFence");
 
+	// The staging arena (WP-15): allocations are aligned to the device's
+	// uniform-buffer-offset alignment so WP-16 can bind any region as a UBO.
+	const uint32_t arena_alignment = static_cast<uint32_t>(
+	   std::max<VkDeviceSize>(properties.limits.minUniformBufferOffsetAlignment, 256u));
+	arena.reset(new VulkanArena(
+	   device, find_arena_memory_type(physical_device), arena_alignment, kInitialArenaSize));
+
 	if (!recreate_swapchain()) {
 		throw wexception("Vulkan: the window has no drawable size.");
 	}
@@ -423,6 +478,9 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 
 VulkanDevice::Impl::~Impl() {
 	vkDeviceWaitIdle(device);
+	// The arena must go after the idle wait (recorded draws reference its
+	// regions) and before the device.
+	arena.reset();
 	vkDestroyFence(device, frame_fence, nullptr);
 	vkDestroyFence(device, acquire_fence, nullptr);
 	vkDestroyCommandPool(device, command_pool, nullptr);
@@ -509,9 +567,7 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 	const VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
 
 	// The frame renders through the screen render pass (WP-14), so the images
-	// need only the mandatory COLOR_ATTACHMENT usage - the bootstrap's
-	// TRANSFER_DST (for vkCmdClearColorImage) is gone with the render pass's
-	// loadOp CLEAR.
+	// need only the mandatory COLOR_ATTACHMENT usage.
 	constexpr VkImageUsageFlags kSwapchainUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 	if ((capabilities.supportedUsageFlags & kSwapchainUsage) != kSwapchainUsage) {
 		throw wexception("Vulkan: the surface does not support COLOR_ATTACHMENT image usage.");
@@ -675,18 +731,16 @@ void VulkanDevice::Impl::create_depth_and_framebuffers(const VkRenderPass render
 	}
 }
 
-void VulkanDevice::Impl::present() {
+std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 	// Fully serialized bootstrap: one fence, no semaphores at all. The fence
-	// wait before the acquire guarantees the queue is done with every image;
-	// the acquire itself guarantees the presentation engine is done with the
-	// image it hands out (and, with a NULL semaphore, blocks until then); the
-	// fence wait after the submit guarantees the clear is visible before the
-	// present is queued. Semaphores only buy parallelism, which WP-17 adds
-	// with real frames in flight - and skipping them here removes the whole
-	// class of pending-semaphore validation errors that any partially
-	// synchronized loop trips.
+	// wait before the acquire guarantees the queue is done with every image
+	// (and with every arena region the previous frame recorded); the acquire
+	// itself guarantees the presentation engine is done with the image it
+	// hands out (and, with a NULL semaphore, blocks until then). Semaphores
+	// only buy parallelism, which WP-17 adds with real frames in flight.
 	check_vulkan_result(vkWaitForFences(device, 1, &frame_fence, VK_TRUE, UINT64_MAX),
 	                    "vkWaitForFences");
+	arena->reset();
 
 	check_vulkan_result(vkResetFences(device, 1, &acquire_fence), "vkResetFences");
 	uint32_t image_index = 0;
@@ -694,15 +748,17 @@ void VulkanDevice::Impl::present() {
 	   device, swapchain, UINT64_MAX, VK_NULL_HANDLE, acquire_fence, &image_index);
 	if (acquire_result == VK_ERROR_OUT_OF_DATE_KHR || acquire_result == VK_SUBOPTIMAL_KHR) {
 		// Window was resized; the swapchain no longer matches the surface.
-		// Recreate and skip this frame. The fence is left signaled, so the
+		// Recreate and drop this frame. The fence is left signaled, so the
 		// next frame's wait passes immediately.
 		recreate_swapchain();
-		return;
+		frame_dropped_ = true;
+		return std::unique_ptr<CommandBuffer>(new VulkanNoOpCommandBuffer());
 	}
 	if (acquire_result != VK_SUCCESS) {
 		log_warn("Vulkan: skipping a frame: vkAcquireNextImageKHR: %s\n",
 		         vulkan_result_string(acquire_result));
-		return;
+		frame_dropped_ = true;
+		return std::unique_ptr<CommandBuffer>(new VulkanNoOpCommandBuffer());
 	}
 	// The spec requires waiting on the acquire fence before touching the
 	// image (VUID-vkAcquireNextImageKHR-fence-...): the presentation engine
@@ -718,27 +774,21 @@ void VulkanDevice::Impl::present() {
 	check_vulkan_result(vkBeginCommandBuffer(command_buffer, &command_buffer_begin_info),
 	                    "vkBeginCommandBuffer");
 
-	// The placeholder frame: a real render pass through the screen framebuffer
-	// (WP-14), clearing colour and depth via loadOp - the same shape
-	// RenderQueue's begin_pass(nullptr) will record in WP-15, when the twelve
-	// pipelines start drawing. The render pass owns the image-layout
-	// transitions (UNDEFINED -> colour attachment -> present), so no manual
-	// barriers are needed.
-	VkRenderPassBeginInfo render_pass_begin_info{};
-	render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	render_pass_begin_info.renderPass = pipelines->render_pass();
-	render_pass_begin_info.framebuffer = framebuffers[image_index];
-	render_pass_begin_info.renderArea = {{0, 0}, extent};
-	VkClearValue clear_values[2] {};
-	clear_values[0].color = kClearColor;
-	// Depth clears to 1.0 = far (RHI_INTERFACE.md §2.5).
-	clear_values[1].depthStencil = {1.0f, 0};
-	render_pass_begin_info.clearValueCount = 2;
-	render_pass_begin_info.pClearValues = clear_values;
-	vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
-	vkCmdEndRenderPass(command_buffer);
+	frame_dropped_ = false;
+	frame_image_index_ = image_index;
+	const VulkanCommandBuffer::Target target{
+	   pipelines->render_pass(), framebuffers[image_index], extent, 2};
+	return std::unique_ptr<CommandBuffer>(
+	   new VulkanCommandBuffer(command_buffer, pipelines.get(), target));
+}
 
-	check_vulkan_result(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer");
+void VulkanDevice::Impl::end_frame(std::unique_ptr<CommandBuffer> command_buffer_wrapper) {
+	if (frame_dropped_) {
+		frame_dropped_ = false;
+		return;
+	}
+	auto* recorded = static_cast<VulkanCommandBuffer*>(command_buffer_wrapper.get());
+	recorded->finish();
 
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -752,7 +802,7 @@ void VulkanDevice::Impl::present() {
 	present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 	present_info.swapchainCount = 1;
 	present_info.pSwapchains = &swapchain;
-	present_info.pImageIndices = &image_index;
+	present_info.pImageIndices = &frame_image_index_;
 	const VkResult present_result = vkQueuePresentKHR(queue, &present_info);
 	if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
 		recreate_swapchain();
@@ -765,12 +815,80 @@ void VulkanDevice::Impl::present() {
 }
 
 VulkanDevice::VulkanDevice(SDL_Window* window) : impl_(std::make_unique<Impl>(window)) {
+	set_device(this);
 }
 
-VulkanDevice::~VulkanDevice() = default;
+VulkanDevice::~VulkanDevice() {
+	set_device(nullptr);
+}
 
-void VulkanDevice::present() {
-	impl_->present();
+Backend VulkanDevice::backend() const {
+	return Backend::kVulkan;
+}
+
+std::unique_ptr<CommandBuffer> VulkanDevice::begin_frame() {
+	std::unique_ptr<CommandBuffer> command_buffer = impl_->begin_frame();
+	push_command_buffer(command_buffer.get());
+	return command_buffer;
+}
+
+void VulkanDevice::end_frame(std::unique_ptr<CommandBuffer> command_buffer) {
+	impl_->end_frame(std::move(command_buffer));
+	pop_command_buffer();
+}
+
+std::unique_ptr<CommandBuffer> VulkanDevice::begin_offscreen() {
+	// WP-16b owns the real immediate render-to-texture path. Until then the
+	// callers (font cache, image cache, minimap) record into a no-op buffer:
+	// their textures stay blank, which is invisible while no descriptor binds
+	// a texture (WP-16). The game keeps running either way.
+	static bool warned = false;
+	if (!warned) {
+		warned = true;
+		log_warn("Vulkan: immediate render-to-texture is a no-op until WP-16b (font, minimap "
+		         "and image-cache textures stay blank)\n");
+	}
+	std::unique_ptr<CommandBuffer> command_buffer(new VulkanNoOpCommandBuffer());
+	push_command_buffer(command_buffer.get());
+	return command_buffer;
+}
+
+void VulkanDevice::submit_offscreen(std::unique_ptr<CommandBuffer> /* command_buffer */) {
+	// Nothing was recorded into the no-op buffer; popping the stack restores
+	// whatever command buffer was recording before this offscreen submit.
+	pop_command_buffer();
+}
+
+void VulkanDevice::read_back_swapchain(uint8_t* /* pixels */) {
+	throw wexception("Rhi::VulkanDevice::read_back_swapchain: swapchain readback is WP-18");
+}
+
+std::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDescriptor& /* desc */) {
+	throw wexception("Rhi::VulkanDevice::create_texture: texture creation and upload are WP-16");
+}
+
+std::unique_ptr<Texture>
+VulkanDevice::create_texture_view(Texture& /* parent */, const Recti& /* subrect */) {
+	throw wexception("Rhi::VulkanDevice::create_texture_view: sub-textures are modelled by BlitData");
+}
+
+std::unique_ptr<Buffer> VulkanDevice::create_buffer(const uint32_t /* size */,
+                                                    const BufferUsage /* usage */) {
+	// Both vertex and uniform data live in the per-frame staging arena; the
+	// capacity hint is ignored (see VulkanBuffer).
+	return std::unique_ptr<Buffer>(new VulkanBuffer(*impl_->arena));
+}
+
+std::unique_ptr<Pipeline> VulkanDevice::create_pipeline(const PipelineDescriptor& desc) {
+	const bool requires_binding = impl_->pipelines->has_descriptor_bindings(desc.program_name);
+	return std::unique_ptr<Pipeline>(
+	   new VulkanPipeline(desc.program_name, desc.blend, requires_binding));
+}
+
+std::unique_ptr<DescriptorSet> VulkanDevice::create_descriptor_set(const Pipeline& pipeline) {
+	const VulkanPipeline& vulkan_pipeline = static_cast<const VulkanPipeline&>(pipeline);
+	return std::unique_ptr<DescriptorSet>(
+	   new VulkanDescriptorSet(vulkan_pipeline.requires_binding()));
 }
 
 }  // namespace Rhi
@@ -792,7 +910,49 @@ VulkanDevice::VulkanDevice(SDL_Window* /* window */) : impl_(std::make_unique<Im
 
 VulkanDevice::~VulkanDevice() = default;
 
-void VulkanDevice::present() {
+Backend VulkanDevice::backend() const {
+	return Backend::kVulkan;
+}
+
+std::unique_ptr<CommandBuffer> VulkanDevice::begin_frame() {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
+}
+
+void VulkanDevice::end_frame(std::unique_ptr<CommandBuffer> /* command_buffer */) {
+}
+
+std::unique_ptr<CommandBuffer> VulkanDevice::begin_offscreen() {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
+}
+
+void VulkanDevice::submit_offscreen(std::unique_ptr<CommandBuffer> /* command_buffer */) {
+}
+
+void VulkanDevice::read_back_swapchain(uint8_t* /* pixels */) {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
+}
+
+std::unique_ptr<Texture> VulkanDevice::create_texture(const TextureDescriptor& /* desc */) {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
+}
+
+std::unique_ptr<Texture>
+VulkanDevice::create_texture_view(Texture& /* parent */, const Recti& /* subrect */) {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
+}
+
+std::unique_ptr<Buffer> VulkanDevice::create_buffer(const uint32_t /* size */,
+                                                    const BufferUsage /* usage */) {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
+}
+
+std::unique_ptr<Pipeline> VulkanDevice::create_pipeline(const PipelineDescriptor& /* desc */) {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
+}
+
+std::unique_ptr<DescriptorSet>
+VulkanDevice::create_descriptor_set(const Pipeline& /* pipeline */) {
+	throw wexception("This build has no Vulkan support (built without OPTION_BUILD_VULKAN).");
 }
 
 }  // namespace Rhi
