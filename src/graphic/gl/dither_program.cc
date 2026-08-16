@@ -18,7 +18,6 @@
 
 #include "graphic/gl/dither_program.h"
 
-#include "base/wexception.h"
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
 #include "graphic/gl/terrain_noise.h"
@@ -82,8 +81,47 @@ DitherProgram::DitherProgram() {
 	});
 }
 
+namespace {
+
+/* The terrain of a field's 'd' or 'r' triangle, as the player should see it:
+ * under fog of war that is what they saw last, not what is there now. 'map' is
+ * null exactly when the true terrain applies (no player, or seeing all).
+ */
+Widelands::DescriptionIndex triangle_terrain(const FieldsToDraw& fields_to_draw,
+                                             const Widelands::Map* map,
+                                             const Widelands::Player* player,
+                                             const int index,
+                                             const bool down_triangle) {
+	const Widelands::FCoords& fcoords = fields_to_draw.at(index).fcoords;
+	if (map != nullptr) {
+		const auto terrains = player->fields()[map->get_index(fcoords)].terrains.load();
+		return down_triangle ? terrains.d : terrains.r;
+	}
+	return down_triangle ? fcoords.field->terrain_d() : fcoords.field->terrain_r();
+}
+
+}  // namespace
+
+void DitherProgram::TerrainSet::add(const Widelands::DescriptionIndex terrain) {
+	if (contains(terrain)) {
+		return;
+	}
+	if (count < kCapacity) {
+		terrains[count++] = terrain;
+	}
+}
+
+bool DitherProgram::TerrainSet::contains(const Widelands::DescriptionIndex terrain) const {
+	for (uint8_t i = 0; i < count; ++i) {
+		if (terrains[i] == terrain) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
-                               const TrianglePoint triangle_point,
+                               const float dither_ramp,
                                const Widelands::TerrainDescription& terrain,
                                const Vector2f& texture_offset) {
 	vertices_.emplace_back();
@@ -94,56 +132,95 @@ void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
 	back.texture_x = field.texture_coords.x;
 	back.texture_y = field.texture_coords.y;
 	back.brightness = field.brightness;
+	back.dither_ramp = dither_ramp;
 	back.dither_amplitude = terrain.dither_amplitude();
 	back.dither_softness = terrain.dither_softness();
 	back.texture_offset_x = texture_offset.x;
 	back.texture_offset_y = texture_offset.y;
+}
 
-	switch (triangle_point) {
-	case TrianglePoint::kTopRight:
-	case TrianglePoint::kTopLeft:
-		back.dither_ramp = 1.;
-		break;
-	case TrianglePoint::kBottomMiddle:
-		back.dither_ramp = 0.;
-		break;
-	default:
-		NEVER_HERE();
+void DitherProgram::collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
+                                            const Widelands::Map* map,
+                                            const Widelands::Player* player) {
+	vertex_terrains_.assign(fields_to_draw.size(), TerrainSet());
+
+	for (size_t i = 0; i < fields_to_draw.size(); ++i) {
+		const FieldsToDraw::Field& field = fields_to_draw.at(i);
+		const int index = static_cast<int>(i);
+
+		if (field.bln_index != FieldsToDraw::kInvalidIndex &&
+		    field.brn_index != FieldsToDraw::kInvalidIndex) {
+			const Widelands::DescriptionIndex terrain_d =
+			   triangle_terrain(fields_to_draw, map, player, index, true);
+			vertex_terrains_[i].add(terrain_d);
+			vertex_terrains_[field.bln_index].add(terrain_d);
+			vertex_terrains_[field.brn_index].add(terrain_d);
+		}
+
+		if (field.rn_index != FieldsToDraw::kInvalidIndex &&
+		    field.brn_index != FieldsToDraw::kInvalidIndex) {
+			const Widelands::DescriptionIndex terrain_r =
+			   triangle_terrain(fields_to_draw, map, player, index, false);
+			vertex_terrains_[i].add(terrain_r);
+			vertex_terrains_[field.rn_index].add(terrain_r);
+			vertex_terrains_[field.brn_index].add(terrain_r);
+		}
 	}
 }
 
-void DitherProgram::maybe_add_dithering_triangle(
+void DitherProgram::add_dithering_triangles(
    const uint32_t gametime,
    const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
    const FieldsToDraw& fields_to_draw,
-   const int idx1,
-   const int idx2,
-   const int idx3,
-   const int my_terrain,
-   const int other_terrain) {
-	if (my_terrain == other_terrain) {
-		return;
+   const BaseTriangle& base) {
+	const FieldsToDraw::Field* vertices[3];
+	for (int i = 0; i < 3; ++i) {
+		vertices[i] = &fields_to_draw.at(base.vertex[i]);
+		if (vertices[i]->obscured_by_slope) {
+			return;
+		}
 	}
-	const Widelands::TerrainDescription& other_terrain_description = terrains.get(other_terrain);
-	if (terrains.get(my_terrain).dither_layer() < other_terrain_description.dither_layer()) {
-		const FieldsToDraw::Field& f1 = fields_to_draw.at(idx1);
-		if (f1.obscured_by_slope) {
-			return;
-		}
-		const FieldsToDraw::Field& f2 = fields_to_draw.at(idx2);
-		if (f2.obscured_by_slope) {
-			return;
-		}
-		const FieldsToDraw::Field& f3 = fields_to_draw.at(idx3);
-		if (f3.obscured_by_slope) {
-			return;
-		}
 
+	const int32_t my_layer = terrains.get(base.terrain).dither_layer();
+
+	TerrainSet candidates;
+	for (const int vertex : base.vertex) {
+		const TerrainSet& incident = vertex_terrains_[vertex];
+		for (uint8_t k = 0; k < incident.count; ++k) {
+			if (terrains.get(incident.terrains[k]).dither_layer() > my_layer) {
+				candidates.add(incident.terrains[k]);
+			}
+		}
+	}
+
+	/* Sort by dither layer so the higher one ends up on top. With edge-only
+	 * emission a base triangle rarely carried more than one overlay and the
+	 * order was incidental; vertex incidence makes overlaps routine, so the
+	 * order has to be explicit. Insertion sort: 'candidates' holds a handful of
+	 * entries at most.
+	 */
+	for (uint8_t i = 1; i < candidates.count; ++i) {
+		const Widelands::DescriptionIndex terrain = candidates.terrains[i];
+		const int32_t layer = terrains.get(terrain).dither_layer();
+		uint8_t j = i;
+		while (j > 0 && terrains.get(candidates.terrains[j - 1]).dither_layer() > layer) {
+			candidates.terrains[j] = candidates.terrains[j - 1];
+			--j;
+		}
+		candidates.terrains[j] = terrain;
+	}
+
+	for (uint8_t c = 0; c < candidates.count; ++c) {
+		const Widelands::DescriptionIndex overlay_index = candidates.terrains[c];
+		const Widelands::TerrainDescription& overlay = terrains.get(overlay_index);
 		const Vector2f texture_offset =
-		   to_gl_texture(other_terrain_description.get_texture(gametime).blit_data()).origin();
-		add_vertex(f1, TrianglePoint::kTopRight, other_terrain_description, texture_offset);
-		add_vertex(f2, TrianglePoint::kTopLeft, other_terrain_description, texture_offset);
-		add_vertex(f3, TrianglePoint::kBottomMiddle, other_terrain_description, texture_offset);
+		   to_gl_texture(overlay.get_texture(gametime).blit_data()).origin();
+
+		for (int i = 0; i < 3; ++i) {
+			const float ramp =
+			   vertex_terrains_[base.vertex[i]].contains(overlay_index) ? 1.f : 0.f;
+			add_vertex(*vertices[i], ramp, overlay, texture_offset);
+		}
 	}
 }
 
@@ -208,72 +285,35 @@ void DitherProgram::draw(
 	vertices_.clear();
 	vertices_.reserve(fields_to_draw.size() * 3);
 
+	const Widelands::Map* map =
+	   (player != nullptr) && !player->see_all() ? &player->egbase().map() : nullptr;
+
+	collect_vertex_terrains(fields_to_draw, map, player);
+
 	for (size_t current_index = 0; current_index < fields_to_draw.size(); ++current_index) {
 		const FieldsToDraw::Field& field = fields_to_draw.at(current_index);
 
-		// The bottom right neighbor fields_to_draw is needed for both triangles
-		// associated with this field. If it is not in fields_to_draw, there is no need to
-		// draw any triangles.
+		// The bottom right neighbor is needed for both triangles associated with
+		// this field. If it is not in fields_to_draw, there is nothing to draw.
 		if (field.brn_index == FieldsToDraw::kInvalidIndex) {
 			continue;
 		}
+		const int index = static_cast<int>(current_index);
 
-		const Widelands::Map* map =
-		   (player != nullptr) && !player->see_all() ? &player->egbase().map() : nullptr;
-		// Dithering triangles for Down triangle.
+		// Vertex order matches what the edge-only emission used, so the winding
+		// of the emitted triangles is unchanged.
 		if (field.bln_index != FieldsToDraw::kInvalidIndex) {
-			const Widelands::DescriptionIndex terrain_d =
-			   map != nullptr ? player->fields()[map->get_index(field.fcoords)].terrains.load().d :
-			                    field.fcoords.field->terrain_d();
-			const Widelands::DescriptionIndex terrain_r =
-			   map != nullptr ? player->fields()[map->get_index(field.fcoords)].terrains.load().r :
-			                    field.fcoords.field->terrain_r();
-			maybe_add_dithering_triangle(gametime, terrains, fields_to_draw, field.brn_index,
-			                             current_index, field.bln_index, terrain_d, terrain_r);
-
-			const Widelands::DescriptionIndex terrain_dd =
-			   map != nullptr ?
-			      player->fields()[map->get_index(map->bl_n(field.fcoords))].terrains.load().r :
-			      fields_to_draw.at(field.bln_index).fcoords.field->terrain_r();
-			maybe_add_dithering_triangle(gametime, terrains, fields_to_draw, field.bln_index,
-			                             field.brn_index, current_index, terrain_d, terrain_dd);
-
-			if (field.ln_index != FieldsToDraw::kInvalidIndex) {
-				const Widelands::DescriptionIndex terrain_l =
-				   map != nullptr ?
-				      player->fields()[map->get_index(map->l_n(field.fcoords))].terrains.load().r :
-				      fields_to_draw.at(field.ln_index).fcoords.field->terrain_r();
-				maybe_add_dithering_triangle(gametime, terrains, fields_to_draw, current_index,
-				                             field.bln_index, field.brn_index, terrain_d, terrain_l);
-			}
+			add_dithering_triangles(
+			   gametime, terrains, fields_to_draw,
+			   BaseTriangle{{field.brn_index, index, field.bln_index},
+			                triangle_terrain(fields_to_draw, map, player, index, true)});
 		}
 
-		// Dithering for right triangle.
 		if (field.rn_index != FieldsToDraw::kInvalidIndex) {
-			const Widelands::DescriptionIndex terrain_r =
-			   map != nullptr ? player->fields()[map->get_index(field.fcoords)].terrains.load().r :
-			                    field.fcoords.field->terrain_r();
-			const Widelands::DescriptionIndex terrain_d =
-			   map != nullptr ? player->fields()[map->get_index(field.fcoords)].terrains.load().d :
-			                    field.fcoords.field->terrain_d();
-
-			maybe_add_dithering_triangle(gametime, terrains, fields_to_draw, current_index,
-			                             field.brn_index, field.rn_index, terrain_r, terrain_d);
-			const Widelands::DescriptionIndex terrain_rr =
-			   map != nullptr ?
-			      player->fields()[map->get_index(map->r_n(field.fcoords))].terrains.load().d :
-			      fields_to_draw.at(field.rn_index).fcoords.field->terrain_d();
-			maybe_add_dithering_triangle(gametime, terrains, fields_to_draw, field.brn_index,
-			                             field.rn_index, current_index, terrain_r, terrain_rr);
-
-			if (field.trn_index != FieldsToDraw::kInvalidIndex) {
-				const Widelands::DescriptionIndex terrain_u =
-				   map != nullptr ?
-				      player->fields()[map->get_index(map->tr_n(field.fcoords))].terrains.load().d :
-				      fields_to_draw.at(field.trn_index).fcoords.field->terrain_d();
-				maybe_add_dithering_triangle(gametime, terrains, fields_to_draw, field.rn_index,
-				                             current_index, field.brn_index, terrain_r, terrain_u);
-			}
+			add_dithering_triangles(
+			   gametime, terrains, fields_to_draw,
+			   BaseTriangle{{index, field.brn_index, field.rn_index},
+			                triangle_terrain(fields_to_draw, map, player, index, false)});
 		}
 	}
 

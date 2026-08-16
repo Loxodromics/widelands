@@ -34,20 +34,52 @@ void main() {
 			vec2(MARGIN, MARGIN),
 			vec2(1. - MARGIN, 1. - MARGIN));
 	vec4 clr = texture(u_terrain_texture, var_texture_offset + u_texture_dimensions * texture_fract);
-	// The shape octaves must not retract the band past the shared edge, so
-	// they are clamped; at the default per-terrain amplitude of 1.0 the clamp
-	// never fires, it only binds above ~1.4 (see the budget in
-	// terrain_noise_params.glsl). The stipple is deliberately allowed to
-	// overshoot -- that overshoot is the edge speckle.
+	// The shape octaves must not retract the band past the ramp's 1 end, so
+	// they are clamped. At centre 0.86 they can reach -0.20 against 0.14 of
+	// headroom, so this binds at the default per-terrain amplitude of 1.0 --
+	// it shapes the normal look rather than guarding an extreme (see the band
+	// budget in terrain_noise_params.glsl).
+	//
+	// Coverage is a hole density, not an opacity: edge.png kept 11% holes even
+	// at its full end, and that residual perforation is what makes a terrain
+	// boundary read as grain rather than as a drawn line.
 	float shape = clamp(var_dither_params.x * dither_shape_field(var_texture_position),
 	                    -(1.0 - kDitherCentre), kDitherCentre);
-	float s = var_dither_ramp - kDitherCentre + shape
-	        + var_dither_params.x * kDitherStippleAmp * dither_stipple(var_texture_position);
-	// smoothstep(-w, w, s) is undefined at w == 0, reachable with
-	// dither_softness 0 and zero fwidth on degenerate geometry.
-	float w = max(kDitherSoftness * var_dither_params.y,
-	              max(0.5 * fwidth(s), kDitherMinWidth));
+	float s = var_dither_ramp - kDitherCentre + shape;
+
+	// The dissolve zone is deliberate width, not antialiasing; the fwidth term
+	// is only a floor so it never gets thinner than a pixel when zoomed out.
+	// var_dither_params.y is the per-terrain dither_softness (default 1.0),
+	// which finally has a job here -- it scales this zone.
+	float dissolve = max(kDitherDissolveWidth * var_dither_params.y,
+	                     max(0.5 * fwidth(s), kDitherMinWidth));
+	float coverage = kDitherMaxCoverage * smoothstep(-dissolve, dissolve, s);
+
+	// Threshold each of the four surrounding cells, then blend bilinearly.
+	// That is exactly what GL_LINEAR sampling of a 1-bit mask computes, and it
+	// is what edge.png actually did -- set_dither_mask bound it LINEAR on both
+	// filters. Thresholding a single cell instead leaves hard-edged cells,
+	// which read as blocky salt-and-pepper rather than grain: the perforation
+	// has to keep its soft sub-cell structure to pass for the old mask.
+	vec2 cell = var_texture_position * kDitherGrainFrequency;
+	vec2 cell_index = floor(cell);
+	vec2 cell_fract = fract(cell);
+	float grain_00 = step(dither_grain(cell_index), coverage);
+	float grain_10 = step(dither_grain(cell_index + vec2(1.0, 0.0)), coverage);
+	float grain_01 = step(dither_grain(cell_index + vec2(0.0, 1.0)), coverage);
+	float grain_11 = step(dither_grain(cell_index + vec2(1.0, 1.0)), coverage);
+	float dissolved = mix(mix(grain_00, grain_10, cell_fract.x),
+	                      mix(grain_01, grain_11, cell_fract.x), cell_fract.y);
+
+	// Below one pixel per cell the dissolve is sub-pixel and aliases, so fade
+	// back to continuous coverage -- what mip filtering did for the mask.
+	float pixels_per_cell = 1.0 / max(kDitherGrainFrequency *
+	                                  max(fwidth(var_texture_position.x),
+	                                      fwidth(var_texture_position.y)),
+	                                  kDitherMinWidth);
+	float grain_lod = smoothstep(kDitherGrainFadeMin, kDitherGrainFadeMax, pixels_per_cell);
+
 	frag_color = vec4(
 	   clr.rgb * var_brightness * terrain_variation(var_texture_position),
-	   smoothstep(-w, w, s));
+	   mix(coverage, dissolved, grain_lod));
 }

@@ -47,32 +47,57 @@ public:
 	}
 
 private:
-	enum class TrianglePoint {
-		kTopLeft,
-		kTopRight,
-		kBottomMiddle,
+	/* A small set of terrains, used both for the terrains incident to one field
+	 * vertex (at most 6, the triangles that meet there) and for the overlay
+	 * candidates of one base triangle. The latter bounds the capacity: the
+	 * triangles touching any of a triangle's three vertices number 12 in the
+	 * lattice, so 12 distinct terrains is a hard ceiling, not a guess. Inline,
+	 * so collecting these per frame allocates nothing.
+	 */
+	struct TerrainSet {
+		static constexpr uint8_t kCapacity = 12;
+
+		void add(Widelands::DescriptionIndex terrain);
+		[[nodiscard]] bool contains(Widelands::DescriptionIndex terrain) const;
+
+		Widelands::DescriptionIndex terrains[kCapacity];
+		uint8_t count = 0;
 	};
 
-	// Adds the triangle between the indexes (which index 'fields_to_draw') to
-	// vertices_ if the my_terrain != other_terrain and the dither_layer()
-	// agree.
-	void maybe_add_dithering_triangle(
+	// One of the two terrain triangles of a field: the indices of its three
+	// field vertices in 'fields_to_draw', and the terrain it is painted with.
+	struct BaseTriangle {
+		int vertex[3];
+		Widelands::DescriptionIndex terrain;
+	};
+
+	/* Fills vertex_terrains_ with, for every field, the set of terrains meeting
+	 * at it. Scatters rather than gathers -- each triangle adds its terrain to
+	 * its own three vertices -- so every triangle is visited once and no
+	 * top-left neighbour index is needed.
+	 */
+	void collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
+	                             const Widelands::Map* map,
+	                             const Widelands::Player* player);
+
+	/* Emits one overlay triangle over 'base' for every terrain that meets any
+	 * of its three vertices and dithers over it. The ramp is 1 at a vertex
+	 * incident to that terrain and 0 elsewhere; because incidence is a property
+	 * of the vertex and not of the triangle, two triangles sharing an edge give
+	 * their shared vertices the same value, so the coverage field is continuous
+	 * across every edge in the mesh and never terminates on triangle geometry.
+	 */
+	void add_dithering_triangles(
 	   uint32_t gametime,
 	   const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
 	   const FieldsToDraw& fields_to_draw,
-	   int idx1,
-	   int idx2,
-	   int idx3,
-	   int my_terrain,
-	   int other_terrain);
+	   const BaseTriangle& base);
 
-	// Adds the 'field' as an vertex to the 'vertices_'. The 'triangle_point'
-	// defines the dither ramp value (1.0 at the two top corners, 0.0 at the
-	// bottom-middle), and 'terrain' supplies the per-terrain dither amplitude
-	// and softness. 'texture_offset' is the overlay terrain's origin in the
-	// texture atlas.
+	// Adds the 'field' as a vertex to the 'vertices_'. 'terrain' is the overlay
+	// terrain, supplying the per-terrain dither amplitude and softness, and
+	// 'texture_offset' is its origin in the texture atlas.
 	void add_vertex(const FieldsToDraw::Field& field,
-	                TrianglePoint triangle_point,
+	                float dither_ramp,
 	                const Widelands::TerrainDescription& terrain,
 	                const Vector2f& texture_offset);
 
@@ -128,6 +153,10 @@ private:
 	// Objects below are here to avoid memory allocations on each frame, they
 	// could theoretically also always be recreated.
 	std::vector<PerVertexData> vertices_;
+
+	// Parallel to 'fields_to_draw': the terrains meeting at each field vertex,
+	// rebuilt once per draw by collect_vertex_terrains().
+	std::vector<TerrainSet> vertex_terrains_;
 };
 
 #endif  // end of include guard: WL_GRAPHIC_GL_DITHER_PROGRAM_H

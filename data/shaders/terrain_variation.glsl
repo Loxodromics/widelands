@@ -110,12 +110,11 @@ vec2 terrain_warp(vec2 world_pos) {
 		snoise(world_pos * kWarpFrequency + vec2(-9.7, 23.4)));
 }
 
-// Terrain-transition ("dither") fields, sampled in dither.fp only. Two
-// independent fields, two jobs: dither_shape_field displaces the whole
-// boundary so it wanders across the map (kept inside the emitted triangle by
-// the clamp at the call site), dither_stipple breaks it into a grain -- it is
-// deliberately allowed to overshoot the triangle, which is the edge speckle
-// (edge.png had 11% holes for it at the shared edge). The amplitude is not
+// Terrain-transition ("dither") shape field, sampled in dither.fp only. It
+// displaces the whole boundary so it wanders across the map (bounded by the
+// clamp at the call site, which stops it retracting past the overlay). The
+// displacement is world-space, so it moves the boundary as one curve rather
+// than per triangle. The amplitude is not
 // global -- dither.vp supplies it per vertex from the overlay terrain's
 // dither_amplitude (default 1.0), so only the frequencies stay constant
 // here; a per-terrain *frequency* would put a seam wherever two overlay
@@ -132,8 +131,23 @@ float dither_shape_field(vec2 p) {
 	return o1 + o2;
 }
 
-float dither_stipple(vec2 p) {
-	return snoise(p * kDitherStippleFreq + kDitherStippleOffset);
+// Dissolve grain. Quantised to a cell grid and hashed, reproducing what
+// edge.png was: a 1-bit mask at roughly one texel per screen pixel at zoom 1.
+// Quantising locks the pattern to the map, so it does not swim when the view
+// scrolls, exactly as mask texels did not. The hash is uniform on [0,1), which
+// makes kDitherMaxCoverage the hole density directly -- snoise is smooth and
+// bell-distributed, and does neither.
+//
+// The sin-free form is deliberate: sin() based hashes lose their argument to
+// float32 range reduction at these cell magnitudes, and GLSL 120 (the legacy
+// 2.1 dialect, see emit_dialect in gl/utils.cc) has no integer ops to hash
+// with. Wrapping the cell keeps the input small enough for fract() to stay
+// well conditioned on large maps; the period is 4096 cells, far past anything
+// on screen.
+float dither_grain(vec2 cell) {
+	vec3 p3 = fract(vec3(mod(cell, kDitherGrainPeriod).xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
 }
 
 // Multiplier applied to the terrain texture colour, keyed on world position
