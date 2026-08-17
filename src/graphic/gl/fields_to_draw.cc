@@ -60,11 +60,48 @@
 
 namespace {
 
-// Returns the brightness value in [0, 1.] for 'fcoords'.
-float field_brightness(const Widelands::FCoords& fcoords) {
-	uint32_t brightness = 144 + fcoords.field->get_brightness();
-	brightness = std::min<uint32_t>(255, (brightness * 255) / 160);
-	return brightness / 255.;
+// The same surface normal Field::set_brightness derives (src/logic/field.cc),
+// kept render-side so the sun can be a uniform instead of baked into a cached
+// per-field scalar (V2, Claude/VISUAL_FIDELITY_RANKED.md §4.2). Deltas are this
+// node's height minus each neighbour's, exactly as Map::recalc_brightness
+// gathers them (map.cc). Returned in map-pixel space: x/y are map pixels, z is
+// height in map pixels (kHeightFactor px per height unit), +y is screen-down --
+// not the frame texture_coords uses, which negates y for tiling.
+Vector3f field_normal(const Widelands::Map& map, const Widelands::FCoords& f) {
+	constexpr float kCos60 = 0.5f;
+	constexpr float kSin60 = 0.86603f;
+
+	const int32_t height = f.field->get_height();
+
+	Widelands::FCoords neighbour;
+	map.get_ln(f, &neighbour);
+	const int32_t left = height - neighbour.field->get_height();
+	map.get_rn(f, &neighbour);
+	const int32_t right = height - neighbour.field->get_height();
+
+	map.get_tln(f, &neighbour);
+	const int32_t top_left = height - neighbour.field->get_height();
+	map.get_rn(neighbour, &neighbour);
+	const int32_t top_right = height - neighbour.field->get_height();
+
+	map.get_bln(f, &neighbour);
+	const int32_t bottom_left = height - neighbour.field->get_height();
+	map.get_rn(neighbour, &neighbour);
+	const int32_t bottom_right = height - neighbour.field->get_height();
+
+	Vector3f normal(0.f, 0.f, kTriangleWidth);
+	normal.x -= left * kHeightFactorFloat;
+	normal.x += right * kHeightFactorFloat;
+	normal.x -= top_left * kHeightFactorFloat * kCos60;
+	normal.y -= top_left * kHeightFactorFloat * kSin60;
+	normal.x += top_right * kHeightFactorFloat * kCos60;
+	normal.y -= top_right * kHeightFactorFloat * kSin60;
+	normal.x -= bottom_left * kHeightFactorFloat * kCos60;
+	normal.y += bottom_left * kHeightFactorFloat * kSin60;
+	normal.x += bottom_right * kHeightFactorFloat * kCos60;
+	normal.y += bottom_right * kHeightFactorFloat * kSin60;
+	normal.normalize();
+	return normal;
 }
 
 }  // namespace
@@ -160,7 +197,7 @@ void FieldsToDraw::reset(const Widelands::EditorGameBase& egbase,
 			pixel_to_gl_renderbuffer(
 			   surface_width, surface_height, &f.gl_position.x, &f.gl_position.y);
 
-			f.brightness = field_brightness(f.fcoords);
+			f.normal = field_normal(map, f.fcoords);
 
 			const Widelands::PlayerNumber owned_by = f.fcoords.field->get_owned_by();
 			f.owner = owned_by != 0 ? egbase.get_player(owned_by) : nullptr;

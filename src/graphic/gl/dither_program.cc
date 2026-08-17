@@ -20,6 +20,7 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/terrain_lighting.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/device.h"
@@ -35,18 +36,18 @@ DitherProgram::DitherProgram() {
 		   {"attr_dither_params", Rhi::VertexFormat::kVec2,
 		    offsetof(PerVertexData, dither_amplitude)},
 		   {"attr_dither_ramp", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, dither_ramp)},
+		   {"attr_normal", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, normal_x)},
 		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
 		   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
 		    offsetof(PerVertexData, texture_offset_x)},
-		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, texture_x)},
+		   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
 		};
 		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
 		desc.blend = Rhi::kBlendAlpha;
 		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
 		desc.samplers = {{0, "u_terrain_texture"}};
-		desc.uniform_block = Rhi::UniformBlockBinding{
-		   0, "per_program_state", sizeof(Gl::PerProgramState)};
+		desc.uniform_block =
+		   Rhi::UniformBlockBinding{0, "per_program_state", sizeof(Gl::PerProgramState)};
 		pipeline_ = Rhi::device().create_pipeline(desc);
 		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
 		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
@@ -63,6 +64,9 @@ DitherProgram::DitherProgram() {
 	u_value_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_value_amplitude");
 	u_tint_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_tint_amplitude");
 	u_warp_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_warp_amplitude");
+	u_sun_direction_ = glGetUniformLocation(gl_program_.object(), "u_sun_direction");
+	u_sun_color_ = glGetUniformLocation(gl_program_.object(), "u_sun_color");
+	u_ambient_color_ = glGetUniformLocation(gl_program_.object(), "u_ambient_color");
 
 	gl_array_buffer_.bind();
 	vao_.define_attributes({
@@ -72,6 +76,8 @@ DitherProgram::DitherProgram() {
 	    offsetof(PerVertexData, dither_amplitude)},
 	   {gl_program_.attribute_location("attr_dither_ramp"), 1, sizeof(PerVertexData),
 	    offsetof(PerVertexData, dither_ramp)},
+	   {gl_program_.attribute_location("attr_normal"), 3, sizeof(PerVertexData),
+	    offsetof(PerVertexData, normal_x)},
 	   {gl_program_.attribute_location("attr_position"), 2, sizeof(PerVertexData),
 	    offsetof(PerVertexData, gl_x)},
 	   {gl_program_.attribute_location("attr_texture_offset"), 2, sizeof(PerVertexData),
@@ -132,6 +138,9 @@ void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
 	back.texture_x = field.texture_coords.x;
 	back.texture_y = field.texture_coords.y;
 	back.brightness = field.brightness;
+	back.normal_x = field.normal.x;
+	back.normal_y = field.normal.y;
+	back.normal_z = field.normal.z;
 	back.dither_ramp = dither_ramp;
 	back.dither_amplitude = terrain.dither_amplitude();
 	back.dither_softness = terrain.dither_softness();
@@ -217,8 +226,7 @@ void DitherProgram::add_dithering_triangles(
 		   to_gl_texture(overlay.get_texture(gametime).blit_data()).origin();
 
 		for (int i = 0; i < 3; ++i) {
-			const float ramp =
-			   vertex_terrains_[base.vertex[i]].contains(overlay_index) ? 1.f : 0.f;
+			const float ramp = vertex_terrains_[base.vertex[i]].contains(overlay_index) ? 1.f : 0.f;
 			add_vertex(*vertices[i], ramp, overlay, texture_offset);
 		}
 	}
@@ -238,6 +246,15 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
 		state.warp_amplitude = kWarpAmplitude * noise_strength_;
 		state.texture_w = texture_w;
 		state.texture_h = texture_h;
+		state.sun_x = kSunDirection.x;
+		state.sun_y = kSunDirection.y;
+		state.sun_z = kSunDirection.z;
+		state.sun_color_r = kSunColor.x;
+		state.sun_color_g = kSunColor.y;
+		state.sun_color_b = kSunColor.z;
+		state.ambient_color_r = kAmbientColor.x;
+		state.ambient_color_g = kAmbientColor.y;
+		state.ambient_color_b = kAmbientColor.z;
 		uniform_rhi_buffer_->update(&state, sizeof(state));
 
 		descriptor_set_->set_texture(0, blit_data.texture);
@@ -268,6 +285,9 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
 	glUniform1f(u_value_amplitude_, kValueAmplitude * noise_strength_);
 	glUniform1f(u_tint_amplitude_, kTintAmplitude * noise_strength_);
 	glUniform1f(u_warp_amplitude_, kWarpAmplitude * noise_strength_);
+	glUniform3f(u_sun_direction_, kSunDirection.x, kSunDirection.y, kSunDirection.z);
+	glUniform3f(u_sun_color_, kSunColor.x, kSunColor.y, kSunColor.z);
+	glUniform3f(u_ambient_color_, kAmbientColor.x, kAmbientColor.y, kAmbientColor.z);
 
 	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
 }

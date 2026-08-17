@@ -46,7 +46,17 @@ public:
 		// the Rendertarget::get_rect().origin() of the view window.
 		Vector2f rendertarget_pixel = Vector2f::zero();
 		Vector2f texture_coords = Vector2f::zero();  // Texture coordinates.
-		float brightness;                            // brightness of the pixel
+
+		// Visibility factor only (fog of war), 1.0 for a fully visible field.
+		// Slope shading used to be folded into this value; it now lives in
+		// 'normal' instead and is applied by the terrain_light() shader term.
+		float brightness = 1.f;
+
+		// Surface normal in map-pixel space (+y is screen-down), used for
+		// render-side terrain lighting (V2, Claude/VISUAL_FIDELITY_RANKED.md
+		// §4.2). Vector3f has no default constructor, hence the explicit
+		// in-class initializer.
+		Vector3f normal = Vector3f(0.f, 0.f, 1.f);
 
 		// The next values are not necessarily the true data of this field, but
 		// what the player should see. For example in fog of war we always draw

@@ -2,9 +2,10 @@
 
 // Attributes.
 layout(location = 0) in float attr_brightness;
-layout(location = 1) in vec2 attr_position;
-layout(location = 2) in vec2 attr_texture_offset;
-layout(location = 3) in vec2 attr_texture_position;
+layout(location = 1) in vec3 attr_normal;
+layout(location = 2) in vec2 attr_position;
+layout(location = 3) in vec2 attr_texture_offset;
+layout(location = 4) in vec2 attr_texture_position;
 
 layout(std140) uniform per_program_state {
 	float u_z_value;
@@ -12,16 +13,21 @@ layout(std140) uniform per_program_state {
 	float u_tint_amplitude;
 	float u_warp_amplitude;
 	vec2 u_texture_dimensions;
+	vec3 u_sun_direction;
+	vec3 u_sun_color;
+	vec3 u_ambient_color;
 };
 
 // Output of vertex shader.
 out float var_brightness;
+out vec3 var_normal;
 out vec2 var_texture_offset;
 out vec2 var_texture_position;
 
 void main() {
 	var_texture_position = attr_texture_position;
 	var_brightness = attr_brightness;
+	var_normal = attr_normal;
 	var_texture_offset = attr_texture_offset;
 	gl_Position = vec4(attr_position, u_z_value, 1.);
 }

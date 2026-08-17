@@ -51,12 +51,15 @@ private:
 		float gl_x;
 		float gl_y;
 		float brightness;
+		float normal_x;
+		float normal_y;
+		float normal_z;
 		float texture_x;
 		float texture_y;
 		float texture_offset_x;
 		float texture_offset_y;
 	};
-	static_assert(sizeof(PerVertexData) == 28, "Wrong padding.");
+	static_assert(sizeof(PerVertexData) == 40, "Wrong padding.");
 
 	void gl_draw(const BlitData& blit_data, float texture_w, float texture_h, float z_value);
 
@@ -84,6 +87,9 @@ private:
 	GLint u_value_amplitude_;
 	GLint u_tint_amplitude_;
 	GLint u_warp_amplitude_;
+	GLint u_sun_direction_;
+	GLint u_sun_color_;
+	GLint u_ambient_color_;
 
 	// RHI resources for the core path (the legacy members above are unused
 	// there). terrain reads one texture (u_terrain_texture) and the full

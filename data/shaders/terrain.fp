@@ -8,9 +8,13 @@ layout(std140) uniform per_program_state {
 	float u_tint_amplitude;
 	float u_warp_amplitude;
 	vec2 u_texture_dimensions;
+	vec3 u_sun_direction;
+	vec3 u_sun_color;
+	vec3 u_ambient_color;
 };
 
 in float var_brightness;
+in vec3 var_normal;
 in vec2 var_texture_position;
 in vec2 var_texture_offset;
 
@@ -23,6 +27,7 @@ precision highp float;
 
 #include "terrain_noise_params.glsl"
 #include "terrain_variation.glsl"
+#include "terrain_lighting.glsl"
 
 out vec4 frag_color;
 
@@ -36,6 +41,6 @@ void main() {
 			vec2(MARGIN, MARGIN),
 			vec2(1. - MARGIN, 1. - MARGIN));
 	vec4 clr = texture(u_terrain_texture, var_texture_offset + u_texture_dimensions * texture_fract);
-	clr.rgb *= var_brightness * terrain_variation(var_texture_position);
+	clr.rgb *= var_brightness * terrain_light(var_normal) * terrain_variation(var_texture_position);
 	frag_color = clr;
 }

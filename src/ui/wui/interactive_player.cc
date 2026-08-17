@@ -61,17 +61,16 @@ using Widelands::Map;
 
 namespace {
 
-// Returns the brightness value in [0, 1.] for 'fcoords' at 'gametime' for
-// 'pf'. See 'field_brightness' in fields_to_draw.cc for scale of values.
-float adjusted_field_brightness(const Widelands::FCoords& fcoords,
-                                const Time& gametime,
-                                const Widelands::Player::Field& pf) {
+// Returns the visibility factor in [0, 1.] at 'gametime' for 'pf' -- fog of
+// war only. Slope shading is no longer folded in here; it is applied
+// render-side via FieldsToDraw::Field::normal (V2,
+// Claude/VISUAL_FIDELITY_RANKED.md §4.2).
+float field_visibility(const Time& gametime, const Widelands::Player::Field& pf) {
 	if (pf.vision.state() == Widelands::VisibleState::kUnexplored) {
 		return 0.;
 	}
 
-	uint32_t brightness = 144 + fcoords.field->get_brightness();
-	brightness = std::min<uint32_t>(255, (brightness * 255) / 160);
+	uint32_t brightness = 255;
 
 	if (pf.vision.state() == Widelands::VisibleState::kPreviouslySeen) {
 		static const Duration kDecayTimeInMs = Duration(20000);
@@ -549,7 +548,7 @@ void InteractivePlayer::draw_map_view(MapView* given_map_view, RenderTarget* dst
 
 		// Adjust this field for visibility for this player.
 		if (!plr.see_all()) {
-			f->brightness = adjusted_field_brightness(f->fcoords, gametime, player_field);
+			f->brightness = field_visibility(gametime, player_field);
 			f->road_e = player_field.r_e;
 			f->road_se = player_field.r_se;
 			f->road_sw = player_field.r_sw;

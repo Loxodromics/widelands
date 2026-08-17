@@ -92,7 +92,7 @@ Vector2f middle(const Vector2f& a, const Vector2f& b);
 Vector2i round(const Vector2f& a);
 
 struct Vector3f {
-	Vector3f(const float X, const float Y, const float Z) : x(X), y(Y), z(Z) {
+	constexpr Vector3f(const float X, const float Y, const float Z) : x(X), y(Y), z(Z) {
 	}
 
 	void normalize() {

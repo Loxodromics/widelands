@@ -107,6 +107,9 @@ private:
 		float texture_x;
 		float texture_y;
 		float brightness;
+		float normal_x;
+		float normal_y;
+		float normal_z;
 		float dither_ramp;
 		float dither_amplitude;
 		float dither_softness;
@@ -138,6 +141,9 @@ private:
 	GLint u_value_amplitude_;
 	GLint u_tint_amplitude_;
 	GLint u_warp_amplitude_;
+	GLint u_sun_direction_;
+	GLint u_sun_color_;
+	GLint u_ambient_color_;
 
 	// RHI resources for the core path (the legacy members above are unused
 	// there). dither reads the terrain atlas and the full per_program_state

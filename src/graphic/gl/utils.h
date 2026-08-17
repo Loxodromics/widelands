@@ -102,7 +102,8 @@ public:
 	// block's std140 data size matches 'expected_size' (the sizeof of the C++
 	// struct that fills it). Only meaningful on the core backend, where the
 	// block exists in the shader source; callers guard on Gl::backend().
-	void bind_uniform_block(const std::string& name, GLuint binding_point, size_t expected_size) const;
+	void
+	bind_uniform_block(const std::string& name, GLuint binding_point, size_t expected_size) const;
 
 	// Returns the location recorded for attribute 'name' by the shader source's
 	// layout(location=N) qualifier, parsed during build(). Throws if the name
@@ -214,11 +215,16 @@ private:
 // terrain, dither, road, grid and workarea programs (renderer modernization
 // plan WP-8, Claude/RENDERER_MODERNIZATION_PLAN.md). Floats come first so the
 // vec2 lands on its 8-byte alignment without internal padding. std140 rounds a
-// uniform block up to a multiple of 16 bytes, so the 24 bytes of real data are
-// followed by 8 bytes of explicit padding and the struct is 32 bytes — binding
-// a shorter buffer to a longer block leaves shader results undefined per spec,
-// so Program::bind_uniform_block() asserts sizeof(*this) against the block's
-// reported GL_UNIFORM_BLOCK_DATA_SIZE.
+// uniform block up to a multiple of 16 bytes, so the 24 bytes of scalar data
+// are followed by 8 bytes of explicit padding before the three vec3s (each
+// std140-aligned to 16 bytes, so each needs one padding float of its own) --
+// binding a shorter buffer to a longer block leaves shader results undefined
+// per spec, so Program::bind_uniform_block() asserts sizeof(*this) against the
+// block's reported GL_UNIFORM_BLOCK_DATA_SIZE.
+//
+// sun_direction/sun_color/ambient_color feed the render-side terrain lighting
+// (V2, Claude/VISUAL_FIDELITY_RANKED.md §4.2); their values are derived and
+// documented in graphic/gl/terrain_lighting.h.
 struct PerProgramState {
 	float z_value;          // offset 0
 	float value_amplitude;  // offset 4  (terrain noise; terrain/dither only)
@@ -228,8 +234,20 @@ struct PerProgramState {
 	float texture_h;        // offset 20
 	float padding_0;        // offset 24 (std140 rounds the block up to 32)
 	float padding_1;        // offset 28
+	float sun_x;            // offset 32 (vec3; terrain/dither only)
+	float sun_y;            // offset 36
+	float sun_z;            // offset 40
+	float padding_2;        // offset 44
+	float sun_color_r;      // offset 48 (vec3; terrain/dither only)
+	float sun_color_g;      // offset 52
+	float sun_color_b;      // offset 56
+	float padding_3;        // offset 60
+	float ambient_color_r;  // offset 64 (vec3; terrain/dither only)
+	float ambient_color_g;  // offset 68
+	float ambient_color_b;  // offset 72
+	float padding_4;        // offset 76
 };
-static_assert(sizeof(PerProgramState) == 32, "std140 layout of per_program_state");
+static_assert(sizeof(PerProgramState) == 80, "std140 layout of per_program_state");
 
 // The GL_UNIFORM_BUFFER binding point every per-program-state block uses. Only
 // one program draws at a time, so a single shared binding point is enough.
