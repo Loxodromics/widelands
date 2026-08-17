@@ -138,7 +138,7 @@ private:
 	GLint u_terrain_texture_;
 	GLint u_texture_dimensions_;
 	GLint u_z_value_;
-	GLint u_value_amplitude_;
+	GLint u_bump_amplitude_;
 	GLint u_tint_amplitude_;
 	GLint u_warp_amplitude_;
 	GLint u_sun_direction_;

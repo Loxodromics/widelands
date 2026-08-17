@@ -11,7 +11,7 @@ layout(location = 6) in vec2 attr_texture_position;
 
 layout(std140) uniform per_program_state {
 	float u_z_value;
-	float u_value_amplitude;
+	float u_bump_amplitude;
 	float u_tint_amplitude;
 	float u_warp_amplitude;
 	vec2 u_texture_dimensions;

@@ -63,7 +63,7 @@ TerrainProgram::TerrainProgram() {
 	u_terrain_texture_ = glGetUniformLocation(gl_program_.object(), "u_terrain_texture");
 	u_texture_dimensions_ = glGetUniformLocation(gl_program_.object(), "u_texture_dimensions");
 	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
-	u_value_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_value_amplitude");
+	u_bump_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_bump_amplitude");
 	u_tint_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_tint_amplitude");
 	u_warp_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_warp_amplitude");
 	u_sun_direction_ = glGetUniformLocation(gl_program_.object(), "u_sun_direction");
@@ -94,7 +94,7 @@ void TerrainProgram::gl_draw(const BlitData& blit_data,
 
 		Gl::PerProgramState state{};
 		state.z_value = z_value;
-		state.value_amplitude = kValueAmplitude * noise_strength_;
+		state.bump_amplitude = kBumpAmplitude * noise_strength_;
 		state.tint_amplitude = kTintAmplitude * noise_strength_;
 		state.warp_amplitude = kWarpAmplitude * noise_strength_;
 		state.texture_w = texture_w;
@@ -135,7 +135,7 @@ void TerrainProgram::gl_draw(const BlitData& blit_data,
 
 	glUniform1f(u_z_value_, z_value);
 	glUniform2f(u_texture_dimensions_, texture_w, texture_h);
-	glUniform1f(u_value_amplitude_, kValueAmplitude * noise_strength_);
+	glUniform1f(u_bump_amplitude_, kBumpAmplitude * noise_strength_);
 	glUniform1f(u_tint_amplitude_, kTintAmplitude * noise_strength_);
 	glUniform1f(u_warp_amplitude_, kWarpAmplitude * noise_strength_);
 	glUniform3f(u_sun_direction_, kSunDirection.x, kSunDirection.y, kSunDirection.z);

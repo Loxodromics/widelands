@@ -4,7 +4,7 @@ uniform sampler2D u_terrain_texture;
 
 layout(std140) uniform per_program_state {
 	float u_z_value;
-	float u_value_amplitude;
+	float u_bump_amplitude;
 	float u_tint_amplitude;
 	float u_warp_amplitude;
 	vec2 u_texture_dimensions;
@@ -84,7 +84,8 @@ void main() {
 	                                  kDitherMinWidth);
 	float grain_lod = smoothstep(kDitherGrainFadeMin, kDitherGrainFadeMax, pixels_per_cell);
 
+	vec3 normal = terrain_bump_normal(var_normal, var_texture_position);
 	frag_color = vec4(
-	   clr.rgb * var_brightness * terrain_light(var_normal) * terrain_variation(var_texture_position),
+	   clr.rgb * var_brightness * terrain_light(normal) * terrain_variation(var_texture_position),
 	   mix(coverage, dissolved, grain_lod));
 }

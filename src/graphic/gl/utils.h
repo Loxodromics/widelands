@@ -227,7 +227,7 @@ private:
 // documented in graphic/gl/terrain_lighting.h.
 struct PerProgramState {
 	float z_value;          // offset 0
-	float value_amplitude;  // offset 4  (terrain noise; terrain/dither only)
+	float bump_amplitude;   // offset 4  (terrain noise; terrain/dither only)
 	float tint_amplitude;   // offset 8  (terrain noise; terrain/dither only)
 	float warp_amplitude;   // offset 12 (terrain noise; terrain/dither only)
 	float texture_w;        // offset 16 (vec2; terrain/dither only)
