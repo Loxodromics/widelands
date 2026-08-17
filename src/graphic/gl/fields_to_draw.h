@@ -50,6 +50,12 @@ public:
 		// Visibility factor only (fog of war), 1.0 for a fully visible field.
 		// Slope shading used to be folded into this value; it now lives in
 		// 'normal' instead and is applied by the terrain_light() shader term.
+		// The initializer below only fires at construction, not per frame --
+		// reset() is what makes this value correct each frame, and it must
+		// assign it unconditionally (only the fog-of-war path is allowed to
+		// override it afterwards). Without that assignment the field freezes
+		// at whatever fog last wrote, which reads as initialised because of
+		// this initializer but silently goes stale.
 		float brightness = 1.f;
 
 		// Surface normal in map-pixel space (+y is screen-down), used for

@@ -197,6 +197,7 @@ void FieldsToDraw::reset(const Widelands::EditorGameBase& egbase,
 			pixel_to_gl_renderbuffer(
 			   surface_width, surface_height, &f.gl_position.x, &f.gl_position.y);
 
+			f.brightness = 1.f;
 			f.normal = field_normal(map, f.fcoords);
 
 			const Widelands::PlayerNumber owned_by = f.fcoords.field->get_owned_by();
