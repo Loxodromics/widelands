@@ -128,14 +128,24 @@ const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // rather than an opacity multiply. The perforation is what makes the boundary
 // read as Settlers-2 grain instead of a clean vector edge.
 //
-// kDitherCentre has a hard floor that has nothing to do with taste. Where a
-// terrain is one triangle wide and both neighbours dither into it -- a beach
-// between grass and water is the usual case -- it survives only where the
-// effective threshold stays above 0.5, so the strip keeps 2t - 1 of its width.
-// With the shape octaves reaching 0.20, t bottoms out at centre - 0.20: 0.70
-// at centre 0.90, keeping a third of the strip at its worst. At 0.72 that
-// floor is 0.52 and the strip vanishes in patches. Confirmed by capture over
-// {0.72, 0.79, 0.86, 0.92}.
+// WRONG, kept as a warning -- this paragraph used to claim kDitherCentre has a
+// hard floor protecting a terrain one triangle wide (a beach between grass and
+// water), on the grounds that the strip keeps 2t - 1 of its width, so a third
+// of it at centre 0.90. That argument assumes the ramp still varies across the
+// strip. Since dither geometry became vertex-incident, it does not: every
+// vertex of a one-triangle-wide strip touches the overlay, the ramp is 1 over
+// the whole triangle, and s = ramp - kDitherCentre + shape is then bounded
+// below by ramp - 1 = 0 by dither.fp's clamp. Coverage there cannot fall under
+// half the ceiling at ANY value of kDitherCentre, kDitherShapeAmp or
+// kDitherMidAmp, and the strip is erased rather than thinned -- a beach spit on
+// coast01 loses ~80% of its pixels.
+//
+// This is an OPEN defect; kDitherCentre cannot fix it and tuning it in the hope
+// of doing so will only trade the erasure for something else. Two attempted
+// fixes were reverted, the second (a per-vertex ramp ceiling) because it put
+// hard triangular patches of bare base terrain across every irregular boundary.
+// Read Claude/VISUAL_FIDELITY_RANKED.md section 4.1 before trying a third.
+// kDitherCentre itself is a free aesthetic parameter.
 //
 // kDitherGrainFadeMin/Max: var_texture_position is map pixels / 64 on both
 // axes (fields_to_draw.cc:147-148) and kDitherGrainFrequency is 64, so
