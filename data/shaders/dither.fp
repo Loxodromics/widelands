@@ -40,7 +40,7 @@ void main() {
 			vec2(1. - MARGIN, 1. - MARGIN));
 	vec4 clr = texture(u_terrain_texture, var_texture_offset + u_texture_dimensions * texture_fract);
 	// The shape octaves must not retract the band past the ramp's 1 end, so
-	// they are clamped. At centre 0.86 they can reach -0.20 against 0.14 of
+	// they are clamped. At centre 0.90 they can reach -0.20 against 0.10 of
 	// headroom, so this binds at the default per-terrain amplitude of 1.0 --
 	// it shapes the normal look rather than guarding an extreme (see the band
 	// budget in terrain_noise_params.glsl).

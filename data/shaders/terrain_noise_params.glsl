@@ -69,11 +69,11 @@ const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // shape octave lets the boundary wander regionally, the mid octave gives it
 // local irregularity.
 //
-// Band budget: at centre 0.86 there is only 0.14 of headroom to the ramp's
+// Band budget: at centre 0.90 there is only 0.10 of headroom to the ramp's
 // 1 end, less than the shape octaves can produce (0.06 + 0.14 = 0.20), so
 // dither.fp's clamp to [-(1 - kDitherCentre), kDitherCentre] is load-bearing
 // rather than a safety net -- it binds wherever the shape field drops below
-// -0.14 and holds the band at the overlay instead of letting it retract past.
+// -0.10 and holds the band at the overlay instead of letting it retract past.
 // Density there falls to half the ceiling, which reads as extra speckle.
 //
 // The constants below are traced to edge.png's measured profile: 89%
@@ -90,8 +90,8 @@ const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // terrain is one triangle wide and both neighbours dither into it -- a beach
 // between grass and water is the usual case -- it survives only where the
 // effective threshold stays above 0.5, so the strip keeps 2t - 1 of its width.
-// With the shape octaves reaching 0.20, t bottoms out at centre - 0.20: 0.66
-// at centre 0.86, keeping a third of the strip at its worst. At 0.72 that
+// With the shape octaves reaching 0.20, t bottoms out at centre - 0.20: 0.70
+// at centre 0.90, keeping a third of the strip at its worst. At 0.72 that
 // floor is 0.52 and the strip vanishes in patches. Confirmed by capture over
 // {0.72, 0.79, 0.86, 0.92}.
 //
@@ -103,12 +103,12 @@ const vec3 kWarmTint = vec3(1.06, 1.00, 0.92);
 // endpoints. A clamp(pixels_per_cell - k, 0, 1) ties the fade's start to its
 // width and cannot express that: k = 2.0 fades the grain out at every zoom the
 // game offers, k = 0.25 still leaves a quarter of it at zoom 2.
-const float kDitherCentre = 0.86;
+const float kDitherCentre = 0.90;
 const float kDitherShapeAmp = 0.06;
-const float kDitherShapeFreq = 0.40;
+const float kDitherShapeFreq = 0.20;
 const float kDitherMidAmp = 0.14;
 const float kDitherMidFreq = 2.50;
-const float kDitherDissolveWidth  = 0.11;   // half-width of the dissolve zone, in ramp units
+const float kDitherDissolveWidth  = 0.09;   // half-width of the dissolve zone, in ramp units
 const float kDitherMaxCoverage    = 0.89;   // ceiling: 11% holes even at the shared edge
 const float kDitherGrainFrequency = 64.0;   // cells per field ~= 1 px per cell at zoom 1
 const float kDitherGrainFadeMin   = 0.5;    // no grain at or below this many px per cell
