@@ -28,6 +28,7 @@
 #include "logic/field.h"
 #include "logic/game.h"
 #include "logic/game_data_error.h"
+#include "logic/map_objects/checkstep.h"
 #include "logic/map_objects/descriptions.h"
 #include "logic/map_objects/world/critter_program.h"
 #include "scripting/lua_table.h"
@@ -289,14 +290,18 @@ void Critter::roam_update(Game& game, State& state) {
 		for (; roaming_dist > 0; --roaming_dist) {
 			const Coords candidate = game.random_location(get_position(), roaming_dist);
 
-			// Keep non-swimmers off the shoreline/lava edge; see
+			// Keep non-swimmers off the shoreline/lava edge, and keep their paths from
+			// crossing water via a chain of individually-walkable shore nodes; see
 			// Claude/CRITTER_TERRAIN_AVOIDANCE.md (Tier 2 biome preference is future work).
-			if (!descr().is_swimming() &&
-			    game.map().is_terrain_edge(game, game.map().get_fcoords(candidate))) {
+			const bool avoid_edges = !descr().is_swimming();
+			if (avoid_edges && game.map().is_terrain_edge(game, game.map().get_fcoords(candidate))) {
 				continue;
 			}
 
-			if (start_task_movepath(game, candidate, roaming_dist, descr().get_walk_anims())) {
+			const CheckStep terrain_check = avoid_edges ? CheckStep(CheckStepAvoidTerrainEdge(game)) :
+			                                              CheckStep(CheckStepAlwaysTrue());
+			if (start_task_movepath(game, candidate, roaming_dist, descr().get_walk_anims(), false, -1,
+			                        false, terrain_check)) {
 				return;
 			}
 		}

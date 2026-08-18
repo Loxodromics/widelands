@@ -530,7 +530,8 @@ bool Bob::start_task_movepath(Game& game,
                               const DirAnimations& anims,
                               bool const forceonlast,
                               int32_t const only_step,
-                              bool const forceall) {
+                              bool const forceall,
+                              const CheckStep& extra_check) {
 	Path path;
 	BlockedTracker tracker(game, *this, dest);
 	CheckStepAnd cstep;
@@ -541,6 +542,7 @@ bool Bob::start_task_movepath(Game& game,
 		cstep.add(CheckStepDefault(descr().movecaps()));
 	}
 	cstep.add(CheckStepBlocked(tracker));
+	cstep.add(extra_check);
 
 	if (forceall) {
 		tracker.disabled_ = true;

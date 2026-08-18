@@ -164,6 +164,32 @@ private:
 };
 
 /**
+ * Rejects any step whose two shared triangles include unwalkable-contributing terrain
+ * (water, lava/unreachable) - keeps land-bound bobs from crossing a water gap between two
+ * individually-walkable nodes, which a plain nodecaps comparison does not catch (a node's
+ * nodecaps aggregate all 6 surrounding triangles, not just the ones a given step crosses).
+ * Distinct from Map::is_terrain_edge(), which is a per-node (not per-step) check used to keep
+ * critters from choosing a shoreline node as a destination in the first place; see
+ * Claude/CRITTER_TERRAIN_AVOIDANCE.md.
+ *
+ * reachable_dest() always returns true: the caller is expected to have already excluded edge
+ * nodes as destinations (e.g. via Map::is_terrain_edge()), so every approach to a valid
+ * destination is guaranteed clean by construction. Reusing this check for a destination that
+ * has NOT been pre-filtered that way would make reachable_dest() overly optimistic.
+ */
+struct CheckStepAvoidTerrainEdge {
+	explicit CheckStepAvoidTerrainEdge(const EditorGameBase& egbase) : egbase_(egbase) {
+	}
+
+	[[nodiscard]] bool allowed(
+	   const Map&, const FCoords& from, const FCoords& to, int32_t dir, CheckStep::StepId) const;
+	[[nodiscard]] bool reachable_dest(const Map&, const FCoords& dest) const;
+
+private:
+	const EditorGameBase& egbase_;
+};
+
+/**
  * Implements the default step checking behaviours with one exception: we can
  * move from a walkable field onto an unwalkable one.
  * If onlyend is true, we can only do this on the final step.

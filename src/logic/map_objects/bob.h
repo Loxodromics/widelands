@@ -23,6 +23,7 @@
 #include "base/vector.h"
 #include "economy/route.h"
 #include "graphic/animation/diranimations.h"
+#include "logic/map_objects/checkstep.h"
 #include "logic/map_objects/info_to_draw.h"
 #include "logic/map_objects/map_object.h"
 #include "logic/map_objects/map_object_program.h"
@@ -276,7 +277,9 @@ public:
 	                         const DirAnimations&,
 	                         bool forceonlast = false,
 	                         int32_t only_step = -1,
-	                         bool forceall = false) __attribute__((warn_unused_result));
+	                         bool forceall = false,
+	                         const CheckStep& extra_check = CheckStepAlwaysTrue())
+	   __attribute__((warn_unused_result));
 
 	/// This can fail (and return false). Therefore the caller must check the
 	/// result and find something else for the bob to do. Otherwise there will

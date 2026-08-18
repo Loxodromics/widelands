@@ -185,6 +185,56 @@ bool CheckStepFerry::reachable_dest(const Map& map, const FCoords& dest) const {
 
 /*
 ===============
+CheckStepAvoidTerrainEdge
+===============
+*/
+bool CheckStepAvoidTerrainEdge::allowed(const Map& map,
+                                        const FCoords& from,
+                                        const FCoords& to,
+                                        int32_t dir,
+                                        CheckStep::StepId /* id */) const {
+	FCoords fd;
+	FCoords fr;
+	switch (dir) {
+	case WALK_NE:
+		fd = to;
+		fr = map.tl_n(from);
+		break;
+	case WALK_SW:
+		fd = from;
+		fr = map.l_n(from);
+		break;
+	case WALK_NW:
+		fd = fr = to;
+		break;
+	case WALK_SE:
+		fd = fr = from;
+		break;
+	case WALK_E:
+		fd = map.tr_n(from);
+		fr = from;
+		break;
+	case WALK_W:
+		fd = map.tl_n(from);
+		fr = to;
+		break;
+	default:
+		NEVER_HERE();
+	}
+	const Descriptions& descriptions = egbase_.descriptions();
+	return ((descriptions.get_terrain_descr(fd.field->terrain_d())->get_is() &
+	         TerrainDescription::Is::kUnwalkable) == 0) &&
+	       ((descriptions.get_terrain_descr(fr.field->terrain_r())->get_is() &
+	         TerrainDescription::Is::kUnwalkable) == 0);
+}
+
+bool CheckStepAvoidTerrainEdge::reachable_dest(const Map& /* map */,
+                                               const FCoords& /* dest */) const {
+	return true;
+}
+
+/*
+===============
 CheckStepWalkOn
 ===============
 */
