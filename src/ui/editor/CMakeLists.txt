@@ -61,6 +61,7 @@ wl_library(ui_editor
     graphic_mouse_cursor
     graphic_playercolor
     graphic_surface
+    graphic_terrain_programs
     graphic_text_layout
     io_filesystem
     io_filesystem_illegal_filename_check

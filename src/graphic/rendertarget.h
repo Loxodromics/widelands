@@ -21,8 +21,10 @@
 
 #include <vector>
 
+#include "base/macros.h"
 #include "base/rect.h"
 #include "base/times.h"
+#include "base/vector.h"
 #include "graphic/align.h"
 #include "graphic/blend_mode.h"
 #include "graphic/color.h"
@@ -137,6 +139,27 @@ public:
 		return offset_;
 	}
 
+	// Scopes 'light' (V3, Claude/VISUAL_FIDELITY_RANKED.md §4.3) onto a
+	// RenderTarget for the guard's lifetime, restoring the previous value on
+	// destruction -- so a caller cannot leave a stray tint active for draws
+	// outside the scope it intended. Only blit_animation() reads the light;
+	// see rendertarget.cc.
+	class LightScope {
+	public:
+		LightScope(RenderTarget& target, const Vector3f& light)
+		   : target_(target), previous_(target.light_) {
+			target_.light_ = light;
+		}
+		~LightScope() {
+			target_.light_ = previous_;
+		}
+
+	private:
+		RenderTarget& target_;
+		const Vector3f previous_;
+		DISALLOW_COPY_AND_ASSIGN(LightScope);
+	};
+
 protected:
 	bool clip(Rectf& r) const;
 	bool to_surface_geometry(Rectf* destination_rect, Rectf* source_rect) const;
@@ -147,6 +170,8 @@ protected:
 	Recti rect_;
 	/// Drawing offset
 	Vector2i offset_ = Vector2i::zero();
+	/// Field lighting applied to blit_animation() draws; see LightScope above.
+	Vector3f light_ = Vector3f(1.f, 1.f, 1.f);
 };
 
 #endif  // end of include guard: WL_GRAPHIC_RENDERTARGET_H

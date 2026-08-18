@@ -64,9 +64,11 @@ namespace {
 // kept render-side so the sun can be a uniform instead of baked into a cached
 // per-field scalar (V2, Claude/VISUAL_FIDELITY_RANKED.md §4.2). Deltas are this
 // node's height minus each neighbour's, exactly as Map::recalc_brightness
-// gathers them (map.cc). Returned in map-pixel space: x/y are map pixels, z is
-// height in map pixels (kHeightFactor px per height unit), +y is screen-down --
-// not the frame texture_coords uses, which negates y for tiling.
+// gathers them (map.cc). Returned in the equilateral-hex frame kCos60/kSin60
+// build below (+y is screen-down): x/y are map pixels, z is height in map
+// pixels (kHeightFactor px per height unit) -- NOT the map-pixel/screen frame
+// texture_coords uses (neighbours at +-45°, y negated for tiling); see
+// terrain_lighting.h for the frame conversion this matters for.
 Vector3f field_normal(const Widelands::Map& map, const Widelands::FCoords& f) {
 	constexpr float kCos60 = 0.5f;
 	constexpr float kSin60 = 0.86603f;

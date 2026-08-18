@@ -92,7 +92,9 @@ public:
 	/// 'source_rect' defines the part of the animation that should be blitted.
 	/// The 'clr' is the player color used for blitting - the parameter can be 'nullptr',
 	/// in which case the neutral image will be blitted. The Surface is the 'target'
-	/// for the blit operation and must be non-null.
+	/// for the blit operation and must be non-null. 'light' is the field lighting
+	/// to multiply the frame by (V3, Claude/VISUAL_FIDELITY_RANKED.md §4.3); white
+	/// for anything that is not a map-object sprite.
 	void blit(uint32_t time,
 	          const Widelands::Coords& coords,
 	          const Rectf& source_rect,
@@ -100,7 +102,8 @@ public:
 	          const RGBColor* clr,
 	          Surface* target,
 	          float scale,
-	          float opacity) const;
+	          float opacity,
+	          const Vector3f& light = Vector3f(1.f, 1.f, 1.f)) const;
 
 	/// We need to expose these for the packed animation,
 	/// so that the create_spritesheet utility can use them.
@@ -130,13 +133,14 @@ protected:
 		/// Load the needed graphics from disk.
 		virtual void load_graphics() = 0;
 
-		/// Blit the frame at the given index
+		/// Blit the frame at the given index. 'light', see Animation::blit above.
 		virtual void blit(uint32_t idx,
 		                  const Rectf& source_rect,
 		                  const Rectf& destination_rect,
 		                  const RGBColor* clr,
 		                  Surface* target,
-		                  float opacity) const = 0;
+		                  float opacity,
+		                  const Vector3f& light) const = 0;
 
 		/// The width of this mipmap entry's textures
 		[[nodiscard]] virtual int width() const = 0;

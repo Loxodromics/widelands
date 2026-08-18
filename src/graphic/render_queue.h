@@ -23,6 +23,7 @@
 
 #include "base/macros.h"
 #include "base/rect.h"
+#include "base/vector.h"
 #include "graphic/blend_mode.h"
 #include "graphic/blit_mode.h"
 #include "graphic/color.h"
@@ -100,6 +101,9 @@ public:
 		BlitData mask;
 		RGBAColor blend;
 		Rectf destination_rect;
+		// Field lighting (V3, Claude/VISUAL_FIDELITY_RANKED.md §4.3), white
+		// unless a map-object sprite is drawn under a RenderTarget::LightScope.
+		Vector3f light = Vector3f(1.f, 1.f, 1.f);
 	};
 
 	struct RectArguments {

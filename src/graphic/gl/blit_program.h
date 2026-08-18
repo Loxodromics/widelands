@@ -23,6 +23,7 @@
 
 #include "base/macros.h"
 #include "base/rect.h"
+#include "base/vector.h"
 #include "graphic/blend_mode.h"
 #include "graphic/blit_mode.h"
 #include "graphic/color.h"
@@ -42,6 +43,10 @@ public:
 		RGBAColor blend;
 		BlendMode blend_mode;
 		BlitMode blit_mode;
+		// Field lighting (V3, Claude/VISUAL_FIDELITY_RANKED.md §4.3), white
+		// unless the caller is drawing a map-object sprite under a
+		// RenderTarget::LightScope.
+		Vector3f light = Vector3f(1.f, 1.f, 1.f);
 	};
 
 	// Returns the (singleton) instance of this class.
@@ -57,7 +62,8 @@ public:
 	          const BlitData& texture,
 	          const BlitData& mask,
 	          const RGBAColor& blend,
-	          const BlendMode& blend_mode);
+	          const BlendMode& blend_mode,
+	          const Vector3f& light = Vector3f(1.f, 1.f, 1.f));
 
 	// Draws the rectangle 'gl_src_rect' from the texture with the name
 	// 'texture' to 'gl_dest_rect' in the currently bound framebuffer. All
@@ -86,7 +92,10 @@ private:
 		              float init_blend_g,
 		              float init_blend_b,
 		              float init_blend_a,
-		              float init_program_flavor)
+		              float init_program_flavor,
+		              float init_light_r,
+		              float init_light_g,
+		              float init_light_b)
 		   : gl_x(init_gl_x),
 		     gl_y(init_gl_y),
 		     gl_z(init_gl_z),
@@ -98,7 +107,10 @@ private:
 		     blend_g(init_blend_g),
 		     blend_b(init_blend_b),
 		     blend_a(init_blend_a),
-		     program_flavor(init_program_flavor) {
+		     program_flavor(init_program_flavor),
+		     light_r(init_light_r),
+		     light_g(init_light_g),
+		     light_b(init_light_b) {
 		}
 
 		float gl_x, gl_y, gl_z;
@@ -106,8 +118,9 @@ private:
 		float mask_texture_x, mask_texture_y;
 		float blend_r, blend_g, blend_b, blend_a;
 		float program_flavor;
+		float light_r, light_g, light_b;
 	};
-	static_assert(sizeof(PerVertexData) == 48, "Wrong padding.");
+	static_assert(sizeof(PerVertexData) == 60, "Wrong padding.");
 
 	// The buffer that will contain the quad for rendering.
 	Gl::Buffer<PerVertexData> gl_array_buffer_;

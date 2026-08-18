@@ -36,6 +36,7 @@
 #include "editor/tools/set_terrain_tool.h"
 #include "editor/tools/tool_conf.h"
 #include "graphic/color_palette.h"
+#include "graphic/gl/terrain_lighting.h"
 #include "graphic/mouse_cursor.h"
 #include "graphic/playercolor.h"
 #include "graphic/text_layout.h"
@@ -781,19 +782,23 @@ void EditorInteractive::draw(RenderTarget& dst) {
 			continue;
 		}
 
-		if (get_display_flag(dfShowImmovables)) {
-			Widelands::BaseImmovable* const imm = field.fcoords.field->get_immovable();
-			if (imm != nullptr && imm->get_positions(ebase).front() == field.fcoords) {
-				imm->draw(gametime, InfoToDraw::kShowBuildings, field.rendertarget_pixel, field.fcoords,
-				          scale, &dst);
-			}
-		}
+		{
+			const RenderTarget::LightScope light(dst, sprite_light(field.normal, field.brightness));
 
-		if (get_display_flag(dfShowBobs)) {
-			for (Widelands::Bob* bob = field.fcoords.field->get_first_bob(); bob != nullptr;
-			     bob = bob->get_next_bob()) {
-				bob->draw(
-				   ebase, InfoToDraw::kNone, field.rendertarget_pixel, field.fcoords, scale, &dst);
+			if (get_display_flag(dfShowImmovables)) {
+				Widelands::BaseImmovable* const imm = field.fcoords.field->get_immovable();
+				if (imm != nullptr && imm->get_positions(ebase).front() == field.fcoords) {
+					imm->draw(gametime, InfoToDraw::kShowBuildings, field.rendertarget_pixel,
+					          field.fcoords, scale, &dst);
+				}
+			}
+
+			if (get_display_flag(dfShowBobs)) {
+				for (Widelands::Bob* bob = field.fcoords.field->get_first_bob(); bob != nullptr;
+				     bob = bob->get_next_bob()) {
+					bob->draw(
+					   ebase, InfoToDraw::kNone, field.rendertarget_pixel, field.fcoords, scale, &dst);
+				}
 			}
 		}
 

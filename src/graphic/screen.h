@@ -45,11 +45,13 @@ private:
 	void do_blit(const Rectf& dst_rect,
 	             const BlitData& texture,
 	             float opacity,
-	             BlendMode blend_mode) override;
+	             BlendMode blend_mode,
+	             const Vector3f& light) override;
 	void do_blit_blended(const Rectf& dst_rect,
 	                     const BlitData& texture,
 	                     const BlitData& mask,
-	                     const RGBColor& blend) override;
+	                     const RGBColor& blend,
+	                     const Vector3f& light) override;
 	void do_blit_monochrome(const Rectf& dst_rect,
 	                        const BlitData& texture,
 	                        const RGBAColor& blend) override;

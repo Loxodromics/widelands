@@ -303,26 +303,28 @@ void Texture::draw_to_self(const std::function<void()>& draw) {
 void Texture::do_blit(const Rectf& dst_rect,
                       const BlitData& texture,
                       float opacity,
-                      BlendMode blend_mode) {
+                      BlendMode blend_mode,
+                      const Vector3f& light) {
 	if (!has_texture(blit_data_)) {
 		return;
 	}
 	draw_to_self([&]() {
 		BlitProgram::instance().draw(dst_rect, 0.f, texture, BlitData{nullptr, 0, 0, 0, Rectf()},
-		                             RGBAColor(0, 0, 0, 255 * opacity), blend_mode);
+		                             RGBAColor(0, 0, 0, 255 * opacity), blend_mode, light);
 	});
 }
 
 void Texture::do_blit_blended(const Rectf& dst_rect,
                               const BlitData& texture,
                               const BlitData& mask,
-                              const RGBColor& blend) {
+                              const RGBColor& blend,
+                              const Vector3f& light) {
 
 	if (!has_texture(blit_data_)) {
 		return;
 	}
 	draw_to_self([&]() {
-		BlitProgram::instance().draw(dst_rect, 0.f, texture, mask, blend, BlendMode::UseAlpha);
+		BlitProgram::instance().draw(dst_rect, 0.f, texture, mask, blend, BlendMode::UseAlpha, light);
 	});
 }
 

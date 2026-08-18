@@ -58,7 +58,10 @@ public:
 		// this initializer but silently goes stale.
 		float brightness = 1.f;
 
-		// Surface normal in map-pixel space (+y is screen-down), used for
+		// Surface normal in the equilateral-hex frame field_normal() builds it
+		// in (fields_to_draw.cc) -- NOT map-pixel/screen space, where neighbours
+		// sit at +-45° rather than the frame's kSin60 = 0.866 diagonal step (see
+		// terrain_lighting.h and terrain_noise_params.glsl). Used for
 		// render-side terrain lighting (V2, Claude/VISUAL_FIDELITY_RANKED.md
 		// §4.2). Vector3f has no default constructor, hence the explicit
 		// in-class initializer.

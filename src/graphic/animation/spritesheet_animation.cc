@@ -103,7 +103,8 @@ void SpriteSheetAnimation::SpriteSheetMipMapEntry::blit(uint32_t idx,
                                                         const Rectf& destination_rect,
                                                         const RGBColor* clr,
                                                         Surface* target,
-                                                        const float opacity) const {
+                                                        const float opacity,
+                                                        const Vector3f& light) const {
 	assert(sheet != nullptr);
 	assert(target);
 	assert(static_cast<int>(idx) <= columns * rows);
@@ -115,10 +116,11 @@ void SpriteSheetAnimation::SpriteSheetMipMapEntry::blit(uint32_t idx,
 	                 source_rect.h);
 
 	if (!has_playercolor_masks || clr == nullptr) {
-		target->blit(destination_rect, *sheet, frame_rect, opacity, BlendMode::UseAlpha);
+		target->blit(destination_rect, *sheet, frame_rect, opacity, BlendMode::UseAlpha, light);
 	} else {
 		assert(playercolor_mask_sheet != nullptr);
-		target->blit_blended(destination_rect, *sheet, *playercolor_mask_sheet, frame_rect, *clr);
+		target->blit_blended(
+		   destination_rect, *sheet, *playercolor_mask_sheet, frame_rect, *clr, light);
 	}
 }
 

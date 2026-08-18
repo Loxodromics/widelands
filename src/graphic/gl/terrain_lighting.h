@@ -18,6 +18,8 @@
 #ifndef WL_GRAPHIC_GL_TERRAIN_LIGHTING_H
 #define WL_GRAPHIC_GL_TERRAIN_LIGHTING_H
 
+#include <algorithm>
+
 #include "base/vector.h"
 
 // The sun used for render-side terrain lighting (V2, Claude/VISUAL_FIDELITY_RANKED.md
@@ -72,5 +74,50 @@ constexpr Vector3f kSunColor = {0.980f, 0.892f, 0.539f};
 // normals always have positive z the two only differ on steep slopes, and a
 // constant is one dot product cheaper.
 constexpr Vector3f kAmbientColor = {0.368f, 0.387f, 0.479f};
+
+// The lambert term against the sun, without the two-tone colour split
+// terrain.fp/dither.fp use -- the C++ mirror of terrain_lighting.glsl:5, kept
+// in one place so road_brightness() (road_program.cc) and sprite_light()
+// below do not each carry their own copy. Does not normalize 'normal': safe
+// only because every caller's normal already is (field_normal(),
+// fields_to_draw.cc).
+inline Vector3f field_light(const Vector3f& normal) {
+	const float ndotl = std::max(normal.dot(kSunDirection), 0.0f);
+	return Vector3f(kAmbientColor.x + kSunColor.x * ndotl, kAmbientColor.y + kSunColor.y * ndotl,
+	                kAmbientColor.z + kSunColor.z * ndotl);
+}
+
+// field_light() for flat ground (N = (0, 0, 1)). A function rather than a
+// separate constant so it cannot drift if kSunDirection/kSunColor/kAmbientColor
+// change.
+inline Vector3f flat_ground_light() {
+	return field_light(Vector3f(0.f, 0.f, 1.f));
+}
+
+// How much of a field's local light a map-object sprite standing on it picks
+// up, versus staying at the flat-ground illumination already baked into its
+// pixels by the Blender rig (MEDIA_PIPELINE.md §2). 0 leaves sprites unlit
+// (pre-V3 behaviour), 1 applies the field's relative light in full.
+// V3, Claude/VISUAL_FIDELITY_RANKED.md §4.3. Settled at the full 1.0: a
+// captured ladder at 0.25/0.5/0.75/1.0 (steppe00, backlog.md) found no
+// clipping penalty at 1.0 (channels >=254 barely move, 1.2218% ->
+// 1.2234%) and no artifact on inspected crops -- the physically-motivated
+// value is also the one with no reason to hold back from.
+constexpr float kSpriteLightStrength = 1.0f;
+
+// The colour a map-object sprite standing on 'normal' should be multiplied by:
+// the field's light relative to flat ground -- not the raw field light, which
+// would double the flat-ground illumination already baked into the sprite's
+// pixels -- mixed towards white by (1 - kSpriteLightStrength), times the
+// field's fog-of-war visibility factor.
+inline Vector3f sprite_light(const Vector3f& normal, const float brightness) {
+	const Vector3f field = field_light(normal);
+	const Vector3f flat = flat_ground_light();
+	const Vector3f relative(field.x / flat.x, field.y / flat.y, field.z / flat.z);
+	const Vector3f mixed(1.f + kSpriteLightStrength * (relative.x - 1.f),
+	                     1.f + kSpriteLightStrength * (relative.y - 1.f),
+	                     1.f + kSpriteLightStrength * (relative.z - 1.f));
+	return Vector3f(mixed.x * brightness, mixed.y * brightness, mixed.z * brightness);
+}
 
 #endif  // end of include guard: WL_GRAPHIC_GL_TERRAIN_LIGHTING_H

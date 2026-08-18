@@ -166,9 +166,10 @@ void Animation::blit(uint32_t time,
                      const RGBColor* clr,
                      Surface* target,
                      float scale,
-                     float opacity) const {
+                     float opacity,
+                     const Vector3f& light) const {
 	mipmap_entry(find_best_scale(scale))
-	   .blit(current_frame(time), source_rect, destination_rect, clr, target, opacity);
+	   .blit(current_frame(time), source_rect, destination_rect, clr, target, opacity, light);
 	trigger_sound(time, coords);
 }
 

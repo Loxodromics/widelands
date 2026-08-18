@@ -21,6 +21,7 @@
 
 #include "base/macros.h"
 #include "base/rect.h"
+#include "base/vector.h"
 #include "graphic/blend_mode.h"
 #include "graphic/color.h"
 #include "graphic/gl/draw_line_program.h"
@@ -37,16 +38,23 @@ public:
 	[[nodiscard]] virtual int width() const = 0;
 	[[nodiscard]] virtual int height() const = 0;
 
-	/// This draws a part of 'texture'.
-	void
-	blit(const Rectf& dst, const Image&, const Rectf& src_rect, float opacity, BlendMode blend_mode);
+	/// This draws a part of 'texture'. 'light' is the field lighting a
+	/// map-object sprite is multiplied by (V3, Claude/VISUAL_FIDELITY_RANKED.md
+	/// §4.3); white for everything else.
+	void blit(const Rectf& dst,
+	         const Image&,
+	         const Rectf& src_rect,
+	         float opacity,
+	         BlendMode blend_mode,
+	         const Vector3f& light = Vector3f(1.f, 1.f, 1.f));
 
-	/// This draws a playercolor blended image.
+	/// This draws a playercolor blended image. 'light', see blit() above.
 	void blit_blended(const Rectf& dst,
 	                  const Image& image,
 	                  const Image& texture_mask,
 	                  const Rectf& src_rect,
-	                  const RGBColor& blend);
+	                  const RGBColor& blend,
+	                  const Vector3f& light = Vector3f(1.f, 1.f, 1.f));
 
 	/// This draws a grayed out version.
 	void
@@ -64,13 +72,17 @@ public:
 
 private:
 	/// The actual implementation of the methods below.
-	virtual void
-	do_blit(const Rectf& dst_rect, const BlitData& texture, float opacity, BlendMode blend_mode) = 0;
+	virtual void do_blit(const Rectf& dst_rect,
+	                     const BlitData& texture,
+	                     float opacity,
+	                     BlendMode blend_mode,
+	                     const Vector3f& light) = 0;
 
 	virtual void do_blit_blended(const Rectf& dst_rect,
 	                             const BlitData& texture,
 	                             const BlitData& mask,
-	                             const RGBColor& blend) = 0;
+	                             const RGBColor& blend,
+	                             const Vector3f& light) = 0;
 
 	virtual void
 	do_blit_monochrome(const Rectf& dst_rect, const BlitData& texture, const RGBAColor& blend) = 0;

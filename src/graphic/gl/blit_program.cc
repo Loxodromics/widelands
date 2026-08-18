@@ -54,6 +54,7 @@ BlitProgram::BlitProgram() {
 		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
 		    offsetof(PerVertexData, texture_x)},
 		   {"attr_program_flavor", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, program_flavor)},
+		   {"attr_light", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, light_r)},
 		};
 		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
 		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
@@ -92,6 +93,8 @@ BlitProgram::BlitProgram() {
 	    offsetof(PerVertexData, texture_x)},
 	   {gl_program_.attribute_location("attr_program_flavor"), 1, sizeof(PerVertexData),
 	    offsetof(PerVertexData, program_flavor)},
+	   {gl_program_.attribute_location("attr_light"), 3, sizeof(PerVertexData),
+	    offsetof(PerVertexData, light_r)},
 	});
 }
 
@@ -131,6 +134,9 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 
 			const Rectf texture_rect = to_gl_texture(current_args.texture);
 			const Rectf mask_rect = to_gl_texture(current_args.mask);
+			const float light_r = current_args.light.x;
+			const float light_g = current_args.light.y;
+			const float light_b = current_args.light.z;
 			float program_flavor = 0;
 			switch (current_args.blit_mode) {
 			case BlitMode::kDirect:
@@ -151,19 +157,20 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 
 			vertices_.emplace_back(current_args.destination_rect.x, current_args.destination_rect.y,
 			                       current_args.z_value, texture_rect.x, texture_rect.y, mask_rect.x,
-			                       mask_rect.y, blend_r, blend_g, blend_b, blend_a, program_flavor);
+			                       mask_rect.y, blend_r, blend_g, blend_b, blend_a, program_flavor,
+			                       light_r, light_g, light_b);
 
 			vertices_.emplace_back(current_args.destination_rect.x + current_args.destination_rect.w,
 			                       current_args.destination_rect.y, current_args.z_value,
 			                       texture_rect.x + texture_rect.w, texture_rect.y,
 			                       mask_rect.x + mask_rect.w, mask_rect.y, blend_r, blend_g, blend_b,
-			                       blend_a, program_flavor);
+			                       blend_a, program_flavor, light_r, light_g, light_b);
 
 			vertices_.emplace_back(
 			   current_args.destination_rect.x,
 			   current_args.destination_rect.y + current_args.destination_rect.h, current_args.z_value,
 			   texture_rect.x, texture_rect.y + texture_rect.h, mask_rect.x, mask_rect.y + mask_rect.h,
-			   blend_r, blend_g, blend_b, blend_a, program_flavor);
+			   blend_r, blend_g, blend_b, blend_a, program_flavor, light_r, light_g, light_b);
 
 			vertices_.emplace_back(vertices_.at(vertices_.size() - 2));
 			vertices_.emplace_back(vertices_.at(vertices_.size() - 2));
@@ -173,7 +180,7 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 			                       current_args.z_value, texture_rect.x + texture_rect.w,
 			                       texture_rect.y + texture_rect.h, mask_rect.x + mask_rect.w,
 			                       mask_rect.y + mask_rect.h, blend_r, blend_g, blend_b, blend_a,
-			                       program_flavor);
+			                       program_flavor, light_r, light_g, light_b);
 			++i;
 		}
 
@@ -232,9 +239,10 @@ void BlitProgram::draw(const Rectf& gl_dest_rect,
                        const BlitData& texture,
                        const BlitData& mask,
                        const RGBAColor& blend,
-                       const BlendMode& blend_mode) {
+                       const BlendMode& blend_mode,
+                       const Vector3f& light) {
 	draw({Arguments{gl_dest_rect, z_value, texture, mask, blend, blend_mode,
-	                has_texture(mask) ? BlitMode::kBlendedWithMask : BlitMode::kDirect}});
+	                has_texture(mask) ? BlitMode::kBlendedWithMask : BlitMode::kDirect, light}});
 }
 
 void BlitProgram::draw_monochrome(const Rectf& dest_rect,

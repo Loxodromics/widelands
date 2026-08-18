@@ -22,6 +22,7 @@
 #include "base/macros.h"
 #include "chat/chat.h"
 #include "graphic/game_renderer.h"
+#include "graphic/gl/terrain_lighting.h"
 #include "graphic/mouse_cursor.h"
 #include "graphic/text_layout.h"
 #include "logic/game_controller.h"
@@ -108,26 +109,30 @@ void InteractiveSpectator::draw_map_view(MapView* given_map_view, RenderTarget* 
 			continue;
 		}
 
-		draw_bridges(dst, &field, gametime, scale);
-		draw_border_markers(field, scale, *fields_to_draw, dst);
-
 		{
-			MutexLock m(MutexLock::ID::kObjects);
-			Widelands::BaseImmovable* const imm = field.fcoords.field->get_immovable();
-			if (imm != nullptr && imm->get_positions(the_game).front() == field.fcoords) {
-				imm->draw(gametime, info_to_draw, field.rendertarget_pixel, field.fcoords, scale, dst);
-				if (upcast(const Widelands::Immovable, i, imm)) {
-					if (!i->get_marked_for_removal().empty()) {
-						const Image* img = g_image_cache->get("images/wui/overlays/targeted.png");
-						blit_field_overlay(
-						   dst, field, img, Vector2i(img->width() / 2, img->height()), scale);
+			const RenderTarget::LightScope light(*dst, sprite_light(field.normal, field.brightness));
+
+			draw_bridges(dst, &field, gametime, scale);
+			draw_border_markers(field, scale, *fields_to_draw, dst);
+
+			{
+				MutexLock m(MutexLock::ID::kObjects);
+				Widelands::BaseImmovable* const imm = field.fcoords.field->get_immovable();
+				if (imm != nullptr && imm->get_positions(the_game).front() == field.fcoords) {
+					imm->draw(gametime, info_to_draw, field.rendertarget_pixel, field.fcoords, scale, dst);
+					if (upcast(const Widelands::Immovable, i, imm)) {
+						if (!i->get_marked_for_removal().empty()) {
+							const Image* img = g_image_cache->get("images/wui/overlays/targeted.png");
+							blit_field_overlay(
+							   dst, field, img, Vector2i(img->width() / 2, img->height()), scale);
+						}
 					}
 				}
-			}
 
-			for (Widelands::Bob* bob = field.fcoords.field->get_first_bob(); bob != nullptr;
-			     bob = bob->get_next_bob()) {
-				bob->draw(the_game, info_to_draw, field.rendertarget_pixel, field.fcoords, scale, dst);
+				for (Widelands::Bob* bob = field.fcoords.field->get_first_bob(); bob != nullptr;
+				     bob = bob->get_next_bob()) {
+					bob->draw(the_game, info_to_draw, field.rendertarget_pixel, field.fcoords, scale, dst);
+				}
 			}
 		}
 

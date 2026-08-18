@@ -6,16 +6,19 @@ layout(location = 1) in vec2 attr_texture_position;
 layout(location = 2) in vec3 attr_position;
 layout(location = 3) in vec4 attr_blend;
 layout(location = 4) in float attr_program_flavor;
+layout(location = 5) in vec3 attr_light;
 
 out vec2 out_mask_texture_coordinate;
 out vec2 out_texture_coordinate;
 out vec4 out_blend;
 out float out_program_flavor;
+out vec3 out_light;
 
 void main() {
 	out_mask_texture_coordinate = attr_mask_texture_position;
 	out_texture_coordinate = attr_texture_position;
 	out_blend = attr_blend;
 	out_program_flavor = attr_program_flavor;
+	out_light = attr_light;
 	gl_Position = vec4(attr_position, 1.);
 }

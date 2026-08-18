@@ -35,6 +35,7 @@ wl_library(wui_interactive
     logic_exceptions
     ui_game_wares_displays
     graphic_render_queue
+    graphic_terrain_programs
     sound
     ui_game_toplevel_windows
     ui_game_savegame

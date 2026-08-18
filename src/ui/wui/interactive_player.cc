@@ -25,6 +25,7 @@
 #include "game_io/game_loader.h"
 #include "graphic/color.h"
 #include "graphic/game_renderer.h"
+#include "graphic/gl/terrain_lighting.h"
 #include "graphic/mouse_cursor.h"
 #include "graphic/text_layout.h"
 #include "logic/map_objects/checkstep.h"
@@ -562,6 +563,8 @@ void InteractivePlayer::draw_map_view(MapView* given_map_view, RenderTarget* dst
 		// Add road building overlays if applicable.
 		if (f->seeing != Widelands::VisibleState::kUnexplored) {
 			draw_road_building(dst, *f, gametime, scale);
+
+			const RenderTarget::LightScope light(*dst, sprite_light(f->normal, f->brightness));
 
 			draw_bridges(
 			   dst, f, f->seeing == Widelands::VisibleState::kVisible ? gametime : Time(0), scale);

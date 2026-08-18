@@ -57,7 +57,8 @@ private:
 		          const Rectf& destination_rect,
 		          const RGBColor* clr,
 		          Surface* target,
-		          float opacity) const override;
+		          float opacity,
+		          const Vector3f& light) const override;
 
 		[[nodiscard]] int width() const override;
 		[[nodiscard]] int height() const override;

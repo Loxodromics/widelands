@@ -77,6 +77,7 @@ inline void from_item(const RenderQueue::Item& item, BlitProgram::Arguments* arg
 	args->mask = item.blit_arguments.mask;
 	args->blit_mode = item.blit_arguments.mode;
 	args->destination_rect = item.blit_arguments.destination_rect;
+	args->light = item.blit_arguments.light;
 }
 
 inline void from_item(const RenderQueue::Item& item, DrawLineProgram::Arguments* args) {

@@ -319,7 +319,8 @@ void RenderTarget::blit_animation(const Vector2f& dst,
 		Rectf srcrc = animation.source_rectangle(percent_from_bottom, scale);
 		Rectf dstrc = animation.destination_rectangle(dst, srcrc, scale);
 		if (to_surface_geometry(&dstrc, &srcrc)) {
-			animation.blit(time.get(), coords, srcrc, dstrc, player_color, surface_, scale, opacity);
+			animation.blit(
+			   time.get(), coords, srcrc, dstrc, player_color, surface_, scale, opacity, light_);
 		}
 	}
 }
@@ -334,6 +335,7 @@ void RenderTarget::reset() {
 	rect_.h = surface_->height();
 
 	offset_.x = offset_.y = 0;
+	light_ = Vector3f(1.f, 1.f, 1.f);
 }
 
 /**

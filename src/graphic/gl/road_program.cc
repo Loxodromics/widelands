@@ -33,16 +33,14 @@ namespace {
 
 /* Roads read a single scalar brightness, not the two-tone terrain_light()
  * used by terrain.fp/dither.fp (V2, Claude/VISUAL_FIDELITY_RANKED.md §4.2), so
- * this mirrors that GLSL formula in C++ rather than sharing a shader: the
- * lambert term without the colour split, folded onto the field's visibility
- * factor. Roads not carrying the terrain's colour tint is a knowing
- * simplification -- see the standing "roads do not carry the terrain
- * variation" item, VISUAL_FIDELITY_RANKED.md §5.
+ * this collapses field_light() (terrain_lighting.h) to Rec.709 luma rather
+ * than carrying the colour split, folded onto the field's visibility factor.
+ * Roads not carrying the terrain's colour tint is a knowing simplification --
+ * see the standing "roads do not carry the terrain variation" item,
+ * VISUAL_FIDELITY_RANKED.md §5.
  */
 float road_brightness(const FieldsToDraw::Field& field) {
-	const float ndotl = std::max(field.normal.dot(kSunDirection), 0.0f);
-	const Vector3f lit(kAmbientColor.x + kSunColor.x * ndotl, kAmbientColor.y + kSunColor.y * ndotl,
-	                   kAmbientColor.z + kSunColor.z * ndotl);
+	const Vector3f lit = field_light(field.normal);
 	constexpr float kLumaR = 0.2126f;
 	constexpr float kLumaG = 0.7152f;
 	constexpr float kLumaB = 0.0722f;

@@ -112,16 +112,18 @@ void NonPackedAnimation::NonPackedMipMapEntry::blit(uint32_t idx,
                                                     const Rectf& destination_rect,
                                                     const RGBColor* clr,
                                                     Surface* target,
-                                                    float opacity) const {
+                                                    float opacity,
+                                                    const Vector3f& light) const {
 	assert(!frames.empty());
 	assert(target);
 	assert(idx < frames.size());
 
 	if (!has_playercolor_masks || clr == nullptr) {
-		target->blit(destination_rect, *frames.at(idx), source_rect, opacity, BlendMode::UseAlpha);
+		target->blit(
+		   destination_rect, *frames.at(idx), source_rect, opacity, BlendMode::UseAlpha, light);
 	} else {
-		target->blit_blended(
-		   destination_rect, *frames.at(idx), *playercolor_mask_frames.at(idx), source_rect, *clr);
+		target->blit_blended(destination_rect, *frames.at(idx), *playercolor_mask_frames.at(idx),
+		                     source_rect, *clr, light);
 	}
 }
 

@@ -145,19 +145,21 @@ void Surface::blit_blended(const Rectf& dst_rect,
                            const Image& image,
                            const Image& texture_mask,
                            const Rectf& src_rect,
-                           const RGBColor& blend) {
+                           const RGBColor& blend,
+                           const Vector3f& light) {
 	const Rectf rect = rect_to_gl_renderbuffer(width(), height(), dst_rect);
 	do_blit_blended(rect, adjust_for_src(image.blit_data(), src_rect),
-	                adjust_for_src(texture_mask.blit_data(), src_rect), blend);
+	                adjust_for_src(texture_mask.blit_data(), src_rect), blend, light);
 }
 
 void Surface::blit(const Rectf& dst_rect,
                    const Image& image,
                    const Rectf& src_rect,
                    float opacity,
-                   BlendMode blend_mode) {
+                   BlendMode blend_mode,
+                   const Vector3f& light) {
 	const Rectf rect = rect_to_gl_renderbuffer(width(), height(), dst_rect);
-	do_blit(rect, adjust_for_src(image.blit_data(), src_rect), opacity, blend_mode);
+	do_blit(rect, adjust_for_src(image.blit_data(), src_rect), opacity, blend_mode, light);
 }
 
 void draw_rect(const Rectf& rc, const RGBColor& clr, Surface* surface) {

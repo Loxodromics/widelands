@@ -54,7 +54,8 @@ std::unique_ptr<Texture> Screen::to_texture() const {
 void Screen::do_blit(const Rectf& dst_rect,
                      const BlitData& texture,
                      float opacity,
-                     BlendMode blend_mode) {
+                     BlendMode blend_mode,
+                     const Vector3f& light) {
 	RenderQueue::Item i;
 	i.program_id = RenderQueue::Program::kBlit;
 	i.blend_mode = blend_mode;
@@ -63,13 +64,15 @@ void Screen::do_blit(const Rectf& dst_rect,
 	i.blit_arguments.mask.texture_id = 0;
 	i.blit_arguments.mode = BlitMode::kDirect;
 	i.blit_arguments.texture = texture;
+	i.blit_arguments.light = light;
 	RenderQueue::instance().enqueue(i);
 }
 
 void Screen::do_blit_blended(const Rectf& dst_rect,
                              const BlitData& texture,
                              const BlitData& mask,
-                             const RGBColor& blend) {
+                             const RGBColor& blend,
+                             const Vector3f& light) {
 	RenderQueue::Item i;
 	i.program_id = RenderQueue::Program::kBlit;
 	i.blend_mode = BlendMode::UseAlpha;
@@ -78,6 +81,7 @@ void Screen::do_blit_blended(const Rectf& dst_rect,
 	i.blit_arguments.mask = mask;
 	i.blit_arguments.mode = BlitMode::kBlendedWithMask;
 	i.blit_arguments.texture = texture;
+	i.blit_arguments.light = light;
 	RenderQueue::instance().enqueue(i);
 }
 

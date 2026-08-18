@@ -7,6 +7,7 @@ in vec2 out_mask_texture_coordinate;
 in vec2 out_texture_coordinate;
 in vec4 out_blend;
 in float out_program_flavor;
+in vec3 out_light;
 
 out vec4 frag_color;
 
@@ -27,4 +28,8 @@ void main() {
 			mix(texture_color.rgb, out_blend.rgb * luminance, blend_influence),
 				out_blend.a * texture_color.a);
 	}
+	// Field lighting (V3, Claude/VISUAL_FIDELITY_RANKED.md §4.3): white unless
+	// the draw is scoped inside a RenderTarget::LightScope, so this is a no-op
+	// everywhere except map-object sprites.
+	frag_color.rgb *= out_light;
 }
