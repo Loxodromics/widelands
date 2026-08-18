@@ -35,10 +35,21 @@
 // trunk. The derivation anchors on the animation hotspot, which already marks
 // the node's ground point.
 //
-// The load-bearing step is masking out the baked shadow first (the §2.1
-// discriminator below): without it, the bottom contour of a part of the asset
-// set follows the shadow instead of the object (6.13 px mean / 31 px max on
-// the oak, up to 40 px on the tower -- footprint_gate.py, run 2026-08-18).
+// Two independent things keep the baked shadows §2.1 found in part of the
+// asset set out of the contour, and it is worth knowing which does what:
+//
+//   - kAlphaThreshold carries most of it. The oak's shadow sits at alpha 127
+//     for 688 of its 695 pixels, i.e. just under the threshold, so it never
+//     reaches the silhouette at all. Lowering kAlphaThreshold would break the
+//     oak, and the explicit mask below would not save it.
+//   - The explicit mask handles the shadows that are opaque enough to pass.
+//     The barbarian tower's is the measured case: 291 of its 318 shadow pixels
+//     are at alpha 123-142, and excluding them moves the contour on 3 columns
+//     by up to 39 px.
+//
+// Measured with Claude/footprint_gate.py, 2026-08-18. A fully opaque shadow is
+// still only thinned, not removed -- erosion strips its interior but its 1 px
+// ring survives; see the shadow_ring_survives test.
 
 /// The decal's alpha channel, laid out as width * height bytes.
 struct ContactDecal {
@@ -50,9 +61,11 @@ struct ContactDecal {
 	Vector2i hotspot{0, 0};
 };
 
-/// Derives the contact-shadow decal for one RGBA8888 frame. Returns nullopt
-/// when the object is not standing on this node's ground line (ships float;
-/// the hotspot is mid-hull), or when nothing of the frame is opaque.
+/// Derives the contact-shadow decal for one frame. 'rgba' must be in byte
+/// order R, G, B, A (SDL_PIXELFORMAT_RGBA32 -- not RGBA8888, which names the
+/// packed word's order and is byte-reversed on a little-endian host). Returns
+/// nullopt when the object is not standing on this node's ground line (ships
+/// float; the hotspot is mid-hull), or when nothing of the frame is opaque.
 std::optional<ContactDecal> derive_contact_decal(const uint8_t* rgba, int width, int height,
                                                  const Vector2i& hotspot);
 

@@ -166,13 +166,13 @@ SDL_Surface* SpriteSheetAnimation::SpriteSheetMipMapEntry::load_frame_surface(ui
 	if (sheet == nullptr) {
 		throw Widelands::GameDataError("Could not load sprite sheet %s", sheet_file.c_str());
 	}
-	// See NonPackedMipMapEntry::load_frame_surface: the sheet may decode into
-	// any format, and we read the frame's raw bytes below.
-	if (sheet->format->format != SDL_PIXELFORMAT_RGBA8888) {
-		SDL_Surface* converted = SDL_ConvertSurfaceFormat(sheet, SDL_PIXELFORMAT_RGBA8888, 0);
+	// See NonPackedMipMapEntry::load_frame_surface, including why the byte-order
+	// alias RGBA32 is the required format rather than RGBA8888.
+	if (sheet->format->format != SDL_PIXELFORMAT_RGBA32) {
+		SDL_Surface* converted = SDL_ConvertSurfaceFormat(sheet, SDL_PIXELFORMAT_RGBA32, 0);
 		SDL_FreeSurface(sheet);
 		if (converted == nullptr) {
-			throw Widelands::GameDataError("Could not convert sprite sheet %s to RGBA8888",
+			throw Widelands::GameDataError("Could not convert sprite sheet %s to RGBA32",
 			                               sheet_file.c_str());
 		}
 		sheet = converted;
@@ -185,6 +185,13 @@ SDL_Surface* SpriteSheetAnimation::SpriteSheetMipMapEntry::load_frame_surface(ui
 		throw Widelands::GameDataError(
 		   "Could not create surface for frame %u of %s", idx, sheet_file.c_str());
 	}
+	/* We want a copy, not a composite. The default blend mode for a surface with
+	   an alpha channel is SDL_BLENDMODE_BLEND, which would premultiply the RGB
+	   channels by alpha - and derive_contact_decal() classifies baked shadow by
+	   RGB darkness, so premultiplied edges would read as shadow. Same guard as
+	   the equivalent blit in Texture::Texture(SDL_Surface*). */
+	SDL_SetSurfaceBlendMode(sheet, SDL_BLENDMODE_NONE);
+	SDL_SetSurfaceBlendMode(frame, SDL_BLENDMODE_NONE);
 	const SDL_Rect source{static_cast<int>(idx % columns) * frame_w,
 	                      static_cast<int>(idx / columns) * frame_h, frame_w, frame_h};
 	if (SDL_BlitSurface(sheet, &source, frame, nullptr) != 0) {

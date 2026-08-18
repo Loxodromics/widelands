@@ -161,17 +161,22 @@ SDL_Surface* NonPackedAnimation::NonPackedMipMapEntry::load_frame_surface(uint32
 		throw Widelands::GameDataError(
 		   "Could not load animation frame %s", image_files.at(idx).c_str());
 	}
-	// SDL_image decodes into whatever matches the file best (palettised, 24-bit,
-	// BGR are all possible). We read raw bytes below, so normalise to RGBA8888.
-	// The format check is stricter than the BitsPerPixel != 32 guard in
-	// terrain_description.cc because SDL_GetRGB there copes with any format,
-	// while we touch ->pixels directly.
-	if (surface->format->format != SDL_PIXELFORMAT_RGBA8888) {
-		SDL_Surface* converted = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA8888, 0);
+	/* SDL_image decodes into whatever matches the file best (palettised, 24-bit,
+	   BGR are all possible), and derive_contact_decal() reads ->pixels directly,
+	   so normalise the byte order. It must be RGBA32, not RGBA8888: the latter
+	   names the order of the packed 32-bit value, which on a little-endian host
+	   puts alpha in byte 0 and red in byte 3 - the reverse of what a byte-wise
+	   reader expects. RGBA32 is the alias that is byte-order RGBA on either
+	   endianness, and is the same format empty_sdl_surface() produces.
+	   The check is stricter than the BitsPerPixel != 32 guard in
+	   terrain_description.cc, which can afford SDL_GetRGBA and so does not care
+	   about byte order. */
+	if (surface->format->format != SDL_PIXELFORMAT_RGBA32) {
+		SDL_Surface* converted = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
 		SDL_FreeSurface(surface);
 		if (converted == nullptr) {
 			throw Widelands::GameDataError(
-			   "Could not convert animation frame %s to RGBA8888", image_files.at(idx).c_str());
+			   "Could not convert animation frame %s to RGBA32", image_files.at(idx).c_str());
 		}
 		surface = converted;
 	}

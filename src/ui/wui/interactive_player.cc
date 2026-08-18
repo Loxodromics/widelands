@@ -124,9 +124,8 @@ void draw_immovable_for_formerly_visible_field(const FieldsToDraw::Field& field,
 		return;
 	}
 
-	// The construction site's decal reuses the idle animation's: Immovable::anim_
-	// and Building::anim_ have no public getter, and the base does not move
-	// between them, so this is a known imprecision, not a defect.
+	// A remembered field has no live object, only the descr the player last saw,
+	// so the decal comes from the descr's main animation by construction here.
 	draw_contact_shadow(*player_field.map_object_descr, field, scale, dst);
 
 	if (upcast(const Widelands::BuildingDescr, building, player_field.map_object_descr)) {
@@ -438,6 +437,10 @@ void InteractivePlayer::draw_immovables_for_visible_field(
 		return;
 	}
 	if (imm->get_positions(egbase).front() == field.fcoords) {
+		// Keyed on the descr's main animation, so a construction site or a
+		// working building reuses the idle animation's decal: Immovable::anim_
+		// and Building::anim_ have no public getter, and the base does not move
+		// between those animations. A known imprecision, not a defect.
 		draw_contact_shadow(imm->descr(), field, scale, dst);
 		imm->draw(egbase.get_gametime(), filter_info_to_draw(info_to_draw, imm, player),
 		          field.rendertarget_pixel, field.fcoords, scale, dst);
