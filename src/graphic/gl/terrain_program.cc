@@ -19,6 +19,7 @@
 #include "graphic/gl/terrain_program.h"
 
 #include <atomic>
+#include <cmath>
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
@@ -66,6 +67,8 @@ TerrainProgram::TerrainProgram() {
 	u_bump_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_bump_amplitude");
 	u_tint_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_tint_amplitude");
 	u_warp_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_warp_amplitude");
+	u_time_ = glGetUniformLocation(gl_program_.object(), "u_time");
+	u_cloud_amplitude_ = glGetUniformLocation(gl_program_.object(), "u_cloud_amplitude");
 	u_sun_direction_ = glGetUniformLocation(gl_program_.object(), "u_sun_direction");
 	u_sun_color_ = glGetUniformLocation(gl_program_.object(), "u_sun_color");
 	u_ambient_color_ = glGetUniformLocation(gl_program_.object(), "u_ambient_color");
@@ -88,7 +91,8 @@ TerrainProgram::TerrainProgram() {
 void TerrainProgram::gl_draw(const BlitData& blit_data,
                              const float texture_w,
                              const float texture_h,
-                             const float z_value) {
+                             const float z_value,
+                             const float time) {
 	if (Rhi::has_device()) {
 		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
@@ -99,6 +103,8 @@ void TerrainProgram::gl_draw(const BlitData& blit_data,
 		state.warp_amplitude = kWarpAmplitude * noise_strength_;
 		state.texture_w = texture_w;
 		state.texture_h = texture_h;
+		state.time = time;
+		state.cloud_amplitude = kCloudShadowAmplitude;
 		state.sun_x = kSunDirection.x;
 		state.sun_y = kSunDirection.y;
 		state.sun_z = kSunDirection.z;
@@ -138,6 +144,8 @@ void TerrainProgram::gl_draw(const BlitData& blit_data,
 	glUniform1f(u_bump_amplitude_, kBumpAmplitude * noise_strength_);
 	glUniform1f(u_tint_amplitude_, kTintAmplitude * noise_strength_);
 	glUniform1f(u_warp_amplitude_, kWarpAmplitude * noise_strength_);
+	glUniform1f(u_time_, time);
+	glUniform1f(u_cloud_amplitude_, kCloudShadowAmplitude);
 	glUniform3f(u_sun_direction_, kSunDirection.x, kSunDirection.y, kSunDirection.z);
 	glUniform3f(u_sun_color_, kSunColor.x, kSunColor.y, kSunColor.z);
 	glUniform3f(u_ambient_color_, kAmbientColor.x, kAmbientColor.y, kAmbientColor.z);
@@ -213,5 +221,9 @@ void TerrainProgram::draw(
 
 	const BlitData& blit_data = terrains.get(0).get_texture(0).blit_data();
 	const Rectf texture_coordinates = to_gl_texture(blit_data);
-	gl_draw(blit_data, texture_coordinates.w, texture_coordinates.h, z_value);
+	// Cloud shadows animate on the deterministic simulation clock; the wrap
+	// bounds u_time's magnitude on long-running games (kCloudTimeWrapPeriod,
+	// terrain_noise.h).
+	const float time = std::fmod(static_cast<float>(gametime) / 1000.0f, kCloudTimeWrapPeriod);
+	gl_draw(blit_data, texture_coordinates.w, texture_coordinates.h, z_value, time);
 }

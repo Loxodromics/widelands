@@ -15,6 +15,8 @@ layout(std140) uniform per_program_state {
 	float u_tint_amplitude;
 	float u_warp_amplitude;
 	vec2 u_texture_dimensions;
+	float u_time;
+	float u_cloud_amplitude;
 	vec3 u_sun_direction;
 	vec3 u_sun_color;
 	vec3 u_ambient_color;

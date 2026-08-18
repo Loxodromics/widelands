@@ -61,7 +61,8 @@ private:
 	};
 	static_assert(sizeof(PerVertexData) == 40, "Wrong padding.");
 
-	void gl_draw(const BlitData& blit_data, float texture_w, float texture_h, float z_value);
+	void
+	gl_draw(const BlitData& blit_data, float texture_w, float texture_h, float z_value, float time);
 
 	// Adds a vertex to the end of vertices with data from 'field' and 'texture_coordinates'.
 	void add_vertex(const FieldsToDraw::Field& field, const Vector2f& texture_offset);
@@ -87,6 +88,8 @@ private:
 	GLint u_bump_amplitude_;
 	GLint u_tint_amplitude_;
 	GLint u_warp_amplitude_;
+	GLint u_time_;
+	GLint u_cloud_amplitude_;
 	GLint u_sun_direction_;
 	GLint u_sun_color_;
 	GLint u_ambient_color_;

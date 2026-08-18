@@ -90,6 +90,15 @@ const float kTintWeightSum = 1.35;
 // note above octave 3 if it is.
 const float kWarpFrequency = 8.5;
 
+// Cloud shadow (terrain_cloud_shadow(), terrain_variation.glsl): one snoise octave at regional
+// scale, scrolled by u_time (kCloudVelocity), darkening the terrain where it is positive. The
+// frequency is an order of magnitude below kOctave1Frequency, so the shadow reads as weather
+// rather than as surface grain. kCloudOffset decorrelates it from the bump/tint/dither fields.
+// STARTING POINT, pending tuning -- see Claude/VISUAL_FIDELITY_RANKED.md §4.8.
+const float kCloudFrequency = 0.03;
+const vec2 kCloudVelocity = vec2(0.008, 0.004);  // cycles/second, frequency-domain drift
+const vec2 kCloudOffset = vec2(97.3, -61.9);     // arbitrary; must land far from the other fields
+
 // Chosen by capture over two ladders. Hue swing scales linearly; as mean
 // |d(R-B)| in 8-bit codes, land / water: 1.5 -> 1.9/3.8, 3.0 -> 3.7/7.6,
 // 5.0 -> 6.2/12.7, 8.0 -> 9.8/20.2. Below about 1 code is invisible, so 1.5

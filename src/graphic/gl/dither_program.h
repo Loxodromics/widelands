@@ -118,7 +118,8 @@ private:
 	};
 
 	// Call through to GL.
-	void gl_draw(const BlitData& blit_data, float texture_w, float texture_h, float z_value);
+	void
+	gl_draw(const BlitData& blit_data, float texture_w, float texture_h, float z_value, float time);
 
 	// The program used for drawing the terrain.
 	Gl::Program gl_program_;
@@ -141,6 +142,8 @@ private:
 	GLint u_bump_amplitude_;
 	GLint u_tint_amplitude_;
 	GLint u_warp_amplitude_;
+	GLint u_time_;
+	GLint u_cloud_amplitude_;
 	GLint u_sun_direction_;
 	GLint u_sun_color_;
 	GLint u_ambient_color_;

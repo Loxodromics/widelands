@@ -246,3 +246,17 @@ vec3 terrain_variation(vec2 world_pos) {
 	float tint = terrain_tint_field(world_pos);
 	return mix(vec3(1.0), kWarmTint, u_tint_amplitude * tint);
 }
+
+// Cloud shadow (Claude/VISUAL_FIDELITY_RANKED.md §4.8): one snoise sample at
+// regional scale, scrolled by u_time (gametime in seconds, wrapped -- see
+// kCloudTimeWrapPeriod in terrain_noise.h) and darkening the terrain where it
+// is positive. max(n, 0.0) means the shadow only ever subtracts light, never
+// brightens -- physically what a cloud does -- so roughly half the map is
+// unshadowed at any instant. The frequencies and drift live in
+// terrain_noise_params.glsl; u_cloud_amplitude is a uniform from C++ and, like
+// u_time, is deliberately not scaled by the terrain noise strength option (see
+// terrain_noise.h).
+float terrain_cloud_shadow(vec2 world_pos) {
+	float n = snoise(world_pos * kCloudFrequency + u_time * kCloudVelocity + kCloudOffset);
+	return 1.0 - u_cloud_amplitude * max(n, 0.0);
+}

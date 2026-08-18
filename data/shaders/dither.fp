@@ -8,6 +8,8 @@ layout(std140) uniform per_program_state {
 	float u_tint_amplitude;
 	float u_warp_amplitude;
 	vec2 u_texture_dimensions;
+	float u_time;
+	float u_cloud_amplitude;
 	vec3 u_sun_direction;
 	vec3 u_sun_color;
 	vec3 u_ambient_color;
@@ -86,6 +88,7 @@ void main() {
 
 	vec3 normal = terrain_bump_normal(var_normal, var_texture_position);
 	frag_color = vec4(
-	   clr.rgb * var_brightness * terrain_light(normal) * terrain_variation(var_texture_position),
+	   clr.rgb * var_brightness * terrain_light(normal) * terrain_variation(var_texture_position) *
+	         terrain_cloud_shadow(var_texture_position),
 	   mix(coverage, dissolved, grain_lod));
 }

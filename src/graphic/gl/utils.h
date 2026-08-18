@@ -220,7 +220,11 @@ private:
 // std140-aligned to 16 bytes, so each needs one padding float of its own) --
 // binding a shorter buffer to a longer block leaves shader results undefined
 // per spec, so Program::bind_uniform_block() asserts sizeof(*this) against the
-// block's reported GL_UNIFORM_BLOCK_DATA_SIZE.
+// block's reported GL_UNIFORM_BLOCK_DATA_SIZE. The terrain/dither programs
+// repurpose those two padding floats as u_time/u_cloud_amplitude (cloud
+// shadows, Claude/VISUAL_FIDELITY_RANKED.md §4.8), so the block size is
+// unchanged and the road/grid/workarea programs' z_value-only blocks
+// (kZValueOnlyBlockSize) still bind correctly.
 //
 // sun_direction/sun_color/ambient_color feed the render-side terrain lighting
 // (V2, Claude/VISUAL_FIDELITY_RANKED.md §4.2); their values are derived and
@@ -232,8 +236,8 @@ struct PerProgramState {
 	float warp_amplitude;   // offset 12 (terrain noise; terrain/dither only)
 	float texture_w;        // offset 16 (vec2; terrain/dither only)
 	float texture_h;        // offset 20
-	float padding_0;        // offset 24 (std140 rounds the block up to 32)
-	float padding_1;        // offset 28
+	float time;             // offset 24 (cloud shadows; terrain/dither only; was padding_0)
+	float cloud_amplitude;  // offset 28 (cloud shadows; terrain/dither only; was padding_1)
 	float sun_x;            // offset 32 (vec3; terrain/dither only)
 	float sun_y;            // offset 36
 	float sun_z;            // offset 40

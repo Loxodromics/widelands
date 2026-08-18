@@ -56,9 +56,18 @@
 // expected). Settled on r = 0.06 -- noticeable surface texture without
 // reading as loud -- about half the retired-channel-matching point.
 constexpr float kBumpAmplitude = 0.0134f;  // peak tilt, RMS 0.06 -- see above
-constexpr float kTintAmplitude = 3.0f;    // peak warm/cool swing per unit tint field
-constexpr float kWarpAmplitude = 0.0f;    // peak texture displacement in fields; disabled
+constexpr float kTintAmplitude = 3.0f;     // peak warm/cool swing per unit tint field
+constexpr float kWarpAmplitude = 0.0f;     // peak texture displacement in fields; disabled
                                            // 2026-08-16, was smearing the texture at the
                                            // higher noise frequencies - see Claude/TERRAIN_NOISE.md
+// Cloud shadow (Claude/VISUAL_FIDELITY_RANKED.md §4.8): fractional darkening at the peaks of a
+// single regional-scale snoise octave scrolled by gametime (terrain_cloud_shadow(),
+// terrain_variation.glsl). Deliberately NOT scaled by noise_strength_: unlike bump/tint/warp it is
+// atmospheric motion, not surface texture, and stays on at its own amplitude even with the terrain
+// noise option at 0. STARTING POINT, pending tuning.
+constexpr float kCloudShadowAmplitude = 0.12f;
+// Seconds; wraps u_time so its magnitude stays well inside float32 range on long-running games --
+// the same conditioning dither_grain()'s cell wrap does for its hash input.
+constexpr float kCloudTimeWrapPeriod = 100000.0f;
 
 #endif  // end of include guard: WL_GRAPHIC_GL_TERRAIN_NOISE_H
