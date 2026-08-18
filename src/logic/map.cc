@@ -1488,6 +1488,26 @@ void Map::recalc_nodecaps_pass1(const EditorGameBase& egbase, const FCoords& f) 
 	f.field->max_caps = calc_nodecaps_pass1(egbase, f, false);
 }
 
+bool Map::is_terrain_edge(const EditorGameBase& egbase, const FCoords& f) const {
+	const Descriptions& descriptions = egbase.descriptions();
+
+	const FCoords tr = tr_n(f);
+	const FCoords tl = tl_n(f);
+	const FCoords l = l_n(f);
+
+	const DescriptionIndex triangles[6] = {
+	   tr.field->terrain_d(), tl.field->terrain_r(), tl.field->terrain_d(),
+	   l.field->terrain_r(),  f.field->terrain_d(),  f.field->terrain_r(),
+	};
+	for (const DescriptionIndex idx : triangles) {
+		if ((descriptions.get_terrain_descr(idx)->get_is() & TerrainDescription::Is::kUnwalkable) !=
+		    0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 NodeCaps
 Map::calc_nodecaps_pass1(const EditorGameBase& egbase, const FCoords& f, bool consider_mobs) const {
 	uint8_t caps = CAPS_NONE;

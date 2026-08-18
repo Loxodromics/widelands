@@ -397,6 +397,11 @@ public:
 	/// \returns the maximum theoretical possible nodecaps (no blocking bobs, immovables etc.)
 	[[nodiscard]] NodeCaps get_max_nodecaps(const EditorGameBase&, const FCoords&) const;
 
+	/// Returns true if the given node touches a triangle whose terrain is unwalkable-contributing
+	/// (water or lava/unreachable) - a shoreline or lava-edge node. Used to keep non-swimming
+	/// critters off the water's edge; see Claude/CRITTER_TERRAIN_AVOIDANCE.md.
+	[[nodiscard]] bool is_terrain_edge(const EditorGameBase&, const FCoords&) const;
+
 	[[nodiscard]] BaseImmovable* get_immovable(const Coords&) const;
 	uint32_t find_bobs(const EditorGameBase&,
 	                   Area<FCoords>,

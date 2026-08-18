@@ -287,8 +287,16 @@ void Critter::roam_update(Game& game, State& state) {
 		assert(roaming_dist >= 2);
 		// the further we want to go, the harder we try to go somewhere
 		for (; roaming_dist > 0; --roaming_dist) {
-			if (start_task_movepath(game, game.random_location(get_position(), roaming_dist),
-			                        roaming_dist, descr().get_walk_anims())) {
+			const Coords candidate = game.random_location(get_position(), roaming_dist);
+
+			// Keep non-swimmers off the shoreline/lava edge; see
+			// Claude/CRITTER_TERRAIN_AVOIDANCE.md (Tier 2 biome preference is future work).
+			if (!descr().is_swimming() &&
+			    game.map().is_terrain_edge(game, game.map().get_fcoords(candidate))) {
+				continue;
+			}
+
+			if (start_task_movepath(game, candidate, roaming_dist, descr().get_walk_anims())) {
 				return;
 			}
 		}
