@@ -119,6 +119,7 @@ void InteractiveSpectator::draw_map_view(MapView* given_map_view, RenderTarget* 
 				MutexLock m(MutexLock::ID::kObjects);
 				Widelands::BaseImmovable* const imm = field.fcoords.field->get_immovable();
 				if (imm != nullptr && imm->get_positions(the_game).front() == field.fcoords) {
+					draw_contact_shadow(imm->descr(), field, scale, dst);
 					imm->draw(gametime, info_to_draw, field.rendertarget_pixel, field.fcoords, scale, dst);
 					if (upcast(const Widelands::Immovable, i, imm)) {
 						if (!i->get_marked_for_removal().empty()) {

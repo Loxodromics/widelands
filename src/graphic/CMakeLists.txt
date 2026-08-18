@@ -229,6 +229,7 @@ wl_library(graphic_game_renderer
     game_renderer.h
   DEPENDS
     graphic
+    graphic_animation
     graphic_fields_to_draw
     graphic_render_queue
     graphic_surface

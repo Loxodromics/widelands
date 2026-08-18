@@ -21,10 +21,14 @@
 #include <cassert>
 #include <memory>
 
+#include <SDL_pixels.h>
+#include <SDL_surface.h>
+
 #include "base/log.h"
 #include "base/macros.h"
 #include "graphic/image.h"
 #include "graphic/image_cache.h"
+#include "graphic/image_io.h"
 #include "graphic/playercolor.h"
 #include "io/filesystem/filesystem.h"
 #include "io/filesystem/layered_filesystem.h"
@@ -148,6 +152,30 @@ int NonPackedAnimation::NonPackedMipMapEntry::width() const {
 }
 int NonPackedAnimation::NonPackedMipMapEntry::height() const {
 	return frames.at(0)->height();
+}
+
+SDL_Surface* NonPackedAnimation::NonPackedMipMapEntry::load_frame_surface(uint32_t idx) const {
+	assert(idx < image_files.size());
+	SDL_Surface* surface = load_image_as_sdl_surface(image_files.at(idx));
+	if (surface == nullptr) {
+		throw Widelands::GameDataError(
+		   "Could not load animation frame %s", image_files.at(idx).c_str());
+	}
+	// SDL_image decodes into whatever matches the file best (palettised, 24-bit,
+	// BGR are all possible). We read raw bytes below, so normalise to RGBA8888.
+	// The format check is stricter than the BitsPerPixel != 32 guard in
+	// terrain_description.cc because SDL_GetRGB there copes with any format,
+	// while we touch ->pixels directly.
+	if (surface->format->format != SDL_PIXELFORMAT_RGBA8888) {
+		SDL_Surface* converted = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA8888, 0);
+		SDL_FreeSurface(surface);
+		if (converted == nullptr) {
+			throw Widelands::GameDataError(
+			   "Could not convert animation frame %s to RGBA8888", image_files.at(idx).c_str());
+		}
+		surface = converted;
+	}
+	return surface;
 }
 
 /*

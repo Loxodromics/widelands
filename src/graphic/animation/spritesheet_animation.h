@@ -63,6 +63,8 @@ private:
 		[[nodiscard]] int width() const override;
 		[[nodiscard]] int height() const override;
 
+		[[nodiscard]] SDL_Surface* load_frame_surface(uint32_t idx) const override;
+
 		/// Loaded sprite sheet for all frames
 		const Image* sheet{nullptr};
 

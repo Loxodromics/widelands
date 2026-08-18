@@ -36,6 +36,7 @@
 #include "editor/tools/set_terrain_tool.h"
 #include "editor/tools/tool_conf.h"
 #include "graphic/color_palette.h"
+#include "graphic/game_renderer.h"
 #include "graphic/gl/terrain_lighting.h"
 #include "graphic/mouse_cursor.h"
 #include "graphic/playercolor.h"
@@ -788,6 +789,7 @@ void EditorInteractive::draw(RenderTarget& dst) {
 			if (get_display_flag(dfShowImmovables)) {
 				Widelands::BaseImmovable* const imm = field.fcoords.field->get_immovable();
 				if (imm != nullptr && imm->get_positions(ebase).front() == field.fcoords) {
+					draw_contact_shadow(imm->descr(), field, scale, &dst);
 					imm->draw(gametime, InfoToDraw::kShowBuildings, field.rendertarget_pixel,
 					          field.fcoords, scale, &dst);
 				}

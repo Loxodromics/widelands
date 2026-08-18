@@ -18,6 +18,11 @@
 
 #include "graphic/game_renderer.h"
 
+#include <cmath>
+
+#include "graphic/animation/animation.h"
+#include "graphic/animation/animation_manager.h"
+#include "graphic/animation/contact_decal.h"
 #include "graphic/render_queue.h"
 #include "graphic/rendertarget.h"
 #include "graphic/surface.h"
@@ -103,4 +108,36 @@ void draw_terrain(uint32_t gametime,
 	// Enqueue the drawing of the road layer.
 	i.program_id = RenderQueue::Program::kTerrainRoad;
 	RenderQueue::instance().enqueue(i);
+}
+
+void draw_contact_shadow(const Widelands::MapObjectDescr& descr,
+                         const FieldsToDraw::Field& field,
+                         const float scale,
+                         RenderTarget* dst) {
+	// The off-switch: at strength 0 the feature must not touch the render at
+	// all, not even enqueue.
+	if (kContactShadowStrength <= 0.f) {
+		return;
+	}
+	const uint32_t animation_id = descr.main_animation();
+	if (animation_id == 0) {
+		return;
+	}
+	const Animation& animation = g_animation_manager->get_animation(animation_id);
+	const Image* decal = animation.contact_decal();
+	if (decal == nullptr) {
+		return;
+	}
+	// The decal's hotspot marks the node, exactly like the animation's own
+	// hotspot does for the sprite blit below.
+	const Vector2i& hotspot = animation.contact_decal_hotspot();
+	const Rectf destination(field.rendertarget_pixel.x - hotspot.x * scale,
+	                        field.rendertarget_pixel.y - hotspot.y * scale, decal->width() * scale,
+	                        decal->height() * scale);
+	// Monochrome blit of a white-RGB decal with a black blend: the result is
+	// dst * (1 - blend.a * decal.a), a genuine multiply that scales whatever
+	// the terrain lighting put underneath.
+	dst->blitrect_scale_monochrome(
+	   destination, decal, decal->rect(),
+	   RGBAColor(0, 0, 0, static_cast<uint8_t>(std::lround(255.f * kContactShadowStrength))));
 }

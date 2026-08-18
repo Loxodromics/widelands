@@ -32,6 +32,8 @@
 #include "scripting/lua_table.h"
 #include "sound/constants.h"
 
+struct SDL_Surface;
+
 /// The default animation speed
 constexpr int kFrameLength = 250;
 
@@ -120,6 +122,15 @@ public:
 	/// The frame to be shown in menus etc.
 	[[nodiscard]] int representative_frame() const;
 
+	/// The contact-shadow decal derived from this animation's own alpha
+	/// channel (V6, Claude/VISUAL_FIDELITY_RANKED.md §4.6), or nullptr when
+	/// the sprite has no usable ground contact. Computed lazily on first call;
+	/// a rejected animation is analysed once.
+	[[nodiscard]] const Image* contact_decal() const;
+	/// The point inside the decal that aligns with the node's hotspot. Only
+	/// meaningful when contact_decal() is non-null.
+	[[nodiscard]] const Vector2i& contact_decal_hotspot() const;
+
 protected:
 	/// Animation data for a particular scale
 	struct MipMapEntry {
@@ -146,6 +157,12 @@ protected:
 		[[nodiscard]] virtual int width() const = 0;
 		/// The height of this mipmap entry's textures
 		[[nodiscard]] virtual int height() const = 0;
+
+		/// Decode frame 'idx' to a CPU surface in RGBA8888. Caller must
+		/// SDL_FreeSurface() the result. Never touches the GPU, so this is
+		/// usable off the initializer thread (the contact-shadow derivation
+		/// does exactly that).
+		[[nodiscard]] virtual SDL_Surface* load_frame_surface(uint32_t idx) const = 0;
 
 		[[nodiscard]] virtual std::vector<std::unique_ptr<const Texture>>
 		frame_textures(bool return_playercolor_masks) const = 0;
@@ -209,6 +226,14 @@ private:
 	int32_t sound_priority_;
 	/// Whether the sound can be played by different map objects at the same time
 	bool sound_allow_multiple_{false};
+
+	/// Lazily computed contact shadow, see contact_decal(). Not put in
+	/// g_image_cache: ImageCache::fill_with_texture_atlases() clears images_ on
+	/// every atlas rebuild (add-on changes), which would silently drop
+	/// synthetic keys.
+	mutable std::unique_ptr<const Image> contact_decal_;
+	mutable Vector2i contact_decal_hotspot_ = Vector2i::zero();
+	mutable bool contact_decal_computed_{false};
 };
 
 #endif  // end of include guard: WL_GRAPHIC_ANIMATION_ANIMATION_H

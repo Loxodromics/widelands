@@ -4,20 +4,26 @@ wl_library(graphic_animation
     animation.h
     animation_manager.cc
     animation_manager.h
+    contact_decal.cc
+    contact_decal.h
     diranimations.h
     diranimations.cc
     nonpacked_animation.cc
     nonpacked_animation.h
     spritesheet_animation.cc
     spritesheet_animation.h
+  USES_SDL2
   DEPENDS
     base
+    base_exceptions
     base_geometry
     base_macros
     base_math
     graphic
     graphic_color
+    graphic_image_io
     graphic_playercolor
+    graphic_sdl_utils
     graphic_surface
     io_filesystem
     logic_constants
@@ -27,3 +33,5 @@ wl_library(graphic_animation
     sound
     sound_constants
 )
+
+add_subdirectory(test)

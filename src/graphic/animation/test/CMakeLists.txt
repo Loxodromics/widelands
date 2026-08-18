@@ -1,0 +1,9 @@
+wl_test(test_graphic_animation
+  SRCS
+    test_contact_decal.cc
+    test_graphic_animation_main.cc
+  DEPENDS
+    base_geometry
+    base_test
+    graphic_animation
+)

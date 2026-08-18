@@ -65,6 +65,8 @@ private:
 		[[nodiscard]] int width() const override;
 		[[nodiscard]] int height() const override;
 
+		[[nodiscard]] SDL_Surface* load_frame_surface(uint32_t idx) const override;
+
 		[[nodiscard]] std::vector<std::unique_ptr<const Texture>>
 		frame_textures(bool return_playercolor_masks) const override;
 

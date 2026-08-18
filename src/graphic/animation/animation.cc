@@ -20,9 +20,18 @@
 
 #include <cassert>
 #include <memory>
+#include <optional>
+
+#include <SDL_pixels.h>
+#include <SDL_surface.h>
 
 #include "base/math.h"
+#include "base/multithreading.h"
 #include "base/vector.h"
+#include "base/wexception.h"
+#include "graphic/animation/contact_decal.h"
+#include "graphic/sdl_utils.h"
+#include "graphic/texture.h"
 #include "io/filesystem/layered_filesystem.h"
 #include "logic/game_data_error.h"
 #include "scripting/lua_table.h"
@@ -195,6 +204,50 @@ float Animation::find_best_scale(float scale) const {
 
 int Animation::representative_frame() const {
 	return representative_frame_;
+}
+
+const Image* Animation::contact_decal() const {
+	if (!contact_decal_computed_) {
+		contact_decal_computed_ = true;
+		const MipMapEntry& mipmap = mipmap_entry(1.0f);
+		SDL_Surface* frame = mipmap.load_frame_surface(representative_frame_);
+		const std::optional<ContactDecal> decal =
+		   derive_contact_decal(static_cast<const uint8_t*>(frame->pixels), frame->w, frame->h,
+		                        hotspot_);
+		SDL_FreeSurface(frame);
+		if (!decal.has_value()) {
+			return nullptr;
+		}
+		contact_decal_hotspot_ = decal->hotspot;
+
+		// Only the GL upload must run on the initializer thread (Texture::init
+		// asserts it); the analysis above is plain CPU work and stays here --
+		// the same split AnimationManager::get_representative_image uses. The
+		// decal texture is white RGB with the derived alpha: the monochrome
+		// blit multiplies it by a black blend colour, which is exactly the
+		// multiply the ground lighting should see.
+		SDL_Surface* surface = empty_sdl_surface(decal->width, decal->height);
+		if (surface == nullptr) {
+			throw wexception("Could not create surface for the contact decal");
+		}
+		uint8_t* dst = static_cast<uint8_t*>(surface->pixels);
+		for (int y = 0; y < decal->height; ++y) {
+			uint8_t* const row = dst + y * surface->pitch;
+			for (int x = 0; x < decal->width; ++x) {
+				row[4 * x + 0] = 0xff;
+				row[4 * x + 1] = 0xff;
+				row[4 * x + 2] = 0xff;
+				row[4 * x + 3] = decal->alpha[y * decal->width + x];
+			}
+		}
+		NoteThreadSafeFunction::instantiate(
+		   [this, surface]() { contact_decal_.reset(new Texture(surface)); }, true);
+	}
+	return contact_decal_.get();
+}
+
+const Vector2i& Animation::contact_decal_hotspot() const {
+	return contact_decal_hotspot_;
 }
 
 std::vector<std::unique_ptr<const Texture>>

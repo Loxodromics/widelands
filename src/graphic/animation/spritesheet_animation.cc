@@ -22,8 +22,13 @@
 #include <cstddef>
 #include <memory>
 
+#include <SDL_rect.h>
+#include <SDL_surface.h>
+
 #include "graphic/image.h"
 #include "graphic/image_cache.h"
+#include "graphic/image_io.h"
+#include "graphic/sdl_utils.h"
 #include "io/filesystem/filesystem.h"
 #include "io/filesystem/layered_filesystem.h"
 #include "logic/game_data_error.h"
@@ -153,6 +158,43 @@ int SpriteSheetAnimation::SpriteSheetMipMapEntry::width() const {
 }
 int SpriteSheetAnimation::SpriteSheetMipMapEntry::height() const {
 	return h;
+}
+
+SDL_Surface* SpriteSheetAnimation::SpriteSheetMipMapEntry::load_frame_surface(uint32_t idx) const {
+	assert(static_cast<int>(idx) < rows * columns);
+	SDL_Surface* sheet = load_image_as_sdl_surface(sheet_file);
+	if (sheet == nullptr) {
+		throw Widelands::GameDataError("Could not load sprite sheet %s", sheet_file.c_str());
+	}
+	// See NonPackedMipMapEntry::load_frame_surface: the sheet may decode into
+	// any format, and we read the frame's raw bytes below.
+	if (sheet->format->format != SDL_PIXELFORMAT_RGBA8888) {
+		SDL_Surface* converted = SDL_ConvertSurfaceFormat(sheet, SDL_PIXELFORMAT_RGBA8888, 0);
+		SDL_FreeSurface(sheet);
+		if (converted == nullptr) {
+			throw Widelands::GameDataError("Could not convert sprite sheet %s to RGBA8888",
+			                               sheet_file.c_str());
+		}
+		sheet = converted;
+	}
+	const int frame_w = sheet->w / columns;
+	const int frame_h = sheet->h / rows;
+	SDL_Surface* frame = empty_sdl_surface(frame_w, frame_h);
+	if (frame == nullptr) {
+		SDL_FreeSurface(sheet);
+		throw Widelands::GameDataError(
+		   "Could not create surface for frame %u of %s", idx, sheet_file.c_str());
+	}
+	const SDL_Rect source{static_cast<int>(idx % columns) * frame_w,
+	                      static_cast<int>(idx / columns) * frame_h, frame_w, frame_h};
+	if (SDL_BlitSurface(sheet, &source, frame, nullptr) != 0) {
+		SDL_FreeSurface(sheet);
+		SDL_FreeSurface(frame);
+		throw Widelands::GameDataError(
+		   "Could not extract frame %u from sprite sheet %s", idx, sheet_file.c_str());
+	}
+	SDL_FreeSurface(sheet);
+	return frame;
 }
 
 /*

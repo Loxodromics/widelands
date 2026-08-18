@@ -58,6 +58,7 @@ wl_library(ui_editor
     graphic
     graphic_color_palette
     graphic_fonthandler
+    graphic_game_renderer
     graphic_mouse_cursor
     graphic_playercolor
     graphic_surface

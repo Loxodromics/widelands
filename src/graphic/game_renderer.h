@@ -40,4 +40,12 @@ void draw_border_markers(const FieldsToDraw::Field& field,
                          const FieldsToDraw& fields_to_draw,
                          RenderTarget* dst);
 
+// Draw the contact shadow for 'descr' on 'field', before the object's own
+// sprite (V6, Claude/VISUAL_FIDELITY_RANKED.md §4.6). The caller must have
+// already skipped 'field.obscured_by_slope'.
+void draw_contact_shadow(const Widelands::MapObjectDescr& descr,
+                         const FieldsToDraw::Field& field,
+                         float scale,
+                         RenderTarget* dst);
+
 #endif  // end of include guard: WL_GRAPHIC_GAME_RENDERER_H
