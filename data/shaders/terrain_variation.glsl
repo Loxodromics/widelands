@@ -256,6 +256,14 @@ vec3 terrain_variation(vec2 world_pos) {
 // terrain_noise_params.glsl; u_cloud_amplitude is a uniform from C++ and, like
 // u_time, is deliberately not scaled by the terrain noise strength option (see
 // terrain_noise.h).
+//
+// Evaluated in the vertex shader (terrain.vp/dither.vp) and interpolated to
+// the fragment stage as var_cloud_shadow, not recomputed per fragment. It
+// depends only on var_texture_position (constant per field) and u_time
+// (constant per frame), so it is constant across each field; at kCloudFrequency
+// it varies by ~2-4% of its range across one triangle, so linear interpolation
+// is visually exact. The max(n, 0.0) clamp applies before interpolation; the
+// resulting sub-pixel error at the clamp contour is invisible at this scale.
 float terrain_cloud_shadow(vec2 world_pos) {
 	float n = snoise(world_pos * kCloudFrequency + u_time * kCloudVelocity + kCloudOffset);
 	return 1.0 - u_cloud_amplitude * max(n, 0.0);

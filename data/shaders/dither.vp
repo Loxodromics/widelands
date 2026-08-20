@@ -29,6 +29,10 @@ out float var_dither_ramp;
 out vec3 var_normal;
 out vec2 var_texture_offset;
 out vec2 var_texture_position;
+out float var_cloud_shadow;
+
+#include "terrain_noise_params.glsl"
+#include "terrain_variation.glsl"
 
 void main() {
 	var_brightness = attr_brightness;
@@ -37,5 +41,6 @@ void main() {
 	var_normal = attr_normal;
 	var_texture_offset = attr_texture_offset;
 	var_texture_position = attr_texture_position;
+	var_cloud_shadow = terrain_cloud_shadow(attr_texture_position);
 	gl_Position = vec4(attr_position, u_z_value, 1.);
 }

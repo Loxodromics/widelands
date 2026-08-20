@@ -19,6 +19,7 @@ in float var_brightness;
 in vec3 var_normal;
 in vec2 var_texture_position;
 in vec2 var_texture_offset;
+in float var_cloud_shadow;
 
 // TODO(sirver): This is a hack to make sure we are sampling inside of the
 // terrain texture. This is a common problem with OpenGL and texture atlases.
@@ -45,6 +46,6 @@ void main() {
 	vec4 clr = texture(u_terrain_texture, var_texture_offset + u_texture_dimensions * texture_fract);
 	vec3 normal = terrain_bump_normal(var_normal, var_texture_position);
 	clr.rgb *= var_brightness * terrain_light(normal) * terrain_variation(var_texture_position) *
-	           terrain_cloud_shadow(var_texture_position);
+	           var_cloud_shadow;
 	frag_color = clr;
 }
