@@ -29,6 +29,7 @@
 #include "graphic/gl/fill_rect_program.h"
 #include "graphic/gl/grid_program.h"
 #include "graphic/gl/road_program.h"
+#include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/terrain_program.h"
 #include "graphic/gl/utils.h"
 #include "graphic/gl/workarea_program.h"
@@ -174,6 +175,12 @@ RenderQueue& RenderQueue::instance() {
 void RenderQueue::set_terrain_noise_strength(const float strength) {
 	terrain_program_->set_noise_strength(strength);
 	dither_program_->set_noise_strength(strength);
+}
+
+void RenderQueue::set_cloud_shadows(const bool enabled) {
+	const float amplitude = enabled ? kCloudShadowAmplitude : 0.0f;
+	terrain_program_->set_cloud_amplitude(amplitude);
+	dither_program_->set_cloud_amplitude(amplitude);
 }
 
 void RenderQueue::enqueue(const Item& given_item) {

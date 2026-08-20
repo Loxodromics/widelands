@@ -23,6 +23,7 @@
 
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/rhi.h"
 #include "logic/map_objects/description_maintainer.h"
@@ -44,6 +45,12 @@ public:
 	// look). Backlog item 2 / WP-8 of the renderer modernization plan.
 	void set_noise_strength(float strength) {
 		noise_strength_ = strength;
+	}
+
+	// Sets the cloud-shadow amplitude multiplier (0 disables). Driven by the
+	// cloud_shadows config option (wlapplication.cc); see terrain_noise.h.
+	void set_cloud_amplitude(float amplitude) {
+		cloud_amplitude_ = amplitude;
 	}
 
 private:
@@ -104,6 +111,9 @@ private:
 
 	// The terrain-noise strength multiplier, see set_noise_strength().
 	float noise_strength_ = 1.0f;
+
+	// The cloud-shadow amplitude multiplier, see set_cloud_amplitude().
+	float cloud_amplitude_ = kCloudShadowAmplitude;
 
 	// Objects below are kept around to avoid memory allocations on each frame.
 	// They could theoretically also be recreated.

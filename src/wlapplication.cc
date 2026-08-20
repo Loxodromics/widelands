@@ -494,6 +494,11 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 	// shutdown (static destruction order).
 	RenderQueue::instance().set_terrain_noise_strength(
 	   math::clamp(get_config_int("terrain_noise_strength", 100), 0, 400) / 100.f);
+
+	// Cloud shadows are a separate switch from the terrain-noise strength:
+	// unlike bump/tint/warp they are atmospheric motion, not surface texture,
+	// and stay on even at noise strength 0 (terrain_noise.h).
+	RenderQueue::instance().set_cloud_shadows(get_config_bool("cloud_shadows", true));
 	/*
 	 * End of text rendering dependencies
 	 *****/

@@ -182,6 +182,10 @@ public:
 	// WP-8 of the renderer modernization plan.
 	void set_terrain_noise_strength(float strength);
 
+	// Enables or disables the drifting cloud shadows (cloud_shadows config
+	// option). Amplitude 0 disables them; see terrain_noise.h.
+	void set_cloud_shadows(const bool enabled);
+
 private:
 	RenderQueue();
 

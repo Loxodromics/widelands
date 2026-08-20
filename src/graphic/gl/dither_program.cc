@@ -252,7 +252,7 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
 		state.texture_w = texture_w;
 		state.texture_h = texture_h;
 		state.time = time;
-		state.cloud_amplitude = kCloudShadowAmplitude;
+		state.cloud_amplitude = cloud_amplitude_;
 		state.sun_x = kSunDirection.x;
 		state.sun_y = kSunDirection.y;
 		state.sun_z = kSunDirection.z;
@@ -293,7 +293,7 @@ void DitherProgram::gl_draw(const BlitData& blit_data,
 	glUniform1f(u_tint_amplitude_, kTintAmplitude * noise_strength_);
 	glUniform1f(u_warp_amplitude_, kWarpAmplitude * noise_strength_);
 	glUniform1f(u_time_, time);
-	glUniform1f(u_cloud_amplitude_, kCloudShadowAmplitude);
+	glUniform1f(u_cloud_amplitude_, cloud_amplitude_);
 	glUniform3f(u_sun_direction_, kSunDirection.x, kSunDirection.y, kSunDirection.z);
 	glUniform3f(u_sun_color_, kSunColor.x, kSunColor.y, kSunColor.z);
 	glUniform3f(u_ambient_color_, kAmbientColor.x, kAmbientColor.y, kAmbientColor.z);
