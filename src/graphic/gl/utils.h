@@ -45,19 +45,19 @@ enum class ShaderStage {
 
 // The GLSL dialects the in-tree preprocessor emits from one authored source.
 // WP-6 of the renderer modernization plan (Claude/RENDERER_MODERNIZATION_PLAN.md):
-// 120 for the frozen legacy 2.1 path, 330 for the core profile, 300 es for a
-// future GLES backend (emitted but not yet consumed, decision 9). The core
-// dialect is 330 rather than the plan's "150": `layout(location=N)` (decision 5)
-// was introduced in GLSL 3.30, so 150 would need GL_ARB_explicit_attrib_location.
+// 330 for the core profile, 300 es for a future GLES backend (emitted but not
+// yet consumed, decision 9). The GLSL 1.20 dialect, for the frozen legacy 2.1
+// path, was removed in WP-1 of the water rendering overhaul
+// (Claude/WATER.md). The core dialect is 330 rather than the plan's "150":
+// `layout(location=N)` (decision 5) was introduced in GLSL 3.30, so 150
+// would need GL_ARB_explicit_attrib_location.
 enum class ShaderDialect {
-	kGLSL120,
 	kGLSL330,
 	kGLSL300es,
 };
 
 // A (location, name) pair recorded from a `layout(location=N) in T name;`
-// declaration. The legacy 120 path feeds these to glBindAttribLocation before
-// linking, since GLSL 1.20 has no layout qualifier (decision 5).
+// declaration.
 struct AttributeBinding {
 	GLint location;
 	std::string name;

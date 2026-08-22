@@ -26,28 +26,6 @@ using Gl::emit_dialect;
 
 TESTSUITE_START(shader_dialect)
 
-TESTCASE(vertex_120) {
-	const std::string input = "#version 150\n"
-	                          "layout(location = 0) in vec2 attr_position;\n"
-	                          "layout(location = 1) in vec4 attr_color;\n"
-	                          "out vec2 var_tex;\n"
-	                          "void main() {\n"
-	                          "}\n";
-	const EmittedShader out =
-	   emit_dialect(input, ShaderStage::kVertex, ShaderDialect::kGLSL120, "test");
-	check_equal(out.source, "#version 120\n"
-	                        "attribute vec2 attr_position;\n"
-	                        "attribute vec4 attr_color;\n"
-	                        "varying vec2 var_tex;\n"
-	                        "void main() {\n"
-	                        "}\n");
-	check_equal(out.attributes.size(), 2u);
-	check_equal(out.attributes[0].location, 0);
-	check_equal(out.attributes[0].name, "attr_position");
-	check_equal(out.attributes[1].location, 1);
-	check_equal(out.attributes[1].name, "attr_color");
-}
-
 TESTCASE(vertex_330_passthrough) {
 	const std::string input = "#version 330\n"
 	                          "layout(location = 2) in vec3 attr_position;\n";
@@ -57,25 +35,6 @@ TESTCASE(vertex_330_passthrough) {
 	check_equal(out.attributes.size(), 1u);
 	check_equal(out.attributes[0].location, 2);
 	check_equal(out.attributes[0].name, "attr_position");
-}
-
-TESTCASE(fragment_120) {
-	const std::string input = "#version 150\n"
-	                          "uniform sampler2D u_texture;\n"
-	                          "in vec2 var_tex;\n"
-	                          "out vec4 frag_color;\n"
-	                          "void main() {\n"
-	                          "\tfrag_color = texture(u_texture, var_tex);\n"
-	                          "}\n";
-	const EmittedShader out =
-	   emit_dialect(input, ShaderStage::kFragment, ShaderDialect::kGLSL120, "test");
-	check_equal(out.source, "#version 120\n"
-	                        "uniform sampler2D u_texture;\n"
-	                        "varying vec2 var_tex;\n"
-	                        "void main() {\n"
-	                        "\tgl_FragColor = texture2D(u_texture, var_tex);\n"
-	                        "}\n");
-	check_equal(out.attributes.size(), 0u);
 }
 
 TESTCASE(fragment_300es_precision) {
@@ -149,26 +108,8 @@ TESTCASE(fragment_330_drops_precision) {
 TESTCASE(vertex_without_layout_throws) {
 	check_error(WException, "layout(location", [] {
 		emit_dialect("#version 150\nin vec2 attr_position;\n", ShaderStage::kVertex,
-		             ShaderDialect::kGLSL120, "test");
+		             ShaderDialect::kGLSL330, "test");
 	});
-}
-
-TESTCASE(vertex_120_uniform_block) {
-	const std::string input = "#version 150\n"
-	                          "layout(std140) uniform per_program_state {\n"
-	                          "\tfloat u_z_value;\n"
-	                          "\tvec2 u_texture_dimensions;\n"
-	                          "};\n"
-	                          "void main() {\n"
-	                          "}\n";
-	const EmittedShader out =
-	   emit_dialect(input, ShaderStage::kVertex, ShaderDialect::kGLSL120, "test");
-	check_equal(out.source, "#version 120\n"
-	                        "uniform float u_z_value;\n"
-	                        "uniform vec2 u_texture_dimensions;\n"
-	                        "void main() {\n"
-	                        "}\n");
-	check_equal(out.attributes.size(), 0u);
 }
 
 TESTCASE(vertex_330_uniform_block_passthrough) {
@@ -214,7 +155,7 @@ TESTCASE(unterminated_uniform_block_throws) {
 	check_error(WException, "Unterminated uniform block", [] {
 		emit_dialect(
 		   "#version 150\nlayout(std140) uniform per_program_state {\n\tfloat u_z_value;\n",
-		   ShaderStage::kVertex, ShaderDialect::kGLSL120, "test");
+		   ShaderStage::kVertex, ShaderDialect::kGLSL330, "test");
 	});
 }
 

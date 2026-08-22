@@ -123,28 +123,6 @@ std::string expand_includes(const std::string& source, const std::string& progra
 	return expanded;
 }
 
-bool is_identifier_char(char c) {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-}
-
-// Replaces every occurrence of 'from' with 'to' in 's', matching only where the
-// character before 'from' is not an identifier character. This is enough for
-// both rewrites the 120 dialect needs: renaming the fragment output identifier
-// (which is always a complete identifier) and rewriting the texture() builtin
-// to texture2D() without touching identifiers like 'u_texture'.
-std::string replace_token(std::string s, const std::string& from, const std::string& to) {
-	size_t pos = 0;
-	while ((pos = s.find(from, pos)) != std::string::npos) {
-		if (pos == 0 || !is_identifier_char(s[pos - 1])) {
-			s.replace(pos, from.size(), to);
-			pos += to.size();
-		} else {
-			pos += from.size();
-		}
-	}
-	return s;
-}
-
 // Splits a declaration line into tokens on whitespace and the punctuation that
 // matters for declarations: ( ) = ; ,. Used to parse the simple single-line
 // declarations the shader sources use.
@@ -212,9 +190,6 @@ EmittedShader emit_dialect(const std::string& expanded_source,
                            const std::string& program_name) {
 	std::string version_line;
 	switch (dialect) {
-	case ShaderDialect::kGLSL120:
-		version_line = "#version 120";
-		break;
 	case ShaderDialect::kGLSL330:
 		version_line = "#version 330";
 		break;
@@ -224,7 +199,6 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 	}
 
 	EmittedShader result;
-	std::string fragment_output_name;
 	std::vector<std::string> output_lines;
 	std::vector<std::string> precision_lines;
 	bool in_uniform_block = false;
@@ -240,19 +214,13 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 		const std::string trimmed = trim(line);
 
 		if (in_uniform_block) {
-			// Inside a `layout(std140) uniform ... { ... };` block. The 120
-			// dialect has no uniform blocks, so lower each member to a loose
-			// `uniform <type> <name>;` declaration and drop the block braces;
-			// 330 and 300 es pass the whole block through unchanged.
+			// Inside a `layout(std140) uniform ... { ... };` block. Both 330 and
+			// 300 es pass the whole block through unchanged.
 			if (is_uniform_block_close(trimmed)) {
 				in_uniform_block = false;
-				drop_line = dialect == ShaderDialect::kGLSL120;
-			} else if (dialect == ShaderDialect::kGLSL120 && !trimmed.empty()) {
-				emitted = "uniform " + trimmed;
 			}
 		} else if (is_uniform_block_open(trimmed)) {
 			in_uniform_block = true;
-			drop_line = dialect == ShaderDialect::kGLSL120;
 		} else if (trimmed.rfind("#version", 0) == 0) {
 			emitted = version_line;
 			// GLSL ES 3.00 fragment shaders have no default float precision, so
@@ -296,17 +264,11 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 							   program_name.c_str(), trimmed.c_str());
 						}
 						result.attributes.push_back({location, *(in_it + 2)});
-						if (dialect == ShaderDialect::kGLSL120) {
-							emitted = "attribute " + *(in_it + 1) + " " + *(in_it + 2) + ";";
-						}
 					} else if (tokens[0] == "out") {
 						if (tokens.size() < 3) {
 							throw wexception(
 							   "Malformed vertex output declaration in shader program '%s': %s",
 							   program_name.c_str(), trimmed.c_str());
-						}
-						if (dialect == ShaderDialect::kGLSL120) {
-							emitted = "varying " + tokens[1] + " " + tokens[2] + ";";
 						}
 					} else if (tokens[0] == "in") {
 						throw wexception(
@@ -314,22 +276,10 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 						   "(renderer modernization plan, decision 5)",
 						   program_name.c_str(), trimmed.c_str());
 					}
-				} else {  // fragment stage
-					if (tokens[0] == "out" && tokens.size() >= 3 && tokens[1] == "vec4") {
-						fragment_output_name = tokens[2];
-						if (dialect == ShaderDialect::kGLSL120) {
-							drop_line = true;
-						}
-					} else if (tokens[0] == "in") {
-						if (tokens.size() < 3) {
-							throw wexception(
-							   "Malformed fragment input declaration in shader program '%s': %s",
-							   program_name.c_str(), trimmed.c_str());
-						}
-						if (dialect == ShaderDialect::kGLSL120) {
-							emitted = "varying " + tokens[1] + " " + tokens[2] + ";";
-						}
-					}
+				} else if (stage == ShaderStage::kFragment && tokens[0] == "in" &&
+				           tokens.size() < 3) {
+					throw wexception("Malformed fragment input declaration in shader program '%s': %s",
+					                 program_name.c_str(), trimmed.c_str());
 				}
 			}
 		}
@@ -366,15 +316,6 @@ EmittedShader emit_dialect(const std::string& expanded_source,
 	for (const std::string& output_line : output_lines) {
 		result.source += output_line;
 		result.source += '\n';
-	}
-
-	// The 120 dialect has no declared fragment output; the authored `out vec4
-	// frag_color;` was dropped above, so its uses become gl_FragColor.
-	if (stage == ShaderStage::kFragment && dialect == ShaderDialect::kGLSL120) {
-		if (!fragment_output_name.empty()) {
-			result.source = replace_token(std::move(result.source), fragment_output_name, "gl_FragColor");
-		}
-		result.source = replace_token(std::move(result.source), "texture(", "texture2D(");
 	}
 
 	return result;
@@ -474,8 +415,7 @@ void Program::build(const std::string& program_name) {
 		throw wexception("Could not create GL program.");
 	}
 
-	const ShaderDialect dialect =
-	   backend() == Backend::kOpenGLCore ? ShaderDialect::kGLSL330 : ShaderDialect::kGLSL120;
+	const ShaderDialect dialect = ShaderDialect::kGLSL330;
 
 	const EmittedShader fragment_shader = emit_dialect(
 	   expand_includes(read_file("shaders/" + program_name + ".fp"), program_name),
@@ -496,17 +436,6 @@ void Program::build(const std::string& program_name) {
 	fragment_shader_.reset(new Shader(GL_FRAGMENT_SHADER));
 	fragment_shader_->compile(fragment_shader.source.c_str(), program_name);
 	glAttachShader(program_object_, fragment_shader_->object());
-
-	// GLSL 1.20 has no layout(location=N) qualifier, so the 120 output strips it
-	// and the emitter records the (name, location) pairs; bind them before
-	// linking. No extension dependency (decision 5 of the renderer modernization
-	// plan). The 330 output carries the locations in the source, so nothing needs
-	// binding there.
-	if (dialect == ShaderDialect::kGLSL120) {
-		for (const AttributeBinding& binding : vertex_shader.attributes) {
-			glBindAttribLocation(program_object_, binding.location, binding.name.c_str());
-		}
-	}
 
 	glLinkProgram(program_object_);
 
