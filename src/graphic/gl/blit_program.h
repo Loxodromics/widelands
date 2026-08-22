@@ -122,21 +122,7 @@ private:
 	};
 	static_assert(sizeof(PerVertexData) == 60, "Wrong padding.");
 
-	// The buffer that will contain the quad for rendering.
-	Gl::Buffer<PerVertexData> gl_array_buffer_;
-
-	// The vertex array object capturing the attribute layout of this program.
-	Gl::VertexArray vao_;
-
-	// The program.
-	Gl::Program gl_program_;
-
-	// Uniforms.
-	GLint u_texture_;
-	GLint u_mask_;
-
-	// RHI resources for the core path (the legacy members above are unused
-	// there). blit needs two pipelines (alpha and opaque) for its two textures
+	// RHI resources. blit needs two pipelines (alpha and opaque) for its two textures
 	// (u_texture, u_mask); there is no uniform block. A descriptor set is
 	// created for a specific pipeline (C7), so each pipeline is paired with its
 	// own set in one object: selecting a pipeline and selecting a set are then

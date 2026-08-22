@@ -90,17 +90,7 @@ private:
 	// it.
 	std::vector<PerVertexData> vertices_;
 
-	// The buffer that will contain the quad for rendering.
-	Gl::Buffer<PerVertexData> gl_array_buffer_;
-
-	// The vertex array object capturing the attribute layout of this program.
-	Gl::VertexArray vao_;
-
-	// The program.
-	Gl::Program gl_program_;
-
-	// RHI resources for the core path (the legacy members above are unused
-	// there). fill_rect interprets each BlendMode differently (see
+	// RHI resources. fill_rect interprets each BlendMode differently (see
 	// Claude/RHI_INTERFACE.md §4), so it owns one pipeline per blend state.
 	std::unique_ptr<Rhi::Pipeline> pipeline_alpha_;
 	std::unique_ptr<Rhi::Pipeline> pipeline_additive_;

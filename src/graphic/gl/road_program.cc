@@ -51,43 +51,24 @@ float road_brightness(const FieldsToDraw::Field& field) {
 }  // namespace
 
 RoadProgram::RoadProgram() {
-	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "road";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-		   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
-		   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.blend = Rhi::kBlendAlpha;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
-		desc.samplers = {{0, "u_texture"}};
-		desc.uniform_block =
-		   Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
-		pipeline_ = Rhi::device().create_pipeline(desc);
-		descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
-		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
-		uniform_rhi_buffer_ =
-		   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
-		return;
-	}
-
-	gl_program_.build("road");
-
-	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
-	u_z_value_ = glGetUniformLocation(gl_program_.object(), "u_z_value");
-
-	gl_array_buffer_.bind();
-	vao_.define_attributes({
-	   {gl_program_.attribute_location("attr_position"), 2, sizeof(PerVertexData),
-	    offsetof(PerVertexData, gl_x)},
-	   {gl_program_.attribute_location("attr_texture_position"), 2, sizeof(PerVertexData),
-	    offsetof(PerVertexData, texture_x)},
-	   {gl_program_.attribute_location("attr_brightness"), 1, sizeof(PerVertexData),
-	    offsetof(PerVertexData, brightness)},
-	});
+	Rhi::PipelineDescriptor desc;
+	desc.program_name = "road";
+	desc.vertex_layout.stride = sizeof(PerVertexData);
+	desc.vertex_layout.attributes = {
+	   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
+	   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
+	   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
+	};
+	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+	desc.blend = Rhi::kBlendAlpha;
+	desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+	desc.samplers = {{0, "u_texture"}};
+	desc.uniform_block = Rhi::UniformBlockBinding{0, "per_program_state", Gl::kZValueOnlyBlockSize};
+	pipeline_ = Rhi::device().create_pipeline(desc);
+	descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
+	vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
+	uniform_rhi_buffer_ =
+	   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
 }
 
 void RoadProgram::add_road(const int renderbuffer_width,
@@ -239,36 +220,18 @@ void RoadProgram::draw(const int renderbuffer_width,
 		}
 	}
 
-	if (Rhi::has_device()) {
-		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+	vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
-		Gl::PerProgramState state{};
-		state.z_value = z_value;
-		uniform_rhi_buffer_->update(&state, sizeof(state));
+	Gl::PerProgramState state{};
+	state.z_value = z_value;
+	uniform_rhi_buffer_->update(&state, sizeof(state));
 
-		descriptor_set_->set_texture(0, road_texture.texture);
-		descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
+	descriptor_set_->set_texture(0, road_texture.texture);
+	descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
 
-		auto& command_buffer = Rhi::command_buffer();
-		command_buffer.bind_pipeline(pipeline_.get());
-		command_buffer.bind_descriptor_set(descriptor_set_.get());
-		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
-		command_buffer.draw(0, vertices_.size());
-		return;
-	}
-
-	glUseProgram(gl_program_.object());
-
-	auto& gl_state = Gl::State::instance();
-
-	gl_array_buffer_.bind();
-	gl_array_buffer_.update(vertices_);
-	vao_.bind();
-
-	gl_state.bind(GL_TEXTURE0, road_texture.texture_id);
-	glUniform1i(u_texture_, 0);
-
-	glUniform1f(u_z_value_, z_value);
-
-	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
+	auto& command_buffer = Rhi::command_buffer();
+	command_buffer.bind_pipeline(pipeline_.get());
+	command_buffer.bind_descriptor_set(descriptor_set_.get());
+	command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+	command_buffer.draw(0, vertices_.size());
 }

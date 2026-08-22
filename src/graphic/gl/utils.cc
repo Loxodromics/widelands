@@ -23,11 +23,9 @@
 #include <cstddef>
 #include <memory>
 #include <string>
-#include <unordered_set>
 
 #include "base/multithreading.h"
 #include "base/wexception.h"
-#include "graphic/gl/initialize.h"
 #include "io/fileread.h"
 #include "io/filesystem/layered_filesystem.h"
 
@@ -486,112 +484,6 @@ GLint Program::attribute_location(const std::string& name) const {
 	   name.c_str());
 }
 
-namespace {
-
-// Legacy 2.1 backend only: which vertex attrib arrays are currently enabled.
-// Without VAOs the enable/disable state is global, so the per-draw replay must
-// track it both to skip redundant calls and to disable arrays a previous
-// program left enabled.
-std::unordered_set<GLint>& enabled_attrib_arrays() {
-	static std::unordered_set<GLint> arrays;
-	return arrays;
-}
-
-}  // namespace
-
-VertexArray::~VertexArray() {
-	if (vao_ != 0u) {
-		glDeleteVertexArrays(1, &vao_);
-	}
-}
-
-void VertexArray::define_attributes(const std::vector<VertexAttribute>& attributes) {
-	attributes_ = attributes;
-	if (backend() != Backend::kOpenGLCore) {
-		return;
-	}
-	// The VAO is created lazily here, not in the constructor: on the core path
-	// the programs draw through the RHI and never call define_attributes(), so
-	// a VertexArray member that sees no use must not leak a glGenVertexArrays
-	// (C9).
-	if (vao_ == 0u) {
-		glGenVertexArrays(1, &vao_);
-		if (vao_ == 0u) {
-			throw wexception("Could not create GL vertex array object.");
-		}
-	}
-	glBindVertexArray(vao_);
-	for (const VertexAttribute& attribute : attributes) {
-		glEnableVertexAttribArray(attribute.location);
-		vertex_attrib_pointer(
-		   attribute.location, attribute.num_items, attribute.stride, attribute.offset);
-	}
-}
-
-void VertexArray::bind() const {
-	if (backend() == Backend::kOpenGLCore) {
-		glBindVertexArray(vao_);
-		return;
-	}
-
-	// Legacy replay: mirror the old State::enable_vertex_attrib_array plus the
-	// per-attribute vertex_attrib_pointer calls.
-	auto& enabled = enabled_attrib_arrays();
-	for (const VertexAttribute& attribute : attributes_) {
-		if (enabled.count(attribute.location) == 0u) {
-			glEnableVertexAttribArray(attribute.location);
-			enabled.insert(attribute.location);
-		}
-	}
-	for (auto it = enabled.begin(); it != enabled.end();) {
-		if (std::none_of(attributes_.begin(), attributes_.end(), [it](const VertexAttribute& attribute) {
-			    return attribute.location == *it;
-		    })) {
-			glDisableVertexAttribArray(*it);
-			it = enabled.erase(it);
-		} else {
-			++it;
-		}
-	}
-	for (const VertexAttribute& attribute : attributes_) {
-		vertex_attrib_pointer(
-		   attribute.location, attribute.num_items, attribute.stride, attribute.offset);
-	}
-}
-
-UniformBuffer::~UniformBuffer() {
-	if (object_ != 0u) {
-		glDeleteBuffers(1, &object_);
-	}
-}
-
-void UniformBuffer::ensure_created() const {
-	if (object_ != 0u) {
-		return;
-	}
-	glGenBuffers(1, &object_);
-	if (object_ == 0u) {
-		throw wexception("Could not create GL uniform buffer.");
-	}
-}
-
-void UniformBuffer::update(const void* data, const size_t size) const {
-	if (backend() != Backend::kOpenGLCore) {
-		return;
-	}
-	ensure_created();
-	glBindBuffer(GL_UNIFORM_BUFFER, object_);
-	glBufferData(GL_UNIFORM_BUFFER, size, data, GL_DYNAMIC_DRAW);
-}
-
-void UniformBuffer::bind_base(const GLuint binding_point) const {
-	if (backend() != Backend::kOpenGLCore) {
-		return;
-	}
-	ensure_created();
-	glBindBufferBase(GL_UNIFORM_BUFFER, binding_point, object_);
-}
-
 State::State() : last_active_texture_(NONE) {
 }
 
@@ -662,11 +554,6 @@ State& State::instance() {
 	assert(is_initializer_thread());
 	static State binder;
 	return binder;
-}
-
-void vertex_attrib_pointer(int vertex_index, int num_items, int stride, size_t offset) {
-	glVertexAttribPointer(
-	   vertex_index, num_items, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*>(offset));
 }
 
 void swap_rows(const int width, const int height, const int pitch, const int bpp, uint8_t* pixels) {

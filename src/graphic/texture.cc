@@ -188,7 +188,7 @@ void Texture::init(uint16_t w, uint16_t h) {
 	assert(is_initializer_thread());
 
 	blit_data_ = {
-	   nullptr,  // texture (RHI handle): null on the legacy path
+	   nullptr,  // texture (RHI handle), initialized below
 	   0,        // texture_id, initialized below
 	   w,
 	   h,
@@ -210,14 +210,12 @@ void Texture::init(uint16_t w, uint16_t h) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_CLAMP_TO_EDGE));
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_CLAMP_TO_EDGE));
 
-	// On the core path, expose this GL texture as an RHI handle for the draw
-	// code (descriptor-set binding). It stays non-owning: the GL texture's
+	// Expose this GL texture as an RHI handle for the draw code
+	// (descriptor-set binding). It stays non-owning: the GL texture's
 	// lifecycle is managed here, not by the RHI (WP-10 moves the draw path, not
 	// texture creation).
-	if (Rhi::has_device()) {
-		rhi_texture_ = Rhi::wrap_gl_texture(blit_data_.texture_id, w, h);
-		blit_data_.texture = rhi_texture_.get();
-	}
+	rhi_texture_ = Rhi::wrap_gl_texture(blit_data_.texture_id, w, h);
+	blit_data_.texture = rhi_texture_.get();
 }
 
 void Texture::lock() {
@@ -286,18 +284,13 @@ void Texture::setup_gl() const {
 }
 
 void Texture::draw_to_self(const std::function<void()>& draw) {
-	if (Rhi::has_device()) {
-		std::unique_ptr<Rhi::CommandBuffer> command_buffer = Rhi::device().begin_offscreen();
-		command_buffer->transition(blit_data_.texture, Rhi::TextureLayout::kColorAttachment);
-		command_buffer->begin_pass(blit_data_.texture, Rhi::PassClear{false, 0.f, 0.f, 0.f, 0.f});
-		draw();
-		command_buffer->end_pass();
-		command_buffer->transition(blit_data_.texture, Rhi::TextureLayout::kShaderReadOnly);
-		Rhi::device().submit_offscreen(std::move(command_buffer));
-	} else {
-		setup_gl();
-		draw();
-	}
+	std::unique_ptr<Rhi::CommandBuffer> command_buffer = Rhi::device().begin_offscreen();
+	command_buffer->transition(blit_data_.texture, Rhi::TextureLayout::kColorAttachment);
+	command_buffer->begin_pass(blit_data_.texture, Rhi::PassClear{false, 0.f, 0.f, 0.f, 0.f});
+	draw();
+	command_buffer->end_pass();
+	command_buffer->transition(blit_data_.texture, Rhi::TextureLayout::kShaderReadOnly);
+	Rhi::device().submit_offscreen(std::move(command_buffer));
 }
 
 void Texture::do_blit(const Rectf& dst_rect,

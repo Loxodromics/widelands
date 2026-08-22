@@ -22,6 +22,7 @@
 #include <chrono>
 #include <ctime>
 #include <memory>
+#include <unordered_set>
 
 #include "ai/ai_help_structs.h"
 #include "ai/computer_player.h"

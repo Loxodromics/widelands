@@ -30,39 +30,26 @@ FillRectProgram& FillRectProgram::instance() {
 }
 
 FillRectProgram::FillRectProgram() {
-	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "fill_rect";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
-		   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+	Rhi::PipelineDescriptor desc;
+	desc.program_name = "fill_rect";
+	desc.vertex_layout.stride = sizeof(PerVertexData);
+	desc.vertex_layout.attributes = {
+	   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+	   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, r)},
+	};
+	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+	desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
 
-		desc.blend = Rhi::kBlendAlpha;
-		pipeline_alpha_ = Rhi::device().create_pipeline(desc);
-		desc.blend = Rhi::kBlendAdditive;
-		pipeline_additive_ = Rhi::device().create_pipeline(desc);
-		desc.blend = Rhi::kBlendReverseSubtract;
-		pipeline_reverse_subtract_ = Rhi::device().create_pipeline(desc);
-		desc.blend = Rhi::kBlendOpaque;
-		pipeline_opaque_ = Rhi::device().create_pipeline(desc);
+	desc.blend = Rhi::kBlendAlpha;
+	pipeline_alpha_ = Rhi::device().create_pipeline(desc);
+	desc.blend = Rhi::kBlendAdditive;
+	pipeline_additive_ = Rhi::device().create_pipeline(desc);
+	desc.blend = Rhi::kBlendReverseSubtract;
+	pipeline_reverse_subtract_ = Rhi::device().create_pipeline(desc);
+	desc.blend = Rhi::kBlendOpaque;
+	pipeline_opaque_ = Rhi::device().create_pipeline(desc);
 
-		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
-		return;
-	}
-
-	gl_program_.build("fill_rect");
-
-	gl_array_buffer_.bind();
-	vao_.define_attributes({
-	   {gl_program_.attribute_location("attr_position"), 3, sizeof(PerVertexData),
-	    offsetof(PerVertexData, gl_x)},
-	   {gl_program_.attribute_location("attr_color"), 4, sizeof(PerVertexData),
-	    offsetof(PerVertexData, r)},
-	});
+	vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 }
 
 Rhi::Pipeline* FillRectProgram::pipeline_for(const BlendMode blend_mode) const {
@@ -183,100 +170,23 @@ void FillRectProgram::draw(const std::vector<Arguments>& arguments) {
 		vertices_.clear();
 		const Arguments& template_args = arguments[i];
 
-		if (Rhi::has_device()) {
-			// The RHI pipeline carries the blend state, so selecting the
-			// pipeline replaces the legacy glBlend* setup/restore below.
-			while (i < arguments.size()) {
-				const Arguments& current_args = arguments[i];
-				if (current_args.blend_mode != template_args.blend_mode) {
-					break;
-				}
-				for (const Arguments::Vertex& vertex : current_args.triangle) {
-					vertices_.emplace_back(vertex.point.x, vertex.point.y, current_args.z_value,
-					                       vertex.color_r, vertex.color_g, vertex.color_b, vertex.color_a);
-				}
-				++i;
-			}
-			vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
-			auto& command_buffer = Rhi::command_buffer();
-			command_buffer.bind_pipeline(pipeline_for(template_args.blend_mode));
-			command_buffer.bind_vertex_buffer(vertex_buffer_.get());
-			command_buffer.draw(0, vertices_.size());
-			continue;
-		}
-
-		// This method does 3 things:
-		// - if blend_mode is Copy, we will copy color into the destination
-		// pixels without blending.
-		// - if blend_mode is Alpha and color.r < 0, we will
-		// GL_FUNC_REVERSE_SUBTRACT color.r from all RGB values in the
-		// destination buffer. color.a should be 0 for this.
-		// - if blend_mode is Alpha and color.r > 0, we will
-		// GL_ADD color.r to all RGB values in the destination buffer.
-		// color.a should be 0 for this.
-
-		// The simple trick here is to fill the rect, but using a different glBlendFunc that will sum
-		// src and target (or subtract them if factor is negative).
-		switch (template_args.blend_mode) {
-		case BlendMode::Subtract:
-			glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
-			FALLS_THROUGH;
-		case BlendMode::UseAlpha:
-			glBlendFunc(GL_ONE, GL_ONE);
-			break;
-
-		case BlendMode::Copy:
-			glDisable(GL_BLEND);
-			break;
-
-		case BlendMode::Default:
-			break;
-
-		default:
-			NEVER_HERE();
-		}
-
-		glUseProgram(gl_program_.object());
-
-		gl_array_buffer_.bind();
-		vao_.bind();
-
-		// Batch common rectangles up.
+		// The RHI pipeline carries the blend state, so selecting the pipeline
+		// is all this needs; no glBlend* setup/restore around the draw call.
 		while (i < arguments.size()) {
 			const Arguments& current_args = arguments[i];
 			if (current_args.blend_mode != template_args.blend_mode) {
 				break;
 			}
-
 			for (const Arguments::Vertex& vertex : current_args.triangle) {
 				vertices_.emplace_back(vertex.point.x, vertex.point.y, current_args.z_value,
 				                       vertex.color_r, vertex.color_g, vertex.color_b, vertex.color_a);
 			}
-
 			++i;
 		}
-
-		gl_array_buffer_.update(vertices_);
-
-		glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
-
-		switch (template_args.blend_mode) {
-		case BlendMode::Subtract:
-			glBlendEquation(GL_FUNC_ADD);
-			FALLS_THROUGH;
-		case BlendMode::UseAlpha:
-			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-			break;
-
-		case BlendMode::Copy:
-			glEnable(GL_BLEND);
-			break;
-
-		case BlendMode::Default:
-			break;
-
-		default:
-			NEVER_HERE();
-		}
+		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+		auto& command_buffer = Rhi::command_buffer();
+		command_buffer.bind_pipeline(pipeline_for(template_args.blend_mode));
+		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+		command_buffer.draw(0, vertices_.size());
 	}
 }

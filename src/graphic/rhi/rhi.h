@@ -185,9 +185,8 @@ struct PassClear {
 };
 
 // A buffer's role, which decides where the backend keeps it and how it is
-// written. Vertex data is uploaded whole-buffer per frame (Gl::Buffer today);
-// uniform data carries the per-program block (Gl::UniformBuffer /
-// PerProgramState).
+// written. Vertex data is uploaded whole-buffer per frame; uniform data
+// carries the per-program block (Gl::PerProgramState).
 enum class BufferUsage {
 	kVertex,
 	kUniform,

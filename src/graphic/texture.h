@@ -90,10 +90,9 @@ private:
 	void setup_gl() const;
 	void init(uint16_t w, uint16_t h);
 
-	// Runs 'draw' with this texture as the render target: on the core path it
-	// brackets the draw in the RHI's offscreen pass (begin_offscreen /
-	// transition / begin_pass / ... / end_pass / transition / submit_offscreen);
-	// on the legacy path it just calls setup_gl(). The draw itself records into
+	// Runs 'draw' with this texture as the render target, bracketed in the
+	// RHI's offscreen pass (begin_offscreen / transition / begin_pass / ... /
+	// end_pass / transition / submit_offscreen). The draw itself records into
 	// the current command buffer (the program draw code does).
 	void draw_to_self(const std::function<void()>& draw);
 

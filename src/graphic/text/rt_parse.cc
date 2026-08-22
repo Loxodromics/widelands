@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <memory>
 #include <regex>
+#include <unordered_set>
 
 #include "base/string.h"
 #include "graphic/text/rt_errors_impl.h"

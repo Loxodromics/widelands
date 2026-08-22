@@ -63,25 +63,7 @@ private:
 	              Direction direction,
 	              BlitData* road_texture);
 
-	// The buffer that will contain 'vertices_' for rendering.
-	Gl::Buffer<PerVertexData> gl_array_buffer_;
-
-	// The vertex array object capturing the attribute layout of this program.
-	Gl::VertexArray vao_;
-
-	// The uniform buffer carrying the per-program z-value on the core backend.
-	Gl::UniformBuffer uniform_buffer_;
-
-	// The program used for drawing the roads.
-	Gl::Program gl_program_;
-
-	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
-	// reads these from the uniform block instead).
-	GLint u_texture_;
-	GLint u_z_value_;
-
-	// RHI resources for the core path (the legacy members above are unused
-	// there). road reads one texture (u_texture) and the z-only
+	// RHI resources. road reads one texture (u_texture) and the z-only
 	// per_program_state block.
 	std::unique_ptr<Rhi::Pipeline> pipeline_;
 	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;

@@ -139,21 +139,12 @@ private:
 };
 
 ScopedScissor::ScopedScissor(const Rectf& rect) {
-	if (Rhi::has_device()) {
-		Rhi::command_buffer().set_scissor(Recti(static_cast<int>(rect.x), static_cast<int>(rect.y),
-		                                        static_cast<int>(rect.w), static_cast<int>(rect.h)));
-	} else {
-		glScissor(rect.x, rect.y, rect.w, rect.h);
-		glEnable(GL_SCISSOR_TEST);
-	}
+	Rhi::command_buffer().set_scissor(Recti(static_cast<int>(rect.x), static_cast<int>(rect.y),
+	                                        static_cast<int>(rect.w), static_cast<int>(rect.h)));
 }
 
 ScopedScissor::~ScopedScissor() {
-	if (Rhi::has_device()) {
-		Rhi::command_buffer().disable_scissor();
-	} else {
-		glDisable(GL_SCISSOR_TEST);
-	}
+	Rhi::command_buffer().disable_scissor();
 }
 
 }  // namespace
@@ -234,44 +225,20 @@ void RenderQueue::draw(const int screen_width, const int screen_height) {
 	// do not crash anymore. The linked bug contains a discussion how to fix the
 	// issue properly, but it was too much work to address at the time.
 
-	if (Rhi::has_device()) {
-		std::unique_ptr<Rhi::CommandBuffer> command_buffer = Rhi::device().begin_frame();
-		command_buffer->begin_pass(nullptr, Rhi::PassClear{true, 0.f, 0.f, 0.f, 0.f});
-		command_buffer->set_viewport(Recti(0, 0, screen_width, screen_height));
-
-		std::sort(opaque_items_.begin(), opaque_items_.end());
-		draw_items(opaque_items_);
-		opaque_items_.clear();
-
-		std::sort(blended_items_.begin(), blended_items_.end());
-		draw_items(blended_items_);
-		blended_items_.clear();
-
-		command_buffer->end_pass();
-		Rhi::device().end_frame(std::move(command_buffer));
-		next_z_ = 1;
-		return;
-	}
-
-	Gl::State::instance().bind_framebuffer(0, 0);
-	glViewport(0, 0, screen_width, screen_height);
-
-	glEnable(GL_DEPTH_TEST);
-	glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-
-	glDisable(GL_BLEND);
+	std::unique_ptr<Rhi::CommandBuffer> command_buffer = Rhi::device().begin_frame();
+	command_buffer->begin_pass(nullptr, Rhi::PassClear{true, 0.f, 0.f, 0.f, 0.f});
+	command_buffer->set_viewport(Recti(0, 0, screen_width, screen_height));
 
 	std::sort(opaque_items_.begin(), opaque_items_.end());
 	draw_items(opaque_items_);
 	opaque_items_.clear();
 
-	glEnable(GL_BLEND);
-
 	std::sort(blended_items_.begin(), blended_items_.end());
 	draw_items(blended_items_);
 	blended_items_.clear();
 
-	glDisable(GL_DEPTH_TEST);
+	command_buffer->end_pass();
+	Rhi::device().end_frame(std::move(command_buffer));
 	next_z_ = 1;
 }
 

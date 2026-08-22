@@ -62,18 +62,8 @@ private:
 	// allocate memory for it.
 	std::vector<PerVertexData> vertices_;
 
-	// The buffer that contains the vertices for rendering.
-	Gl::Buffer<PerVertexData> gl_array_buffer_;
-
-	// The vertex array object capturing the attribute layout of this program.
-	Gl::VertexArray vao_;
-
-	// The program.
-	Gl::Program gl_program_;
-
-	// RHI resources for the core path (the legacy members above are unused
-	// there). draw_line has no textures and no uniform block, so it needs only
-	// a pipeline and a vertex buffer.
+	// RHI resources. draw_line has no textures and no uniform block, so it
+	// needs only a pipeline and a vertex buffer.
 	std::unique_ptr<Rhi::Pipeline> pipeline_;
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
 

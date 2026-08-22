@@ -74,36 +74,8 @@ private:
 	// Adds a vertex to the end of vertices with data from 'field' and 'texture_coordinates'.
 	void add_vertex(const FieldsToDraw::Field& field, const Vector2f& texture_offset);
 
-	// The program used for drawing the terrain.
-	Gl::Program gl_program_;
-
-	// The buffer that will contain 'vertices_' for rendering.
-	Gl::Buffer<PerVertexData> gl_array_buffer_;
-
-	// The vertex array object capturing the attribute layout of this program.
-	Gl::VertexArray vao_;
-
-	// The uniform buffer carrying the per-program scalars (z-value, texture
-	// dimensions, noise amplitudes) on the core backend.
-	Gl::UniformBuffer uniform_buffer_;
-
-	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
-	// reads these from the uniform block instead).
-	GLint u_terrain_texture_;
-	GLint u_texture_dimensions_;
-	GLint u_z_value_;
-	GLint u_bump_amplitude_;
-	GLint u_tint_amplitude_;
-	GLint u_warp_amplitude_;
-	GLint u_time_;
-	GLint u_cloud_amplitude_;
-	GLint u_sun_direction_;
-	GLint u_sun_color_;
-	GLint u_ambient_color_;
-
-	// RHI resources for the core path (the legacy members above are unused
-	// there). terrain reads one texture (u_terrain_texture) and the full
-	// per_program_state block.
+	// RHI resources. terrain reads one texture (u_terrain_texture) and the
+	// full per_program_state block.
 	std::unique_ptr<Rhi::Pipeline> pipeline_;
 	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;

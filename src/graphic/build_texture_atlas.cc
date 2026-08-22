@@ -19,6 +19,7 @@
 #include "graphic/build_texture_atlas.h"
 
 #include <memory>
+#include <unordered_set>
 
 #include "base/log.h"
 #include "base/string.h"

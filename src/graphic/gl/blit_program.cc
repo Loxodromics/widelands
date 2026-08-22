@@ -42,60 +42,35 @@ struct DrawBatch {
 }  // namespace
 
 BlitProgram::BlitProgram() {
-	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "blit";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_blend", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, blend_r)},
-		   {"attr_mask_texture_position", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, mask_texture_x)},
-		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
-		   {"attr_texture_position", Rhi::VertexFormat::kVec2,
-		    offsetof(PerVertexData, texture_x)},
-		   {"attr_program_flavor", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, program_flavor)},
-		   {"attr_light", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, light_r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
-		desc.samplers = {{0, "u_texture"}, {1, "u_mask"}};
-
-		// One descriptor set per pipeline (C7): the layouts happen to be
-		// compatible, but a descriptor set belongs to a pipeline, and Vulkan
-		// enforces that. Each set is created from the pipeline it is paired
-		// with, right next to it, so the pairing is visible in one place.
-		desc.blend = Rhi::kBlendAlpha;
-		alpha_.pipeline = Rhi::device().create_pipeline(desc);
-		alpha_.descriptor_set = Rhi::device().create_descriptor_set(*alpha_.pipeline);
-
-		desc.blend = Rhi::kBlendOpaque;
-		opaque_.pipeline = Rhi::device().create_pipeline(desc);
-		opaque_.descriptor_set = Rhi::device().create_descriptor_set(*opaque_.pipeline);
-
-		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
-		return;
-	}
-
-	gl_program_.build("blit");
-
-	u_texture_ = glGetUniformLocation(gl_program_.object(), "u_texture");
-	u_mask_ = glGetUniformLocation(gl_program_.object(), "u_mask");
-
-	gl_array_buffer_.bind();
-	vao_.define_attributes({
-	   {gl_program_.attribute_location("attr_blend"), 4, sizeof(PerVertexData),
-	    offsetof(PerVertexData, blend_r)},
-	   {gl_program_.attribute_location("attr_mask_texture_position"), 2, sizeof(PerVertexData),
+	Rhi::PipelineDescriptor desc;
+	desc.program_name = "blit";
+	desc.vertex_layout.stride = sizeof(PerVertexData);
+	desc.vertex_layout.attributes = {
+	   {"attr_blend", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, blend_r)},
+	   {"attr_mask_texture_position", Rhi::VertexFormat::kVec2,
 	    offsetof(PerVertexData, mask_texture_x)},
-	   {gl_program_.attribute_location("attr_position"), 3, sizeof(PerVertexData),
-	    offsetof(PerVertexData, gl_x)},
-	   {gl_program_.attribute_location("attr_texture_position"), 2, sizeof(PerVertexData),
-	    offsetof(PerVertexData, texture_x)},
-	   {gl_program_.attribute_location("attr_program_flavor"), 1, sizeof(PerVertexData),
-	    offsetof(PerVertexData, program_flavor)},
-	   {gl_program_.attribute_location("attr_light"), 3, sizeof(PerVertexData),
-	    offsetof(PerVertexData, light_r)},
-	});
+	   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+	   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
+	   {"attr_program_flavor", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, program_flavor)},
+	   {"attr_light", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, light_r)},
+	};
+	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+	desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+	desc.samplers = {{0, "u_texture"}, {1, "u_mask"}};
+
+	// One descriptor set per pipeline (C7): the layouts happen to be
+	// compatible, but a descriptor set belongs to a pipeline, and Vulkan
+	// enforces that. Each set is created from the pipeline it is paired
+	// with, right next to it, so the pairing is visible in one place.
+	desc.blend = Rhi::kBlendAlpha;
+	alpha_.pipeline = Rhi::device().create_pipeline(desc);
+	alpha_.descriptor_set = Rhi::device().create_descriptor_set(*alpha_.pipeline);
+
+	desc.blend = Rhi::kBlendOpaque;
+	opaque_.pipeline = Rhi::device().create_pipeline(desc);
+	opaque_.descriptor_set = Rhi::device().create_descriptor_set(*opaque_.pipeline);
+
+	vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 }
 
 const BlitProgram::Variant& BlitProgram::variant_for(const BlendMode blend_mode) const {
@@ -190,47 +165,17 @@ void BlitProgram::draw(const std::vector<Arguments>& arguments) {
 		offset = vertices_.size();
 	}
 
-	if (Rhi::has_device()) {
-		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+	vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
-		auto& command_buffer = Rhi::command_buffer();
-		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
-		for (const auto& draw_arg : draw_batches) {
-			const Variant& variant = variant_for(draw_arg.blend_mode);
-			variant.descriptor_set->set_texture(0, draw_arg.texture.texture);
-			variant.descriptor_set->set_texture(1, draw_arg.mask.texture);
-			command_buffer.bind_pipeline(variant.pipeline.get());
-			command_buffer.bind_descriptor_set(variant.descriptor_set.get());
-			command_buffer.draw(draw_arg.offset, draw_arg.count);
-		}
-		return;
-	}
-
-	glUseProgram(gl_program_.object());
-
-	auto& gl_state = Gl::State::instance();
-
-	gl_array_buffer_.bind();
-	vao_.bind();
-
-	glUniform1i(u_texture_, 0);
-	glUniform1i(u_mask_, 1);
-
-	gl_array_buffer_.update(vertices_);
-
-	// Now do the draw calls.
+	auto& command_buffer = Rhi::command_buffer();
+	command_buffer.bind_vertex_buffer(vertex_buffer_.get());
 	for (const auto& draw_arg : draw_batches) {
-		gl_state.bind(GL_TEXTURE0, draw_arg.texture.texture_id);
-		gl_state.bind(GL_TEXTURE1, draw_arg.mask.texture_id);
-
-		if (draw_arg.blend_mode == BlendMode::Copy) {
-			glBlendFunc(GL_ONE, GL_ZERO);
-		}
-		glDrawArrays(GL_TRIANGLES, draw_arg.offset, draw_arg.count);
-
-		if (draw_arg.blend_mode == BlendMode::Copy) {
-			glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-		}
+		const Variant& variant = variant_for(draw_arg.blend_mode);
+		variant.descriptor_set->set_texture(0, draw_arg.texture.texture);
+		variant.descriptor_set->set_texture(1, draw_arg.mask.texture);
+		command_buffer.bind_pipeline(variant.pipeline.get());
+		command_buffer.bind_descriptor_set(variant.descriptor_set.get());
+		command_buffer.draw(draw_arg.offset, draw_arg.count);
 	}
 }
 

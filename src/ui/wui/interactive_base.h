@@ -22,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <unordered_set>
 
 #include "io/profile.h"
 #include "logic/editor_game_base.h"

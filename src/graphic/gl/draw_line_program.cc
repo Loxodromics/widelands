@@ -30,31 +30,18 @@ DrawLineProgram& DrawLineProgram::instance() {
 }
 
 DrawLineProgram::DrawLineProgram() {
-	if (Rhi::has_device()) {
-		Rhi::PipelineDescriptor desc;
-		desc.program_name = "draw_line";
-		desc.vertex_layout.stride = sizeof(PerVertexData);
-		desc.vertex_layout.attributes = {
-		   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
-		   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, color_r)},
-		};
-		desc.topology = Rhi::PrimitiveTopology::kTriangleList;
-		desc.blend = Rhi::kBlendAlpha;
-		desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
-		pipeline_ = Rhi::device().create_pipeline(desc);
-		vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
-		return;
-	}
-
-	gl_program_.build("draw_line");
-
-	gl_array_buffer_.bind();
-	vao_.define_attributes({
-	   {gl_program_.attribute_location("attr_position"), 3, sizeof(PerVertexData),
-	    offsetof(PerVertexData, gl_x)},
-	   {gl_program_.attribute_location("attr_color"), 4, sizeof(PerVertexData),
-	    offsetof(PerVertexData, color_r)},
-	});
+	Rhi::PipelineDescriptor desc;
+	desc.program_name = "draw_line";
+	desc.vertex_layout.stride = sizeof(PerVertexData);
+	desc.vertex_layout.attributes = {
+	   {"attr_position", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, gl_x)},
+	   {"attr_color", Rhi::VertexFormat::kVec4, offsetof(PerVertexData, color_r)},
+	};
+	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
+	desc.blend = Rhi::kBlendAlpha;
+	desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
+	pipeline_ = Rhi::device().create_pipeline(desc);
+	vertex_buffer_ = Rhi::device().create_buffer(0, Rhi::BufferUsage::kVertex);
 }
 
 void DrawLineProgram::draw(std::vector<Arguments> arguments) {
@@ -70,18 +57,9 @@ void DrawLineProgram::draw(std::vector<Arguments> arguments) {
 		   current_args.vertices.begin(), current_args.vertices.end(), std::back_inserter(vertices_));
 	}
 
-	if (Rhi::has_device()) {
-		vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
-		auto& command_buffer = Rhi::command_buffer();
-		command_buffer.bind_pipeline(pipeline_.get());
-		command_buffer.bind_vertex_buffer(vertex_buffer_.get());
-		command_buffer.draw(0, vertices_.size());
-		return;
-	}
-
-	glUseProgram(gl_program_.object());
-	gl_array_buffer_.bind();
-	vao_.bind();
-	gl_array_buffer_.update(vertices_);
-	glDrawArrays(GL_TRIANGLES, 0, vertices_.size());
+	vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
+	auto& command_buffer = Rhi::command_buffer();
+	command_buffer.bind_pipeline(pipeline_.get());
+	command_buffer.bind_vertex_buffer(vertex_buffer_.get());
+	command_buffer.draw(0, vertices_.size());
 }

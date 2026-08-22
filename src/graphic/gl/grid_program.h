@@ -51,24 +51,8 @@ private:
 	// Adds a vertex to the end of vertices with data from 'field' and the given RGB color.
 	void add_vertex(const FieldsToDraw::Field& field, float r, float g, float b);
 
-	// The program used for drawing the grid layer
-	Gl::Program gl_program_;
-
-	// The buffer that will contain 'vertices_' for rendering.
-	Gl::Buffer<PerVertexData> gl_array_buffer_;
-
-	// The vertex array object capturing the attribute layout of this program.
-	Gl::VertexArray vao_;
-
-	// The uniform buffer carrying the per-program z-value on the core backend.
-	Gl::UniformBuffer uniform_buffer_;
-
-	// Uniforms (the legacy 2.1 path keeps loose glUniform* calls; the core path
-	// reads these from the uniform block instead).
-	GLint u_z_value_;
-
-	// RHI resources for the core path. grid binds a texture its shader never
-	// samples (see Claude/RHI_INTERFACE.md §6.1) and the z-only block.
+	// RHI resources. grid binds a texture its shader never samples (see
+	// Claude/RHI_INTERFACE.md §6.1) and the z-only block.
 	std::unique_ptr<Rhi::Pipeline> pipeline_;
 	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
