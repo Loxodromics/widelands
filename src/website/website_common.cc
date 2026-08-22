@@ -55,7 +55,7 @@ void initialize() {
 	// so they always use the legacy backend.
 	g_gr = new Graphic();
 	g_gr->initialize(
-	   Graphic::TraceGl::kNo, 0, 1, 1, false, false, Gl::Backend::kOpenGL21);
+	   Graphic::TraceGl::kNo, 0, 1, 1, false, false, Gl::Backend::kOpenGLCore);
 }
 
 // Cleanup before program end

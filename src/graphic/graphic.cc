@@ -119,12 +119,10 @@ void Graphic::initialize(const TraceGl& trace_gl,
 
 	max_texture_size_ = static_cast<int>(max);
 
-	// Create the RHI device for the core path (WP-10). The legacy 2.1 path runs
-	// without one. Must be created before any texture or program is built, which
-	// happens later in this function and in the first render pass.
-	if (Gl::backend() == Gl::Backend::kOpenGLCore) {
-		rhi_device_.reset(new Rhi::GlCoreDevice());
-	}
+	// Create the RHI device (WP-10). Must be created before any texture or
+	// program is built, which happens later in this function and in the first
+	// render pass.
+	rhi_device_.reset(new Rhi::GlCoreDevice());
 
 	set_fullscreen(init_fullscreen);
 	if (init_maximized) {

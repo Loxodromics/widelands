@@ -425,7 +425,7 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 	   get_config_int("display", -1), get_config_int("xres", kDefaultResolutionW),
 	   get_config_int("yres", kDefaultResolutionH), get_config_bool("fullscreen", false),
 	   get_config_bool("maximized", false),
-	   Gl::backend_from_string(renderer_).value_or(Gl::Backend::kOpenGL21));
+	   Gl::backend_from_string(renderer_).value_or(Gl::Backend::kOpenGLCore));
 
 	{
 		// The window manager may resize the window on creation, so we have to handle resize events
@@ -2090,8 +2090,8 @@ void WLApplication::handle_commandline_parameters() {
 		if (!Gl::backend_from_string(*renderer).has_value()) {
 			throw ParameterError(
 			   CmdLineVerbosity::None,
-			   format(_("Invalid value for command line parameter --renderer=%s: expected 'gl21' "
-			            "or 'glcore'."),
+			   format(_("Invalid value for command line parameter --renderer=%s: expected "
+			            "'glcore'."),
 			          renderer.value()));
 		}
 		renderer_ = *renderer;

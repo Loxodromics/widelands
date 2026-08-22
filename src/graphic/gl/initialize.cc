@@ -33,7 +33,7 @@ namespace Gl {
 
 namespace {
 
-Backend g_obtained_backend = Backend::kOpenGL21;
+Backend g_obtained_backend = Backend::kOpenGLCore;
 
 // Adapts SDL's loader signature to glad2's GLADloadfunc, which returns a
 // GLADapiproc function pointer rather than void*.
@@ -70,9 +70,6 @@ void gl_trace_post_callback(void* /* ret */,
 }  // namespace
 
 std::optional<Backend> backend_from_string(const std::string& name) {
-	if (name == "gl21") {
-		return Backend::kOpenGL21;
-	}
 	if (name == "glcore") {
 		return Backend::kOpenGLCore;
 	}
@@ -81,8 +78,6 @@ std::optional<Backend> backend_from_string(const std::string& name) {
 
 const char* backend_name(Backend backend) {
 	switch (backend) {
-	case Backend::kOpenGL21:
-		return "gl21";
 	case Backend::kOpenGLCore:
 		return "glcore";
 	}
@@ -97,24 +92,16 @@ SDL_GLContext initialize(const Trace& trace,
                          SDL_Window* sdl_window,
                          GLint* max_texture_size,
                          Backend requested_backend) {
-	// GL context attributes for one request, parameterised by version and
-	// profile. WP-4 of the renderer modernization plan
-	// (Claude/RENDERER_MODERNIZATION_PLAN.md): the legacy 2.1 request keeps
-	// exactly the attributes this function has always used, and the core
-	// request is 3.3 with the forward-compatible flag (decision 6).
-	auto set_attributes = [](int major_version, int minor_version, int profile_mask,
-	                         int context_flags) {
-		SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, major_version);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, minor_version);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, profile_mask);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, context_flags);
-		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
-		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-	};
-	auto set_legacy_attributes = [&set_attributes]() {
-		set_attributes(2, 1, 0, 0);
-	};
+	// GL context attributes for the one request this function makes: 3.3 core,
+	// forward-compatible (WP-4 of the renderer modernization plan,
+	// Claude/RENDERER_MODERNIZATION_PLAN.md, decision 6).
+	SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
 	// Create a context from the attributes currently set, make it current,
 	// load the GL library and install the trace hooks. Runs for every context
@@ -168,56 +155,32 @@ SDL_GLContext initialize(const Trace& trace,
 		}
 	};
 
-	// Request the chosen backend. There is no ladder of intermediate versions
-	// (decision 6): a 3.3 core request is made once, and if it is not granted
-	// the only fallback is the legacy 2.1 request, made again on the same
-	// window. On a machine that genuinely cannot do 3.3 core this is exactly
-	// what the code has always requested, so the legacy path is unchanged.
-	const bool want_core = (requested_backend == Backend::kOpenGLCore);
-	if (want_core) {
-		set_attributes(3, 3, SDL_GL_CONTEXT_PROFILE_CORE, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
-	} else {
-		set_legacy_attributes();
-	}
 	SDL_GLContext gl_context = create_context(sdl_window);
-
-	// A core request that failed to create a context at all: fall back to
-	// legacy before deciding anything.
-	if (gl_context == nullptr && want_core) {
-		SDL_ClearError();
-		set_legacy_attributes();
-		gl_context = create_context(sdl_window);
-	}
-
-	// Decide what was actually obtained, and fall back to legacy if a core
-	// request came back with a version below 3.3. Drivers differ: NVIDIA grants
-	// exactly the version asked (RENDERER_MODERNIZATION.md §9.2), while macOS
-	// upgrades any core request to 4.1 (§9.1), which satisfies 3.3. An
-	// unreadable version string on the core attempt is treated as not granted.
-	Backend obtained_backend = Backend::kOpenGL21;
-	if (gl_context != nullptr) {
-		const char* const opengl_version_string =
-		   reinterpret_cast<const char*>(glGetString(GL_VERSION));
-		const auto version = opengl_version_string == nullptr ?
-		                        std::nullopt :
-		                        parse_version(opengl_version_string);
-		const bool core_granted = want_core && version.has_value() &&
-		                          (version->first > 3 ||
-		                           (version->first == 3 && version->second >= 3));
-		if (want_core && !core_granted) {
-			SDL_GL_MakeCurrent(sdl_window, nullptr);
-			SDL_GL_DeleteContext(gl_context);
-			SDL_ClearError();
-			set_legacy_attributes();
-			gl_context = create_context(sdl_window);
-		} else if (core_granted) {
-			obtained_backend = Backend::kOpenGLCore;
-		}
-	}
-
 	if (gl_context == nullptr) {
 		throw wexception("SDL_GL_CreateContext failed: %s", SDL_GetError());
 	}
+
+	// Verify the driver actually granted 3.3 core rather than assuming the
+	// request was honoured (WP-4): drivers differ in what they hand back for a
+	// core request. NVIDIA grants exactly the version asked
+	// (RENDERER_MODERNIZATION.md §9.2), while macOS upgrades any core request
+	// to 4.1 (§9.1), which still satisfies 3.3. There is no fallback left to
+	// drop to (WP-1 of the water rendering overhaul, Claude/WATER.md, removed
+	// the GL 2.1 legacy path) -- a driver that does not grant 3.3 core is a
+	// hard failure, same as a context that could not be created at all.
+	const char* const gl_version_probe = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+	const auto version =
+	   gl_version_probe == nullptr ? std::nullopt : parse_version(gl_version_probe);
+	const bool core_granted =
+	   version.has_value() && (version->first > 3 || (version->first == 3 && version->second >= 3));
+	if (!core_granted) {
+		SDL_GL_MakeCurrent(sdl_window, nullptr);
+		SDL_GL_DeleteContext(gl_context);
+		throw wexception("SDL_GL_CreateContext failed: driver did not grant an OpenGL 3.3 core "
+		                  "context (got \"%s\")",
+		                  gl_version_probe == nullptr ? "unknown" : gl_version_probe);
+	}
+	const Backend obtained_backend = Backend::kOpenGLCore;
 
 	// Show a basic SDL window with an error message, and log it too, then exit 1. Since font support
 	// does not exist for all languages, we show both the original and a localized text.
@@ -342,10 +305,8 @@ SDL_GLContext initialize(const Trace& trace,
 	log_info("Graphics: OpenGL: Vendor: \"%s\"\n",
 	         opengl_vendor_string == nullptr ? "unknown" : opengl_vendor_string);
 
-	const int required_major_version = obtained_backend == Backend::kOpenGLCore ? 3 : 2;
-	const int required_minor_version = obtained_backend == Backend::kOpenGLCore ? 3 : 1;
-	check_version(opengl_version_string, "OpenGL", _("OpenGL"), required_major_version,
-	              required_minor_version, handle_unreadable_opengl_version);
+	check_version(
+	   opengl_version_string, "OpenGL", _("OpenGL"), 3, 3, handle_unreadable_opengl_version);
 
 	// Record what was actually created, not what was requested (WP-3/WP-4 of the
 	// renderer modernization plan). The log line is what the dev harness

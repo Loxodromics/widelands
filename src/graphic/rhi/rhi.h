@@ -40,11 +40,7 @@
 // onto it are in Claude/RHI_INTERFACE.md. Read that before WP-10 (GL core
 // behind the RHI) or WP-12 (Vulkan bootstrap).
 //
-// Two properties are deliberately baked in and must not be relaxed:
-//
-// - OpenGL 2.1 is *not* a backend of this interface (decision 4 of the plan).
-//   It remains the frozen legacy path outside the RHI; the interface assumes
-//   VAOs, UBOs and descriptor sets with no degradation path.
+// One property is deliberately baked in and must not be relaxed:
 //
 // - The interface is backend-neutral: it does not include GL or Vulkan
 //   headers, and it owns the backend-specific coordinate conventions

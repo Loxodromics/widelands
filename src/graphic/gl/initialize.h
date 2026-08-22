@@ -30,14 +30,15 @@ namespace Gl {
 
 // The rendering backend the game was started with. WP-3 of the renderer
 // modernization plan (Claude/RENDERER_MODERNIZATION_PLAN.md) selects it via
-// --renderer; WP-4 requests a real GL 3.3 core context for kOpenGLCore and
-// falls back to kOpenGL21 if the driver cannot provide one.
+// --renderer. The frozen GL 2.1 legacy path was removed in WP-1 of the water
+// rendering overhaul (Claude/WATER.md); glcore is the only value left, kept
+// as an enum (rather than deleted outright) because the unmerged
+// render-vulkan branch extends it with a third value.
 enum class Backend {
-	kOpenGL21,
 	kOpenGLCore,
 };
 
-/// Maps the --renderer command line value ("gl21", "glcore") to a Backend.
+/// Maps the --renderer command line value ("glcore") to a Backend.
 /// Returns std::nullopt for unknown names.
 std::optional<Backend> backend_from_string(const std::string& name);
 /// The --renderer name of a backend, for logging and the dev harness.
