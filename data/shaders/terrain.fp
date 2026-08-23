@@ -30,6 +30,7 @@ precision highp float;
 
 #include "terrain_noise_params.glsl"
 #include "simplex_noise.glsl"
+#include "noise_fields.glsl"
 #include "terrain_variation.glsl"
 #include "terrain_lighting.glsl"
 

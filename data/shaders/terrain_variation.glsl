@@ -3,17 +3,10 @@
 // pulling in the u_time/u_warp_amplitude/u_bump_amplitude/u_tint_amplitude/u_cloud_amplitude
 // uniforms this file's functions below reference (GLSL resolves identifiers whether or not the
 // function using them is called, so including this file wholesale needs all of them declared).
-// simplex_noise.glsl must be included before this file.
-
-// Shared world-space scrolling-noise sample (Claude/WATER.md §4.9, WP-4): world position scaled
-// by a frequency (cycles per field), advanced by a velocity times game time, and moved into its
-// own part of the simplex domain by an offset so it decorrelates from every other field sampling
-// the same u_time. This is the pattern terrain_cloud_shadow() below established; callers apply
-// their own response curve (clamp, remap, sign) to the result. See the offset budget in
-// terrain_noise_params.glsl before picking a new offset for a new field.
-float scrolling_snoise(vec2 world_pos, float frequency, vec2 velocity, vec2 offset) {
-	return snoise(world_pos * frequency + u_time * velocity + offset);
-}
+// simplex_noise.glsl must be included before this file. WP-6 moved scrolling_snoise() itself, and
+// the cloud-shadow body it feeds, out to noise_fields.glsl for the same reason: water.vp/water.fp
+// have no per_program_state block to read u_time/u_cloud_amplitude from. noise_fields.glsl must be
+// included before this file too.
 
 // Terrain variation. The input is var_texture_position, which is world position
 // in units of one field. See Claude/TERRAIN_NOISE.md.
@@ -181,14 +174,16 @@ vec3 terrain_variation(vec2 world_pos) {
 }
 
 // Cloud shadow (Claude/VISUAL_FIDELITY_RANKED.md §4.8): one scrolling_snoise()
-// sample (see above) at regional scale, scrolled by u_time (gametime in
+// sample (noise_fields.glsl) at regional scale, scrolled by u_time (gametime in
 // seconds, wrapped -- see kCloudTimeWrapPeriod in terrain_noise.h) and
 // darkening the terrain where it is positive. max(n, 0.0) means the shadow
 // only ever subtracts light, never brightens -- physically what a cloud does
 // -- so roughly half the map is unshadowed at any instant. The frequency and
 // drift live in terrain_noise_params.glsl; u_cloud_amplitude is a uniform from
 // C++ and, like u_time, is deliberately not scaled by the terrain noise
-// strength option (see terrain_noise.h).
+// strength option (see terrain_noise.h). This wrapper exists so terrain.vp/
+// dither.vp can keep calling it unchanged; cloud_shadow() itself (noise_fields.glsl)
+// takes time/amplitude as parameters so water.vp can call it too (WP-6).
 //
 // Evaluated in the vertex shader (terrain.vp/dither.vp) and interpolated to
 // the fragment stage as var_cloud_shadow, not recomputed per fragment. It
@@ -198,6 +193,5 @@ vec3 terrain_variation(vec2 world_pos) {
 // is visually exact. The max(n, 0.0) clamp applies before interpolation; the
 // resulting sub-pixel error at the clamp contour is invisible at this scale.
 float terrain_cloud_shadow(vec2 world_pos) {
-	float n = scrolling_snoise(world_pos, kCloudFrequency, kCloudVelocity, kCloudOffset);
-	return 1.0 - u_cloud_amplitude * max(n, 0.0);
+	return cloud_shadow(world_pos, u_time, u_cloud_amplitude);
 }
