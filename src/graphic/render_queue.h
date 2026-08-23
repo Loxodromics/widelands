@@ -196,9 +196,10 @@ public:
 	// option). Amplitude 0 disables them; see terrain_noise.h.
 	void set_cloud_shadows(const bool enabled);
 
-	// Enables the false-colour shore-distance-field overlay (the --water-debug
-	// command line flag, WATER.md WP-3). Off by default: it would make the game
-	// unusable and invalidate the water_coast goldens.
+	// Switches the water pass (kTerrainWater, which runs unconditionally as of WP-6) into the
+	// false-colour shore-distance-field visualisation (the --water-debug command line flag,
+	// WATER.md WP-3) instead of the real wash. Off by default: it would make the game unusable
+	// and invalidate the water_coast goldens.
 	void set_water_debug(const bool enabled) {
 		water_debug_ = enabled;
 	}

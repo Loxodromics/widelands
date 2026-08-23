@@ -13,6 +13,7 @@ wl.Descriptions():new_terrain_type{
    temperature = 150,
    humidity = 999,
    fertility = 1,
+   seabed = "desert_beach",
    enhancement = { diking = "desert_beach" }
 }
 

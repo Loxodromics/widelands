@@ -23,6 +23,7 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/seabed.h"
 #include "graphic/gl/terrain_lighting.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
@@ -40,8 +41,7 @@ TerrainProgram::TerrainProgram() {
 	   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
 	   {"attr_normal", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, normal_x)},
 	   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-	   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
-	    offsetof(PerVertexData, texture_offset_x)},
+	   {"attr_texture_offset", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_offset_x)},
 	   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
 	};
 	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
@@ -120,11 +120,19 @@ void TerrainProgram::draw(
 	// all are packed into the same texture atlas, i.e. all are in the same GL
 	// texture. It does not check for this invariance for speeds sake.
 
+	resolve_seabed_terrains(terrains, &seabed_terrains_);
+
+	// Fog-of-war applies through the player's remembered terrain, not the map's actual one; null
+	// means "draw the true terrain" (no player, or seeing all) -- see triangle_terrain() (seabed.h).
+	const Widelands::Map* map =
+	   (player != nullptr) && !player->see_all() ? &player->egbase().map() : nullptr;
+
 	vertices_.clear();
 	vertices_.reserve(fields_to_draw.size() * 3);
 
 	for (size_t current_index = 0; current_index < fields_to_draw.size(); ++current_index) {
 		const FieldsToDraw::Field& field = fields_to_draw.at(current_index);
+		const int index = static_cast<int>(current_index);
 
 		// The bottom right neighbor fields_to_draw is needed for both triangles
 		// associated with this field. If it is not in fields_to_draw, there is no need to
@@ -136,9 +144,7 @@ void TerrainProgram::draw(
 		// Right triangle.
 		if (field.rn_index != FieldsToDraw::kInvalidIndex) {
 			const Widelands::DescriptionIndex terrain =
-			   (player != nullptr) && !player->see_all() ?
-			      player->fields()[player->egbase().map().get_index(field.fcoords)].terrains.load().r :
-			      field.fcoords.field->terrain_r();
+			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, false)];
 			const Vector2f texture_offset =
 			   to_gl_texture(terrains.get(terrain).get_texture(gametime).blit_data()).origin();
 			add_vertex(fields_to_draw.at(current_index), texture_offset);
@@ -149,9 +155,7 @@ void TerrainProgram::draw(
 		// Down triangle.
 		if (field.bln_index != FieldsToDraw::kInvalidIndex) {
 			const Widelands::DescriptionIndex terrain =
-			   (player != nullptr) && !player->see_all() ?
-			      player->fields()[player->egbase().map().get_index(field.fcoords)].terrains.load().d :
-			      field.fcoords.field->terrain_d();
+			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, true)];
 			const Vector2f texture_offset =
 			   to_gl_texture(terrains.get(terrain).get_texture(gametime).blit_data()).origin();
 			add_vertex(fields_to_draw.at(current_index), texture_offset);

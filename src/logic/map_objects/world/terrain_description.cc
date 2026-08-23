@@ -111,13 +111,13 @@ TerrainDescription::TerrainDescription(const LuaTable& table,
      temperature_(table.get_int("temperature")),
      fertility_(table.get_int("fertility")),
      humidity_(table.get_int("humidity")),
-     dither_amplitude_(
-        table.has_key("dither_amplitude") ?
-           static_cast<float>(table.get_double("dither_amplitude")) :
-           1.f),
-     dither_softness_(
-        table.has_key("dither_softness") ? static_cast<float>(table.get_double("dither_softness")) :
-                                           1.f) {
+     dither_amplitude_(table.has_key("dither_amplitude") ?
+                          static_cast<float>(table.get_double("dither_amplitude")) :
+                          1.f),
+     dither_softness_(table.has_key("dither_softness") ?
+                         static_cast<float>(table.get_double("dither_softness")) :
+                         1.f),
+     seabed_(table.has_key("seabed") ? table.get_string("seabed") : std::string()) {
 	if (dither_layer_disambiguator >= kMaxDitherLayerDisambiguator) {
 		throw wexception("Terrain %s: dither layer disambiguator %u exceeds maximum of %u",
 		                 name_.c_str(), dither_layer_disambiguator, kMaxDitherLayerDisambiguator);
@@ -152,12 +152,12 @@ TerrainDescription::TerrainDescription(const LuaTable& table,
 	// so this is only a sanity range, same shape as the temperature and
 	// humidity checks above.
 	if (dither_amplitude_ < 0.f || dither_amplitude_ > 4.f) {
-		throw GameDataError("%s: dither_amplitude %f is out of range [0, 4]", name_.c_str(),
-		                    dither_amplitude_);
+		throw GameDataError(
+		   "%s: dither_amplitude %f is out of range [0, 4]", name_.c_str(), dither_amplitude_);
 	}
 	if (dither_softness_ < 0.f || dither_softness_ > 10.f) {
-		throw GameDataError("%s: dither_softness %f is out of range [0, 10]", name_.c_str(),
-		                    dither_softness_);
+		throw GameDataError(
+		   "%s: dither_softness %f is out of range [0, 10]", name_.c_str(), dither_softness_);
 	}
 
 	for (const std::string& resource :
@@ -352,6 +352,10 @@ float TerrainDescription::dither_amplitude() const {
 
 float TerrainDescription::dither_softness() const {
 	return dither_softness_;
+}
+
+const std::string& TerrainDescription::seabed() const {
+	return seabed_;
 }
 
 std::string TerrainDescription::enhancement(const std::string& category) const {

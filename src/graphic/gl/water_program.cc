@@ -19,8 +19,10 @@
 #include "graphic/gl/water_program.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "base/log.h"
+#include "graphic/gl/terrain_noise.h"
 #include "graphic/rhi/device.h"
 
 namespace {
@@ -49,6 +51,7 @@ WaterProgram::WaterProgram() {
 	desc.vertex_layout.attributes = {
 	   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
 	   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
+	   {"attr_brightness", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, brightness)},
 	};
 	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
 	desc.blend = Rhi::kBlendAlpha;
@@ -69,6 +72,7 @@ void WaterProgram::add_vertex(const FieldsToDraw::Field& field) {
 	back.gl_y = field.gl_position.y;
 	back.texture_x = field.texture_coords.x;
 	back.texture_y = field.texture_coords.y;
+	back.brightness = field.brightness;
 }
 
 void WaterProgram::report_rebuild_cost() {
@@ -125,7 +129,9 @@ void WaterProgram::draw(
    const FieldsToDraw& fields_to_draw,
    const Widelands::Map& map,
    const Widelands::Player* player,
-   const float z_value) {
+   const float z_value,
+   const uint32_t gametime,
+   const bool debug) {
 	field_.rebuild(fields_to_draw, map, terrains, player);
 	report_rebuild_cost();
 	upload_distance_texture();
@@ -155,11 +161,18 @@ void WaterProgram::draw(
 	}
 	vertex_buffer_->update(vertices_.data(), vertices_.size() * sizeof(PerVertexData));
 
+	// Cloud shadows animate on the deterministic simulation clock; the wrap bounds the value's
+	// magnitude on long-running games, same as terrain_program.cc/dither_program.cc.
+	const float time = std::fmod(static_cast<float>(gametime) / 1000.0f, kCloudTimeWrapPeriod);
+
 	WaterProgramState state{};
 	state.z_value = z_value;
 	state.max_distance = ShoreDistanceField::kMaxShoreDistance;
 	state.contour_spacing = kContourSpacing;
 	state.zero_band = kZeroBand;
+	state.time = time;
+	state.cloud_amplitude = cloud_amplitude_;
+	state.debug = debug ? 1.f : 0.f;
 	state.grid_x = static_cast<float>(field_.cx0());
 	state.grid_y = static_cast<float>(field_.cy0());
 	state.inv_grid_width = 1.f / static_cast<float>(field_.width());

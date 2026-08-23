@@ -227,11 +227,14 @@ const vec2 kDitherMidOffset = vec2(-55.3, 18.2);
 // snoise calls, same technique as terrain_warp() above, so the x/y displacement is isotropic.
 //
 // The amplitude is bounded on two independent sides, both against the frequency:
-//  - kGridMarginCells (shore_distance_field.h) gives the field 13 cells (~1 field width) of
-//    slack past kMaxShoreDistance before WP-3's translation-invariance argument breaks down, so
-//    kWaterWarpAmplitude must stay under 1.0 field width or the field at the frame edge becomes
-//    view-dependent again and the panning gate starts failing. Raise kGridMarginCells (a
-//    one-line change, +7% cells at 1080p/zoom 1, 29 ns/cell) rather than silently exceeding this.
+//  - kGridMarginCells (shore_distance_field.h) is 28, of which 24 cells cover the
+//    kMaxShoreDistance clamp and 2 more the chamfer metric's diagonal overestimate -- committed
+//    before this warp existed, not free for a second purpose (found the hard way at WP-5, see
+//    shore_distance_field.h's own comment). That leaves 2 cells (1 field width) of slack for this
+//    warp, so kWaterWarpAmplitude must stay under 1.0 field width or the field at the frame edge
+//    becomes view-dependent again and the panning gate starts failing. Raise kGridMarginCells (a
+//    one-line change, +7% cells at 1080p/zoom 1 per 2-cell rise, 29 ns/cell) rather than silently
+//    exceeding this.
 //  - Fold-over: the warp map p -> p + A*n(f*p) stops being injective once A*f*|grad snoise|
 //    exceeds 1, and Ashima simplex peaks near |grad| ~= 4.2, so A*f >~ 0.2 already folds
 //    occasionally. Mild fold-over reads as inlets and islets and is wanted; pushing A*f towards
@@ -245,3 +248,20 @@ const float kWaterWarpFrequency = 0.25;   // cycles per field: a four-field wave
 const float kWaterWarpAmplitude = 0.8;    // peak displacement, field widths
 const vec2 kWaterWarpOffset1 = vec2(-128.6, 84.2);
 const vec2 kWaterWarpOffset2 = vec2(63.4, -147.1);
+
+// The water wash (water.fp; Claude/WATER.md WP-6): a flat colour composited over the seabed the
+// terrain pass draws for water triangles, with its edge coming from water_shore_warp()'s field
+// rather than the field lattice. No depth ramp yet -- WP-7 replaces kWaterColor with a
+// shallow/mid/deep stop ramp keyed on |shore|; these three constants are its STARTING POINT.
+//
+// kWaterColor is the Appendix's measured reference *mid* tone (80,135,175)/255, picked as the
+// single flat colour because WP-6 has no depth signal to choose shallow or deep from yet.
+// kWaterOpacity is high enough that deep water does not show the seabed through it (the
+// Appendix's complaint about our own water texture was the opposite failure -- a wash so weak the
+// floor read as visible everywhere), while still leaving a tenth of the seabed subtly readable
+// per §4.4 ("depth controls how much of it survives"). kWaterEdgeWidth is in field widths (the
+// same unit |shore| is stored in), with an fwidth() floor following what kDitherMinWidth does for
+// dither.fp -- so the transition band never collapses to sub-pixel and aliases when zoomed out.
+const vec3 kWaterColor = vec3(80.0, 135.0, 175.0) / 255.0;
+const float kWaterOpacity = 0.9;
+const float kWaterEdgeWidth = 0.5;  // half a cell either side of the coastline, in field widths

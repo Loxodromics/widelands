@@ -20,9 +20,11 @@
 #define WL_GRAPHIC_GL_TERRAIN_PROGRAM_H
 
 #include <memory>
+#include <vector>
 
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/seabed.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/rhi.h"
@@ -90,6 +92,10 @@ private:
 	// Objects below are kept around to avoid memory allocations on each frame.
 	// They could theoretically also be recreated.
 	std::vector<PerVertexData> vertices_;
+
+	// The seabed substitution table (Claude/WATER.md WP-6), rebuilt once per draw() by
+	// resolve_seabed_terrains() (graphic/gl/seabed.h).
+	std::vector<Widelands::DescriptionIndex> seabed_terrains_;
 
 	DISALLOW_COPY_AND_ASSIGN(TerrainProgram);
 };

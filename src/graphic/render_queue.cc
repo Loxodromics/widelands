@@ -177,6 +177,7 @@ void RenderQueue::set_cloud_shadows(const bool enabled) {
 	const float amplitude = enabled ? kCloudShadowAmplitude : 0.0f;
 	terrain_program_->set_cloud_amplitude(amplitude);
 	dither_program_->set_cloud_amplitude(amplitude);
+	water_program_->set_cloud_amplitude(amplitude);
 }
 
 void RenderQueue::enqueue(const Item& given_item) {
@@ -279,7 +280,8 @@ void RenderQueue::draw_items(const std::vector<Item>& items) {
 			ScopedScissor scoped_scissor(item.terrain_arguments.destination_rect);
 			water_program_->draw(*item.terrain_arguments.terrains,
 			                     *item.terrain_arguments.fields_to_draw, *item.terrain_arguments.map,
-			                     item.terrain_arguments.player, item.z_value);
+			                     item.terrain_arguments.player, item.z_value,
+			                     item.terrain_arguments.gametime, water_debug_);
 			++i;
 		} break;
 
@@ -298,20 +300,19 @@ void RenderQueue::draw_items(const std::vector<Item>& items) {
 
 		case Program::kTerrainWorkarea: {
 			ScopedScissor scoped_scissor(item.terrain_arguments.destination_rect);
-			workarea_program_->draw(
-			   item.terrain_arguments.terrains->get(0).get_texture(0).blit_data(),
-			   item.terrain_arguments.workareas, *item.terrain_arguments.fields_to_draw, item.z_value,
-			   Vector2f(item.terrain_arguments.renderbuffer_width,
-			            item.terrain_arguments.renderbuffer_height));
+			workarea_program_->draw(item.terrain_arguments.terrains->get(0).get_texture(0).blit_data(),
+			                        item.terrain_arguments.workareas,
+			                        *item.terrain_arguments.fields_to_draw, item.z_value,
+			                        Vector2f(item.terrain_arguments.renderbuffer_width,
+			                                 item.terrain_arguments.renderbuffer_height));
 			++i;
 		} break;
 
 		case Program::kTerrainGrid: {
 			ScopedScissor scoped_scissor(item.terrain_arguments.destination_rect);
-			grid_program_->draw(
-			   item.terrain_arguments.terrains->get(0).get_texture(0).blit_data(),
-			   *item.terrain_arguments.fields_to_draw, item.z_value,
-			   item.terrain_arguments.height_heat_map);
+			grid_program_->draw(item.terrain_arguments.terrains->get(0).get_texture(0).blit_data(),
+			                    *item.terrain_arguments.fields_to_draw, item.z_value,
+			                    item.terrain_arguments.height_heat_map);
 			++i;
 		} break;
 

@@ -93,19 +93,19 @@ void draw_terrain(uint32_t gametime,
 	i.program_id = RenderQueue::Program::kTerrainDitherOrHeightHeatMap;
 	RenderQueue::instance().enqueue(i);
 
-	if (RenderQueue::instance().water_debug_enabled()) {
-		/* The false-colour shore-distance-field overlay (--water-debug,
-		 * WATER.md WP-3). Off by default, so the render is unchanged and the
-		 * water_coast goldens stay valid.
-		 *
-		 * After the dither, not before it: blended items draw in enqueue order,
-		 * and the dither draws terrain texture at partial alpha exactly along
-		 * the coastline, which is where the overlay has to be judged. This is
-		 * also where D2's wash over a drawn seabed belongs at WP-6.
-		 */
-		i.program_id = RenderQueue::Program::kTerrainWater;
-		RenderQueue::instance().enqueue(i);
-	}
+	/* The water pass (WATER.md WP-6): a flat colour wash over the seabed the terrain pass just
+	 * drew for water triangles, with its edge coming from the shore distance field. Runs
+	 * unconditionally -- water is an ordinary terrain layer now, with no on/off switch (D2) --
+	 * unlike the WP-3/WP-5 debug-only overlay this replaces, which only enqueued under
+	 * --water-debug. That flag still exists, but now selects the pass's false-colour
+	 * visualisation instead of gating whether it draws at all (RenderQueue::water_debug_enabled()).
+	 *
+	 * After the dither, not before it: blended items draw in enqueue order, and the dither draws
+	 * terrain texture at partial alpha exactly along the coastline, which is where D2's wash has
+	 * to composite.
+	 */
+	i.program_id = RenderQueue::Program::kTerrainWater;
+	RenderQueue::instance().enqueue(i);
 
 	if (!workarea.empty()) {
 		// Enqueue the drawing of the workarea overlay layer.

@@ -23,6 +23,7 @@
 
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/seabed.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
 #include "graphic/rhi/rhi.h"
@@ -148,6 +149,10 @@ private:
 	// Parallel to 'fields_to_draw': the terrains meeting at each field vertex,
 	// rebuilt once per draw by collect_vertex_terrains().
 	std::vector<TerrainSet> vertex_terrains_;
+
+	// The seabed substitution table (Claude/WATER.md WP-6), rebuilt once per draw() by
+	// resolve_seabed_terrains() (graphic/gl/seabed.h).
+	std::vector<Widelands::DescriptionIndex> seabed_terrains_;
 };
 
 #endif  // end of include guard: WL_GRAPHIC_GL_DITHER_PROGRAM_H

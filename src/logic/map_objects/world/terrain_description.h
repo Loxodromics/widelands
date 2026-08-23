@@ -135,6 +135,12 @@ public:
 	[[nodiscard]] std::string enhancement(const std::string& category) const;
 	void set_enhancement(const std::string& category, const std::string& terrain);
 
+	/// The terrain name drawn under the water wash in place of this terrain's own texture
+	/// (Claude/WATER.md WP-6), for a Is::kWater terrain. Empty if this terrain has none (the
+	/// common case for every non-water terrain, and a legitimate state for water too -- see the
+	/// call site in graphic/gl/seabed.cc for the fallback).
+	[[nodiscard]] const std::string& seabed() const;
+
 	void set_descname(std::string dn) {
 		descname_ = dn;
 	}
@@ -155,6 +161,7 @@ private:
 	int humidity_;
 	float dither_amplitude_;
 	float dither_softness_;
+	std::string seabed_;
 	std::map<std::string, std::string> enhancement_;
 	std::vector<std::string> texture_paths_;
 	std::vector<const Image*> textures_;

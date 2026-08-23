@@ -604,7 +604,17 @@ DescriptionIndex Descriptions::load_ship(const std::string& shipname) {
 DescriptionIndex Descriptions::load_terrain(const std::string& terrainname) {
 	const std::string& looked_up_name = compatibility_table_->lookup_terrain(terrainname);
 	description_manager_->load_description(looked_up_name);
-	return safe_terrain_index(looked_up_name);
+	const DescriptionIndex index = safe_terrain_index(looked_up_name);
+	// The seabed drawn under this terrain's water wash (Claude/WATER.md WP-6) needs to be in the
+	// texture atlas even on a map that never places it as ordinary land. terrain_index() (not
+	// safe_terrain_index()) is the not-yet-loaded check: it is already registered by the time we
+	// get here, so if the seabed's own seabed ever pointed back at us, this guard is what stops
+	// the recursion rather than throwing.
+	const std::string& seabed = get_terrain_descr(index)->seabed();
+	if (!seabed.empty() && terrain_index(seabed) == INVALID_INDEX) {
+		load_terrain(seabed);
+	}
+	return index;
 }
 
 DescriptionIndex Descriptions::load_ware(const std::string& warename) {

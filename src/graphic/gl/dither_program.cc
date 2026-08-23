@@ -22,6 +22,7 @@
 
 #include "graphic/gl/coordinate_conversion.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/seabed.h"
 #include "graphic/gl/terrain_lighting.h"
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/utils.h"
@@ -38,8 +39,7 @@ DitherProgram::DitherProgram() {
 	   {"attr_dither_ramp", Rhi::VertexFormat::kFloat, offsetof(PerVertexData, dither_ramp)},
 	   {"attr_normal", Rhi::VertexFormat::kVec3, offsetof(PerVertexData, normal_x)},
 	   {"attr_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, gl_x)},
-	   {"attr_texture_offset", Rhi::VertexFormat::kVec2,
-	    offsetof(PerVertexData, texture_offset_x)},
+	   {"attr_texture_offset", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_offset_x)},
 	   {"attr_texture_position", Rhi::VertexFormat::kVec2, offsetof(PerVertexData, texture_x)},
 	};
 	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
@@ -54,27 +54,6 @@ DitherProgram::DitherProgram() {
 	uniform_rhi_buffer_ =
 	   Rhi::device().create_buffer(sizeof(Gl::PerProgramState), Rhi::BufferUsage::kUniform);
 }
-
-namespace {
-
-/* The terrain of a field's 'd' or 'r' triangle, as the player should see it:
- * under fog of war that is what they saw last, not what is there now. 'map' is
- * null exactly when the true terrain applies (no player, or seeing all).
- */
-Widelands::DescriptionIndex triangle_terrain(const FieldsToDraw& fields_to_draw,
-                                             const Widelands::Map* map,
-                                             const Widelands::Player* player,
-                                             const int index,
-                                             const bool down_triangle) {
-	const Widelands::FCoords& fcoords = fields_to_draw.at(index).fcoords;
-	if (map != nullptr) {
-		const auto terrains = player->fields()[map->get_index(fcoords)].terrains.load();
-		return down_triangle ? terrains.d : terrains.r;
-	}
-	return down_triangle ? fcoords.field->terrain_d() : fcoords.field->terrain_r();
-}
-
-}  // namespace
 
 void DitherProgram::TerrainSet::add(const Widelands::DescriptionIndex terrain) {
 	if (contains(terrain)) {
@@ -128,7 +107,7 @@ void DitherProgram::collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
 		if (field.bln_index != FieldsToDraw::kInvalidIndex &&
 		    field.brn_index != FieldsToDraw::kInvalidIndex) {
 			const Widelands::DescriptionIndex terrain_d =
-			   triangle_terrain(fields_to_draw, map, player, index, true);
+			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, true)];
 			vertex_terrains_[i].add(terrain_d);
 			vertex_terrains_[field.bln_index].add(terrain_d);
 			vertex_terrains_[field.brn_index].add(terrain_d);
@@ -137,7 +116,7 @@ void DitherProgram::collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
 		if (field.rn_index != FieldsToDraw::kInvalidIndex &&
 		    field.brn_index != FieldsToDraw::kInvalidIndex) {
 			const Widelands::DescriptionIndex terrain_r =
-			   triangle_terrain(fields_to_draw, map, player, index, false);
+			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, false)];
 			vertex_terrains_[i].add(terrain_r);
 			vertex_terrains_[field.rn_index].add(terrain_r);
 			vertex_terrains_[field.brn_index].add(terrain_r);
@@ -250,6 +229,8 @@ void DitherProgram::draw(
 	vertices_.clear();
 	vertices_.reserve(fields_to_draw.size() * 3);
 
+	resolve_seabed_terrains(terrains, &seabed_terrains_);
+
 	const Widelands::Map* map =
 	   (player != nullptr) && !player->see_all() ? &player->egbase().map() : nullptr;
 
@@ -270,15 +251,17 @@ void DitherProgram::draw(
 		if (field.bln_index != FieldsToDraw::kInvalidIndex) {
 			add_dithering_triangles(
 			   gametime, terrains, fields_to_draw,
-			   BaseTriangle{{field.brn_index, index, field.bln_index},
-			                triangle_terrain(fields_to_draw, map, player, index, true)});
+			   BaseTriangle{
+			      {field.brn_index, index, field.bln_index},
+			      seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, true)]});
 		}
 
 		if (field.rn_index != FieldsToDraw::kInvalidIndex) {
 			add_dithering_triangles(
 			   gametime, terrains, fields_to_draw,
-			   BaseTriangle{{index, field.brn_index, field.rn_index},
-			                triangle_terrain(fields_to_draw, map, player, index, false)});
+			   BaseTriangle{
+			      {index, field.brn_index, field.rn_index},
+			      seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, false)]});
 		}
 	}
 

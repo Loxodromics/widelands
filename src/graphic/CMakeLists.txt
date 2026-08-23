@@ -283,6 +283,8 @@ wl_library(graphic_terrain_programs
     gl/terrain_lighting.h
     gl/dither_program.cc
     gl/dither_program.h
+    gl/seabed.cc
+    gl/seabed.h
     gl/shore_distance_field.cc
     gl/shore_distance_field.h
     gl/water_program.cc
