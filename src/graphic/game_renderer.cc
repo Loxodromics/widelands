@@ -57,6 +57,7 @@ void draw_border_markers(const FieldsToDraw::Field& field,
 
 void draw_terrain(uint32_t gametime,
                   const Widelands::Descriptions& descriptions,
+                  const Widelands::Map& map,
                   const FieldsToDraw& fields_to_draw,
                   const float scale,
                   const Workareas& workarea,
@@ -84,12 +85,27 @@ void draw_terrain(uint32_t gametime,
 	i.terrain_arguments.scale = scale;
 	i.terrain_arguments.player = player;
 	i.terrain_arguments.height_heat_map = height_heat_map;
+	i.terrain_arguments.map = &map;
 	RenderQueue::instance().enqueue(i);
 
 	// Enqueue the drawing of the dither layer or height heat map layer.
 	i.blend_mode = BlendMode::UseAlpha;
 	i.program_id = RenderQueue::Program::kTerrainDitherOrHeightHeatMap;
 	RenderQueue::instance().enqueue(i);
+
+	if (RenderQueue::instance().water_debug_enabled()) {
+		/* The false-colour shore-distance-field overlay (--water-debug,
+		 * WATER.md WP-3). Off by default, so the render is unchanged and the
+		 * water_coast goldens stay valid.
+		 *
+		 * After the dither, not before it: blended items draw in enqueue order,
+		 * and the dither draws terrain texture at partial alpha exactly along
+		 * the coastline, which is where the overlay has to be judged. This is
+		 * also where D2's wash over a drawn seabed belongs at WP-6.
+		 */
+		i.program_id = RenderQueue::Program::kTerrainWater;
+		RenderQueue::instance().enqueue(i);
+	}
 
 	if (!workarea.empty()) {
 		// Enqueue the drawing of the workarea overlay layer.

@@ -29,6 +29,7 @@
 #include "graphic/color.h"
 #include "graphic/gl/draw_line_program.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "logic/map.h"
 #include "logic/map_objects/description_maintainer.h"
 #include "logic/map_objects/world/terrain_description.h"
 
@@ -36,6 +37,7 @@ class DitherProgram;
 class GridProgram;
 class RoadProgram;
 class TerrainProgram;
+class WaterProgram;
 class WorkareaProgram;
 
 // The RenderQueue is a singleton implementing the concept of deferred
@@ -80,6 +82,10 @@ class RenderQueue {
 public:
 	enum Program {
 		kTerrainBase,
+		// Blended items sort by z first, so the position among the terrain
+		// programs is cosmetic; it sits next to kTerrainBase because that is
+		// where the water pass belongs conceptually (WATER.md WP-3/WP-6).
+		kTerrainWater,
 		kTerrainDitherOrHeightHeatMap,
 		kTerrainWorkarea,
 		kTerrainGrid,
@@ -128,6 +134,10 @@ public:
 		Rectf destination_rect = Rectf(0.f, 0.f, 0.f, 0.f);
 		const Widelands::Player* player = nullptr;
 		bool height_heat_map = false;
+		// The water pass seeds its distance field from terrain outside the drawn
+		// window (its grid carries a margin), so it needs the map rather than
+		// just the FieldsToDraw.
+		const Widelands::Map* map = nullptr;
 	};
 
 	// The union of all possible program arguments represents an Item that is
@@ -186,6 +196,16 @@ public:
 	// option). Amplitude 0 disables them; see terrain_noise.h.
 	void set_cloud_shadows(const bool enabled);
 
+	// Enables the false-colour shore-distance-field overlay (the --water-debug
+	// command line flag, WATER.md WP-3). Off by default: it would make the game
+	// unusable and invalidate the water_coast goldens.
+	void set_water_debug(const bool enabled) {
+		water_debug_ = enabled;
+	}
+	[[nodiscard]] bool water_debug_enabled() const {
+		return water_debug_;
+	}
+
 private:
 	RenderQueue();
 
@@ -200,6 +220,9 @@ private:
 	std::unique_ptr<WorkareaProgram> workarea_program_;
 	std::unique_ptr<GridProgram> grid_program_;
 	std::unique_ptr<RoadProgram> road_program_;
+	std::unique_ptr<WaterProgram> water_program_;
+
+	bool water_debug_{false};
 
 	std::vector<Item> blended_items_;
 	std::vector<Item> opaque_items_;

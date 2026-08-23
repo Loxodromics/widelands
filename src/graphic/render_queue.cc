@@ -32,6 +32,7 @@
 #include "graphic/gl/terrain_noise.h"
 #include "graphic/gl/terrain_program.h"
 #include "graphic/gl/utils.h"
+#include "graphic/gl/water_program.h"
 #include "graphic/gl/workarea_program.h"
 #include "graphic/rhi/device.h"
 
@@ -43,7 +44,10 @@ namespace {
 //   - we batch up by program to have maximal batching.
 //   - and we want to render frontmost objects first, so that we do not render
 //     any pixel more than once.
-static_assert(RenderQueue::Program::kHighestProgramId <= 8,
+// Both key layouts below reserve exactly 4 bits for the program id (bits 60-63
+// in make_key_opaque, 36-39 in make_key_blended), neither overlapping its
+// neighbouring field, so 16 programs is the real bound.
+static_assert(RenderQueue::Program::kHighestProgramId <= 16,
               "Need to change sorting keys.");  // 4 bits.
 
 uint64_t
@@ -154,7 +158,8 @@ RenderQueue::RenderQueue()
      dither_program_(new DitherProgram()),
      workarea_program_(new WorkareaProgram()),
      grid_program_(new GridProgram()),
-     road_program_(new RoadProgram()) {
+     road_program_(new RoadProgram()),
+     water_program_(new WaterProgram()) {
 }
 
 // static
@@ -186,6 +191,7 @@ void RenderQueue::enqueue(const Item& given_item) {
 	case Program::kLine:
 	case Program::kRect:
 	case Program::kTerrainBase:
+	case Program::kTerrainWater:
 	case Program::kTerrainDitherOrHeightHeatMap:
 	case Program::kTerrainWorkarea:
 	case Program::kTerrainGrid:
@@ -266,6 +272,14 @@ void RenderQueue::draw_items(const std::vector<Item>& items) {
 			terrain_program_->draw(item.terrain_arguments.gametime, *item.terrain_arguments.terrains,
 			                       *item.terrain_arguments.fields_to_draw, item.z_value,
 			                       item.terrain_arguments.player);
+			++i;
+		} break;
+
+		case Program::kTerrainWater: {
+			ScopedScissor scoped_scissor(item.terrain_arguments.destination_rect);
+			water_program_->draw(*item.terrain_arguments.terrains,
+			                     *item.terrain_arguments.fields_to_draw, *item.terrain_arguments.map,
+			                     item.terrain_arguments.player, item.z_value);
 			++i;
 		} break;
 

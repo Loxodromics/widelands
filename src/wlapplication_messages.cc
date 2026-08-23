@@ -150,6 +150,10 @@ void fill_parameter_vector() {
 	      "--capture-ui=all. They are hidden by default because the info panel draws real-time "
 	      "dependent content, which makes captures differ between runs. Only valid with --capture."),
 	    false},
+	   {"", "water-debug", "",
+	    _("Draw the shore distance field as a false-colour debug overlay over the map. A "
+	      "development instrument for the water rendering work; it makes the game unplayable."),
+	    false},
 	   {"", "fixed-timestep",
 	    /** TRANSLATORS: A placeholder for a time value in milliseconds */
 	    _("ms"),

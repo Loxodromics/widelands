@@ -499,6 +499,12 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 	// unlike bump/tint/warp they are atmospheric motion, not surface texture,
 	// and stay on even at noise strength 0 (terrain_noise.h).
 	RenderQueue::instance().set_cloud_shadows(get_config_bool("cloud_shadows", true));
+
+	// The shore-distance-field debug overlay (--water-debug, WATER.md WP-3).
+	// A command line flag rather than a config option: it is a development
+	// instrument, used interactively while tuning and under the capture
+	// harness, not something to leave switched on.
+	RenderQueue::instance().set_water_debug(water_debug_);
 	/*
 	 * End of text rendering dependencies
 	 *****/
@@ -1666,6 +1672,8 @@ void WLApplication::handle_commandline_parameters() {
 	if (check_commandline_flag("verbose-i18n")) {
 		i18n::enable_verbose_i18n();
 	}
+
+	water_debug_ = check_commandline_flag("water-debug");
 
 	if (OptionalParameter localedir_option = get_commandline_option_value("localedir");
 	    localedir_option.has_value()) {

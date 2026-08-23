@@ -273,6 +273,9 @@ private:
 	/// Makes it possible to disable the fullscreen and screenshot shortcuts
 	bool handle_key_enabled_{true};
 
+	/// Draw the false-colour shore-distance-field overlay (--water-debug).
+	bool water_debug_{false};
+
 	/// true if an external entity wants us to quit
 	std::atomic_bool should_die_{false};
 

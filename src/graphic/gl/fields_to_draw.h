@@ -123,6 +123,21 @@ public:
 		return (fy - min_fy_) * w_ + (fx - min_fx_);
 	}
 
+	// The geometric field bounds this was reset() for. The shore distance field
+	// derives its own grid window from them (shore_distance_field.h).
+	[[nodiscard]] inline int min_fx() const {
+		return min_fx_;
+	}
+	[[nodiscard]] inline int max_fx() const {
+		return max_fx_;
+	}
+	[[nodiscard]] inline int min_fy() const {
+		return min_fy_;
+	}
+	[[nodiscard]] inline int max_fy() const {
+		return max_fy_;
+	}
+
 private:
 	// Minimum and maximum field coordinates (geometric) to render. Can be negative.
 	int min_fx_ = 0;

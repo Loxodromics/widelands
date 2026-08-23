@@ -22,9 +22,11 @@
 #include "graphic/gl/fields_to_draw.h"
 #include "logic/map_objects/descriptions.h"
 
-// Draw the terrain only.
+// Draw the terrain only. 'map' is needed by the water pass, whose distance
+// field is seeded from terrain outside the drawn window (WATER.md WP-3).
 void draw_terrain(uint32_t gametime,
                   const Widelands::Descriptions& descriptions,
+                  const Widelands::Map& map,
                   const FieldsToDraw& fields_to_draw,
                   float scale,
                   const Workareas& workarea,

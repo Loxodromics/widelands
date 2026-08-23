@@ -219,6 +219,7 @@ wl_library(graphic_render_queue
     graphic_gl_utils
     graphic_rhi
     graphic_terrain_programs
+    logic_map
     logic_map_objects
     logic_map_objects_description_maintainer
 )
@@ -282,10 +283,15 @@ wl_library(graphic_terrain_programs
     gl/terrain_lighting.h
     gl/dither_program.cc
     gl/dither_program.h
+    gl/shore_distance_field.cc
+    gl/shore_distance_field.h
+    gl/water_program.cc
+    gl/water_program.h
     gl/workarea_program.cc
     gl/workarea_program.h
   USES_ATOMIC
   DEPENDS
+    base
     base_exceptions
     base_geometry
     base_macros
@@ -295,6 +301,7 @@ wl_library(graphic_terrain_programs
     graphic_rhi
     graphic_surface
     logic
+    logic_map
     logic_map_objects
     logic_map_objects_description_maintainer
     wui_mapviewpixelfunctions
