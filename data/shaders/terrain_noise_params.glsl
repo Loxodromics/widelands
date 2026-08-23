@@ -2,6 +2,29 @@
 // (unlike the three amplitudes in src/graphic/gl/terrain_noise.h, which are
 // uniforms and need one). See Claude/TERRAIN_NOISE.md.
 
+// The offset budget (Claude/WATER.md §4.9, WP-4). Every noise field below samples the same
+// simplex domain, so two fields at the same offset (or at offsets a simple multiple/rotation of
+// each other) would beat against one another and read as correlated rather than as independent
+// texture. Each field's offset is chosen to land far from every other one listed here, in an
+// otherwise arbitrary part of the domain. This is the one place to check before adding a new
+// field's offset -- do not invent one by only looking at a neighbouring constant's comment.
+//
+// field           frequency        velocity (scroll)         offset
+// bump            kOctave1/2/3Frequency   static             none -- this is the field every
+//                                                             other one below decorrelates from
+// tint            kTintFrequencyLow/High  static             kTintOffset
+// warp            kWarpFrequency          static             kWarpOffset1, kWarpOffset2
+// cloud shadow    kCloudFrequency         kCloudVelocity      kCloudOffset
+// dither shape    kDitherShapeFreq        static              kDitherShapeOffset
+// dither mid      kDitherMidFreq          static              kDitherMidOffset
+// dither grain    kDitherGrainFrequency   static              none -- cell-hashed, not simplex,
+//                                                             so it cannot correlate with the
+//                                                             fields above by construction
+//
+// Cloud shadow is the only scrolling field today; scrolling_snoise() (terrain_variation.glsl) is
+// the shared helper for any later one (WP-8's wave layers). A new field goes in this table with
+// its own row when it lands.
+
 // Rotate between octaves so the simplex lattice axes never line up.
 const mat2 kOctaveRotation = mat2(0.80, 0.60, -0.60, 0.80);
 
@@ -80,6 +103,7 @@ const float kTintFrequencyHigh = 5.5;
 const float kTintWeightLow = 1.0;
 const float kTintWeightHigh = 0.35;
 const float kTintWeightSum = 1.35;
+const vec2 kTintOffset = vec2(41.7, -13.2);  // arbitrary; only needs to land far from p=0
 
 // Warp frequency follows the same antiphase rule as octave 3 (see above) and
 // tracks it to the same value, 8.5 as of 2026-08-16 (this comment previously
@@ -89,6 +113,12 @@ const float kTintWeightSum = 1.35;
 // Kept in sync in case the amplitude is ever raised again. See the aliasing
 // note above octave 3 if it is.
 const float kWarpFrequency = 8.5;
+
+// Offset in texture coordinates for terrain_warp()'s two independent snoise calls
+// (terrain_variation.glsl) -- arbitrary; only need to differ from each other and land far from
+// p=0, same technique as kTintOffset above.
+const vec2 kWarpOffset1 = vec2(17.3, 5.1);
+const vec2 kWarpOffset2 = vec2(-9.7, 23.4);
 
 // Cloud shadow (terrain_cloud_shadow(), terrain_variation.glsl): one snoise octave at regional
 // scale, scrolled by u_time (kCloudVelocity), darkening the terrain where it is positive. The

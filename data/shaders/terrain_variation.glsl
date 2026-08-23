@@ -81,6 +81,16 @@ vec3 snoise_grad(vec2 v) {
 	return vec3(value, grad);
 }
 
+// Shared world-space scrolling-noise sample (Claude/WATER.md §4.9, WP-4): world position scaled
+// by a frequency (cycles per field), advanced by a velocity times game time, and moved into its
+// own part of the simplex domain by an offset so it decorrelates from every other field sampling
+// the same u_time. This is the pattern terrain_cloud_shadow() below established; callers apply
+// their own response curve (clamp, remap, sign) to the result. See the offset budget in
+// terrain_noise_params.glsl before picking a new offset for a new field.
+float scrolling_snoise(vec2 world_pos, float frequency, vec2 velocity, vec2 offset) {
+	return snoise(world_pos * frequency + u_time * velocity + offset);
+}
+
 // Terrain variation. The input is var_texture_position, which is world position
 // in units of one field. See Claude/TERRAIN_NOISE.md.
 //
@@ -156,12 +166,12 @@ vec3 terrain_bump_normal(vec3 normal, vec2 world_pos) {
 }
 
 // Warm/cool ("tint") field: an independently sampled 2-octave fBm, offset into
-// an unrelated part of the simplex domain (kTintOffset below) so it shares no
-// structure with the bump field -- the same technique terrain_warp()
-// uses below to keep its x/y displacement independent of the colour
-// variation. Low octave dominates and gives tint its slow, broad "material"
-// read (drier patches yellower, shaded growth cooler and greener -- see
-// Claude/TERRAIN_NOISE.md §6); the high octave is a smaller admixture that
+// an unrelated part of the simplex domain (kTintOffset, terrain_noise_params.glsl)
+// so it shares no structure with the bump field -- the same technique
+// terrain_warp() uses below to keep its x/y displacement independent of the
+// colour variation. Low octave dominates and gives tint its slow, broad
+// "material" read (drier patches yellower, shaded growth cooler and greener --
+// see Claude/TERRAIN_NOISE.md §6); the high octave is a smaller admixture that
 // breaks up the low octave's smooth, rounded undulation. Neither carries the
 // antiphase constraint that pins the bump field's octave 3 and the warp
 // frequency -- tint has no repeat-breaking job (§16) -- so both are free
@@ -172,8 +182,6 @@ vec3 terrain_bump_normal(vec3 normal, vec2 world_pos) {
 // negative weight purely to keep its two projections of the same three
 // numbers decorrelated. That requirement is gone -- these two weights just
 // say how much each tint octave contributes.
-const vec2 kTintOffset = vec2(41.7, -13.2);  // arbitrary; only needs to land far from p=0
-
 float terrain_tint_field(vec2 p) {
 	mat2 rot = kOctaveRotation;
 	float lo = snoise(p * kTintFrequencyLow + kTintOffset);
@@ -186,14 +194,15 @@ float terrain_tint_field(vec2 p) {
 // shaders so the sampled texel moves instead of its brightness. See
 // Claude/TERRAIN_NOISE.md §17. kWarpFrequency lives in terrain_noise_params.glsl.
 //
-// Offset in texture coordinates. Two dedicated snoise calls so the x and y
-// displacements are independent; reusing the existing octaves would couple
-// the warp to the colour variation and make it anisotropic, because those
-// are single scalars at fixed frequencies chosen for a different job.
+// Offset in texture coordinates (kWarpOffset1/2, terrain_noise_params.glsl). Two
+// dedicated snoise calls so the x and y displacements are independent; reusing
+// the existing octaves would couple the warp to the colour variation and make
+// it anisotropic, because those are single scalars at fixed frequencies chosen
+// for a different job.
 vec2 terrain_warp(vec2 world_pos) {
 	return u_warp_amplitude * vec2(
-		snoise(world_pos * kWarpFrequency + vec2(17.3, 5.1)),
-		snoise(world_pos * kWarpFrequency + vec2(-9.7, 23.4)));
+		snoise(world_pos * kWarpFrequency + kWarpOffset1),
+		snoise(world_pos * kWarpFrequency + kWarpOffset2));
 }
 
 // Terrain-transition ("dither") shape field, sampled in dither.fp only. It
@@ -247,15 +256,15 @@ vec3 terrain_variation(vec2 world_pos) {
 	return mix(vec3(1.0), kWarmTint, u_tint_amplitude * tint);
 }
 
-// Cloud shadow (Claude/VISUAL_FIDELITY_RANKED.md §4.8): one snoise sample at
-// regional scale, scrolled by u_time (gametime in seconds, wrapped -- see
-// kCloudTimeWrapPeriod in terrain_noise.h) and darkening the terrain where it
-// is positive. max(n, 0.0) means the shadow only ever subtracts light, never
-// brightens -- physically what a cloud does -- so roughly half the map is
-// unshadowed at any instant. The frequencies and drift live in
-// terrain_noise_params.glsl; u_cloud_amplitude is a uniform from C++ and, like
-// u_time, is deliberately not scaled by the terrain noise strength option (see
-// terrain_noise.h).
+// Cloud shadow (Claude/VISUAL_FIDELITY_RANKED.md §4.8): one scrolling_snoise()
+// sample (see above) at regional scale, scrolled by u_time (gametime in
+// seconds, wrapped -- see kCloudTimeWrapPeriod in terrain_noise.h) and
+// darkening the terrain where it is positive. max(n, 0.0) means the shadow
+// only ever subtracts light, never brightens -- physically what a cloud does
+// -- so roughly half the map is unshadowed at any instant. The frequency and
+// drift live in terrain_noise_params.glsl; u_cloud_amplitude is a uniform from
+// C++ and, like u_time, is deliberately not scaled by the terrain noise
+// strength option (see terrain_noise.h).
 //
 // Evaluated in the vertex shader (terrain.vp/dither.vp) and interpolated to
 // the fragment stage as var_cloud_shadow, not recomputed per fragment. It
@@ -265,6 +274,6 @@ vec3 terrain_variation(vec2 world_pos) {
 // is visually exact. The max(n, 0.0) clamp applies before interpolation; the
 // resulting sub-pixel error at the clamp contour is invisible at this scale.
 float terrain_cloud_shadow(vec2 world_pos) {
-	float n = snoise(world_pos * kCloudFrequency + u_time * kCloudVelocity + kCloudOffset);
+	float n = scrolling_snoise(world_pos, kCloudFrequency, kCloudVelocity, kCloudOffset);
 	return 1.0 - u_cloud_amplitude * max(n, 0.0);
 }
