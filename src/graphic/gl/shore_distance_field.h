@@ -68,11 +68,25 @@ public:
 	 * field width, so the clamp above is 24 cells; the margin must exceed that
 	 * for the invariance argument to hold, because a seed outside the grid is
 	 * then always further away than the clamp and can never have been the
-	 * nearest one. The two spare cells absorb the chamfer metric's ~8 %
+	 * nearest one. Two of the spare cells absorb the chamfer metric's ~8 %
 	 * *over*estimate of Euclidean distance in near-diagonal directions -- which
 	 * errs on the safe side here, but costs nothing to cover.
+	 *
+	 * WP-5 (water.fp's water_shore_warp()) spends two more: it moves the
+	 * sampled position by up to kWaterWarpAmplitude field widths (2*A cells)
+	 * before the lookup, and that displacement needs its own headroom past the
+	 * clamp -- it is not covered by the two chamfer-error cells above, which
+	 * were already fully committed. This was found empirically: at the
+	 * previous margin of 26, panning by one field width produced a handful of
+	 * scattered non-identical pixels (not a uniform border band, because only
+	 * the rare cell where a near-maximal warp excursion coincides with a
+	 * near-maximal chamfer error actually exceeds the old margin) rather than
+	 * the exact match the invariance argument promises. 28 covers
+	 * kWaterWarpAmplitude = 0.8 (1.6 cells, rounded up to 2) with no headroom
+	 * to spare; raise this further before raising that amplitude. See
+	 * Claude/WATER.md §4.3.
 	 */
-	static constexpr int kGridMarginCells = 26;
+	static constexpr int kGridMarginCells = 28;
 
 	/* Recomputes the whole field for the currently drawn fields. Unconditional:
 	 * at §4.2's cell counts this is a fraction of a millisecond, and recomputing

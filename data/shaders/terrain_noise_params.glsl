@@ -20,6 +20,7 @@
 // dither grain    kDitherGrainFrequency   static              none -- cell-hashed, not simplex,
 //                                                             so it cannot correlate with the
 //                                                             fields above by construction
+// water warp      kWaterWarpFrequency     static             kWaterWarpOffset1, kWaterWarpOffset2
 //
 // Cloud shadow is the only scrolling field today; scrolling_snoise() (terrain_variation.glsl) is
 // the shared helper for any later one (WP-8's wave layers). A new field goes in this table with
@@ -217,3 +218,30 @@ const float kDitherMinWidth = 1e-4;
 // itself (same technique as kTintOffset).
 const vec2 kDitherShapeOffset = vec2(73.1, -41.8);
 const vec2 kDitherMidOffset = vec2(-55.3, 18.2);
+
+// Water shore-distance domain warp (water_shore_warp(), water.fp; Claude/WATER.md §4.3, WP-5).
+// Displaces the position at which the shore distance field is sampled, so the field's contours
+// -- lattice polygons at source, see §4.3 -- read as an irregular coast instead of an offset
+// polygon. Static (no u_time term): the warp only needs to break up the lattice shape, not
+// animate, so water.fp does not need u_time in its uniform block for this. Two independent
+// snoise calls, same technique as terrain_warp() above, so the x/y displacement is isotropic.
+//
+// The amplitude is bounded on two independent sides, both against the frequency:
+//  - kGridMarginCells (shore_distance_field.h) gives the field 13 cells (~1 field width) of
+//    slack past kMaxShoreDistance before WP-3's translation-invariance argument breaks down, so
+//    kWaterWarpAmplitude must stay under 1.0 field width or the field at the frame edge becomes
+//    view-dependent again and the panning gate starts failing. Raise kGridMarginCells (a
+//    one-line change, +7% cells at 1080p/zoom 1, 29 ns/cell) rather than silently exceeding this.
+//  - Fold-over: the warp map p -> p + A*n(f*p) stops being injective once A*f*|grad snoise|
+//    exceeds 1, and Ashima simplex peaks near |grad| ~= 4.2, so A*f >~ 0.2 already folds
+//    occasionally. Mild fold-over reads as inlets and islets and is wanted; pushing A*f towards
+//    1.0 would shred the coast into speckle instead.
+//
+// Starting point: f = 0.25 (four-field wavelength), A = 0.8 field widths -> A*f = 0.2, inside
+// both bounds with room to tune. If tuning wants more range than the margin allows, add a
+// second, higher-frequency octave (around f = 0.6, A = 0.2) rather than raising this one past
+// the fold-over bound.
+const float kWaterWarpFrequency = 0.25;   // cycles per field: a four-field wavelength
+const float kWaterWarpAmplitude = 0.8;    // peak displacement, field widths
+const vec2 kWaterWarpOffset1 = vec2(-128.6, 84.2);
+const vec2 kWaterWarpOffset2 = vec2(63.4, -147.1);

@@ -29,6 +29,7 @@ in float var_cloud_shadow;
 precision highp float;
 
 #include "terrain_noise_params.glsl"
+#include "simplex_noise.glsl"
 #include "terrain_variation.glsl"
 #include "terrain_lighting.glsl"
 

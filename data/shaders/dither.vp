@@ -32,6 +32,7 @@ out vec2 var_texture_position;
 out float var_cloud_shadow;
 
 #include "terrain_noise_params.glsl"
+#include "simplex_noise.glsl"
 #include "terrain_variation.glsl"
 
 void main() {
