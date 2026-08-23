@@ -65,7 +65,7 @@ constexpr float kWarpAmplitude = 0.0f;     // peak texture displacement in field
 // terrain_variation.glsl). Deliberately NOT scaled by noise_strength_: unlike bump/tint/warp it is
 // atmospheric motion, not surface texture, and stays on at its own amplitude even with the terrain
 // noise option at 0. STARTING POINT, pending tuning.
-constexpr float kCloudShadowAmplitude = 0.12f;
+constexpr float kCloudShadowAmplitude = 0.30f;
 // Seconds; wraps u_time so its magnitude stays well inside float32 range on long-running games --
 // the same conditioning dither_grain()'s cell wrap does for its hash input.
 constexpr float kCloudTimeWrapPeriod = 100000.0f;

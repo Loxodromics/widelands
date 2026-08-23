@@ -95,8 +95,8 @@ const float kWarpFrequency = 8.5;
 // frequency is an order of magnitude below kOctave1Frequency, so the shadow reads as weather
 // rather than as surface grain. kCloudOffset decorrelates it from the bump/tint/dither fields.
 // STARTING POINT, pending tuning -- see Claude/VISUAL_FIDELITY_RANKED.md §4.8.
-const float kCloudFrequency = 0.03;
-const vec2 kCloudVelocity = vec2(0.008, 0.004);  // cycles/second, frequency-domain drift
+const float kCloudFrequency = 0.06;
+const vec2 kCloudVelocity = vec2(0.064, 0.032);  // cycles/second, frequency-domain drift
 const vec2 kCloudOffset = vec2(97.3, -61.9);     // arbitrary; must land far from the other fields
 
 // Chosen by capture over two ladders. Hue swing scales linearly; as mean
