@@ -55,13 +55,17 @@ enum class Backend {
 	kVulkan,
 };
 
-// Texture storage formats. The renderer uploads exactly one today
-// (src/graphic/texture.cc): RGBA8 for images. These enum values are not
-// consumed until WP-16 (Vulkan texture upload); the GL backend creates
-// textures in graphic::Texture, not here. Add formats only when a caller
-// needs one.
+// Texture storage formats. kRGBA8 is images (src/graphic/texture.cc); the GL
+// backend still creates and uploads those through graphic::Texture, not here,
+// and that path is unconsumed until WP-16 (Vulkan texture upload). kR16F is
+// the exception (WP-3a): one 16-bit-float channel, added for WP-3's
+// shore-distance field, created and uploaded directly through
+// GlCoreDevice::create_texture / GlCoreTexture::upload. GL backs it with
+// GL_R16F / GL_RED / GL_FLOAT. Add further formats only when a caller needs
+// one.
 enum class TextureFormat {
 	kRGBA8,
+	kR16F,
 };
 
 // Texture addressing mode. Every texture in the tree uses clamp-to-edge

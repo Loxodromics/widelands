@@ -74,6 +74,24 @@ GLenum to_gl(const PrimitiveTopology topology) {
 	NEVER_HERE();
 }
 
+GLint to_gl(const TextureFilter filter) {
+	switch (filter) {
+	case TextureFilter::kLinear:
+		return GL_LINEAR;
+	case TextureFilter::kNearest:
+		return GL_NEAREST;
+	}
+	NEVER_HERE();
+}
+
+GLint to_gl(const TextureWrap wrap) {
+	switch (wrap) {
+	case TextureWrap::kClampToEdge:
+		return GL_CLAMP_TO_EDGE;
+	}
+	NEVER_HERE();
+}
+
 int component_count(const VertexFormat format) {
 	switch (format) {
 	case VertexFormat::kFloat:
@@ -97,14 +115,29 @@ struct ResolvedAttribute {
 
 }  // namespace
 
-// A non-owning handle over a GL texture name. graphic::Texture still owns the
-// GL object and manages its upload/readback/deletion (WP-10 moves the draw
-// path, not texture creation), so this class only carries the name and the
-// dimensions for binding.
+// A GL texture name, either non-owning (wrap_gl_texture: graphic::Texture
+// still owns the GL object and manages its upload/readback/deletion, WP-10)
+// or owning (create_texture: the RHI created the GL object itself and is the
+// only owner, WP-3a). 'format_' records what the texture was created with so
+// upload() knows which GL enums apply.
 class GlCoreTexture : public Texture {
 public:
-	GlCoreTexture(const GLuint texture, const uint32_t width, const uint32_t height)
-	   : gl_id_(texture), width_(width), height_(height) {
+	GlCoreTexture(const GLuint texture,
+	              const uint32_t width,
+	              const uint32_t height,
+	              const bool owns_texture,
+	              const TextureFormat format)
+	   : gl_id_(texture),
+	     width_(width),
+	     height_(height),
+	     owns_texture_(owns_texture),
+	     format_(format) {
+	}
+
+	~GlCoreTexture() override {
+		if (owns_texture_ && gl_id_ != 0u) {
+			glDeleteTextures(1, &gl_id_);
+		}
 	}
 
 	uint32_t width() const override {
@@ -114,9 +147,21 @@ public:
 		return height_;
 	}
 
-	void upload(const void* /* pixels */) override {
-		throw wexception("Rhi::GlCoreTexture::upload: texture upload stays in graphic::Texture "
-		                 "for WP-10");
+	void upload(const void* pixels) override {
+		switch (format_) {
+		case TextureFormat::kR16F:
+			// Whole-image re-upload, matching graphic::Texture::unlock()'s
+			// glTexImage2D pattern (texture.cc) rather than glTexSubImage2D:
+			// upload() replaces the whole image, per the RHI contract.
+			Gl::State::instance().bind(GL_TEXTURE0, gl_id_);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, static_cast<GLsizei>(width_),
+			             static_cast<GLsizei>(height_), 0, GL_RED, GL_FLOAT, pixels);
+			return;
+		case TextureFormat::kRGBA8:
+			throw wexception(
+			   "Rhi::GlCoreTexture::upload: kRGBA8 upload stays in graphic::Texture for WP-10");
+		}
+		NEVER_HERE();
 	}
 	void read_back(uint8_t* /* pixels */) override {
 		throw wexception("Rhi::GlCoreTexture::read_back: texture readback stays in graphic::Texture "
@@ -131,6 +176,8 @@ private:
 	GLuint gl_id_;
 	uint32_t width_;
 	uint32_t height_;
+	bool owns_texture_;
+	TextureFormat format_;
 
 	DISALLOW_COPY_AND_ASSIGN(GlCoreTexture);
 };
@@ -380,7 +427,11 @@ public:
 		// GL has no image-layout transitions. The one thing that matters is
 		// unbinding a texture before it becomes a render target, which is what
 		// Gl::State::bind_framebuffer does anyway; making it explicit here keeps
-		// the call-site shape the Vulkan backend needs.
+		// the call-site shape the Vulkan backend needs. A texture that is only
+		// ever uploaded to and sampled (never rendered into, e.g. WP-3a's kR16F
+		// distance field) has no work to do here for any layout, including
+		// kShaderReadOnly: that is by design, not an omission, since upload()
+		// alone already leaves the GL texture in a sampleable state.
 		if (layout == TextureLayout::kColorAttachment) {
 			Gl::State::instance().unbind_texture_if_bound(
 			   static_cast<const GlCoreTexture*>(texture)->gl_id());
@@ -469,9 +520,32 @@ void GlCoreDevice::read_back_swapchain(uint8_t* /* pixels */) {
 	throw wexception("Rhi::GlCoreDevice::read_back_swapchain: swapchain readback is WP-18");
 }
 
-std::unique_ptr<Texture> GlCoreDevice::create_texture(const TextureDescriptor& /* desc */) {
-	throw wexception("Rhi::GlCoreDevice::create_texture: texture creation stays in graphic::Texture "
-	                 "for WP-10");
+std::unique_ptr<Texture> GlCoreDevice::create_texture(const TextureDescriptor& desc) {
+	if (desc.format != TextureFormat::kR16F) {
+		throw wexception("Rhi::GlCoreDevice::create_texture: only kR16F is implemented (kRGBA8 "
+		                 "creation stays in graphic::Texture for WP-10)");
+	}
+
+	GLuint gl_id = 0;
+	glGenTextures(1, &gl_id);
+	if (gl_id == 0u) {
+		throw wexception("Rhi::GlCoreDevice::create_texture: could not create GL texture.");
+	}
+
+	Gl::State::instance().bind(GL_TEXTURE0, gl_id);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, to_gl(desc.filter));
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, to_gl(desc.filter));
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, to_gl(desc.wrap));
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, to_gl(desc.wrap));
+
+	// Allocate storage with undefined contents (matches TextureLayout::kUndefined,
+	// the state a freshly created texture is in per the RHI contract); the first
+	// real contents come from the caller's first upload(), not from here.
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, static_cast<GLsizei>(desc.width),
+	             static_cast<GLsizei>(desc.height), 0, GL_RED, GL_FLOAT, nullptr);
+
+	return std::unique_ptr<Texture>(
+	   new GlCoreTexture(gl_id, desc.width, desc.height, /*owns_texture=*/true, desc.format));
 }
 
 std::unique_ptr<Texture> GlCoreDevice::create_texture_view(Texture& /* parent */,
@@ -526,7 +600,8 @@ GLuint GlCoreDevice::vao_for(const GlCorePipeline& pipeline, const GlCoreBuffer&
 std::unique_ptr<Texture> wrap_gl_texture(const GLuint texture,
                                          const uint32_t width,
                                          const uint32_t height) {
-	return std::unique_ptr<Texture>(new GlCoreTexture(texture, width, height));
+	return std::unique_ptr<Texture>(
+	   new GlCoreTexture(texture, width, height, /*owns_texture=*/false, TextureFormat::kRGBA8));
 }
 
 }  // namespace Rhi

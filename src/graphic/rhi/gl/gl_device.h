@@ -39,9 +39,13 @@
 // reads.
 //
 // Only the draw path and the state cache are moved behind this interface
-// (WP-10's scope). Texture *creation* and readback stay in graphic::Texture /
-// the screenshot path for now, exactly as WP-7 left them, so the Texture here
-// is a non-owning handle over a GL name that graphic::Texture still owns.
+// (WP-10's scope). kRGBA8 texture *creation* and readback stay in
+// graphic::Texture / the screenshot path for now, exactly as WP-7 left them,
+// so a kRGBA8 Texture here is a non-owning handle over a GL name that
+// graphic::Texture still owns. kR16F is the exception (WP-3a): it is created
+// and owned directly through GlCoreDevice::create_texture, for callers (the
+// water distance field) that upload from the draw thread every frame and
+// have no graphic::Texture counterpart.
 namespace Rhi {
 
 class GlCoreDevice;
