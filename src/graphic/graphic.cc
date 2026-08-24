@@ -346,6 +346,17 @@ void Graphic::resolution_changed() {
 	screen_.reset(new Screen(new_w, new_h));
 	render_target_.reset(new RenderTarget(screen_.get()));
 
+	// Recreate the swapchain on our schedule rather than waiting for the
+	// driver to report OUT_OF_DATE/SUBOPTIMAL on some later acquire or
+	// present - that gap is where the swapchain extent and the window size
+	// could briefly disagree (Phase D review, D5). resolution_changed() is
+	// never called between a Vulkan begin_frame and its end_frame (window
+	// events are handled outside the render step), so recreating here is
+	// safe.
+	if (vulkan_device_ != nullptr) {
+		vulkan_device_->notify_resolution_changed();
+	}
+
 	Notifications::publish(GraphicResolutionChanged{old_w, old_h, new_w, new_h});
 }
 

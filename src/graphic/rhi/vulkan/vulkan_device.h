@@ -73,6 +73,17 @@ public:
 	// until now (WP-16 moves texture creation to Vulkan).
 	[[nodiscard]] uint32_t max_texture_size() const;
 
+	// Recreates the swapchain against the window's current size. Without
+	// this, the device only learns about a resize when vkAcquireNextImageKHR
+	// or vkQueuePresentKHR happens to return OUT_OF_DATE/SUBOPTIMAL, which
+	// desynchronizes from Graphic::resolution_changed() (already rebuilt
+	// from SDL_GetWindowSize) for up to a frame or two - the window during
+	// that gap is what D5 in the Phase D review describes. Called from
+	// Graphic::resolution_changed() so recreation happens on our schedule
+	// instead of the driver's; safe to call between frames only (never while
+	// a command buffer from begin_frame is open).
+	void notify_resolution_changed();
+
 	std::unique_ptr<CommandBuffer> begin_frame() override;
 	void end_frame(std::unique_ptr<CommandBuffer> command_buffer) override;
 	std::unique_ptr<CommandBuffer> begin_offscreen() override;

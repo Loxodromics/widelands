@@ -204,8 +204,10 @@ struct VulkanDevice::Impl {
 	// Creates (or re-creates after a resize) the swapchain, the depth
 	// attachment and the per-frame framebuffers. Returns false if the surface
 	// is currently unusable (e.g. minimized to a zero-size extent); the
-	// frame loop skips the frame then.
-	bool recreate_swapchain();
+	// frame loop skips the frame then. [[nodiscard]] because every call site
+	// has to decide what "still unusable" means for it - silently ignoring
+	// it reads as "handled" when it was not (D5).
+	[[nodiscard]] bool recreate_swapchain();
 
 	// The frame loop (WP-15): acquire, record, submit, present. begin_frame
 	// returns a VulkanCommandBuffer bound to the acquired framebuffer, or a
@@ -1091,7 +1093,9 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 		// Recreate and drop this frame. The slot fence stays signaled (it is
 		// reset only after a successful acquire), so the next attempt's wait
 		// passes immediately, and the slot is not advanced - it is retried.
-		recreate_swapchain();
+		// The frame is dropped either way, so whether the surface turned out
+		// to still be unusable (minimized) does not change what happens here.
+		static_cast<void>(recreate_swapchain());
 		frame_dropped_ = true;
 		return std::unique_ptr<CommandBuffer>(new VulkanNoOpCommandBuffer());
 	}
@@ -1164,7 +1168,10 @@ void VulkanDevice::Impl::end_frame(std::unique_ptr<CommandBuffer> command_buffer
 	// path that leaves it in place for a retry.
 	frame_slot_ = (slot + 1) % kFramesInFlight;
 	if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
-		recreate_swapchain();
+		// Nothing left to do with this frame regardless of whether the
+		// surface turned out to still be unusable (minimized): the next
+		// begin_frame's acquire is what decides whether to keep dropping.
+		static_cast<void>(recreate_swapchain());
 		return;
 	}
 	if (present_result != VK_SUCCESS) {
@@ -1187,6 +1194,15 @@ Backend VulkanDevice::backend() const {
 
 uint32_t VulkanDevice::max_texture_size() const {
 	return impl_->max_texture_size_;
+}
+
+void VulkanDevice::notify_resolution_changed() {
+	// recreate_swapchain() re-queries the real surface extent itself
+	// (vkGetPhysicalDeviceSurfaceCapabilitiesKHR / SDL_Vulkan_GetDrawableSize),
+	// so nothing here needs the new size - just the prompt to go look.
+	// False means the window is currently minimized, which is not an error:
+	// the frame loop already skips frames on a zero-size surface.
+	static_cast<void>(impl_->recreate_swapchain());
 }
 
 std::unique_ptr<CommandBuffer> VulkanDevice::begin_frame() {
