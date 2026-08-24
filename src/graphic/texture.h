@@ -94,7 +94,12 @@ private:
 	// Creates the GL texture (and, on the RHI path, the RHI texture handle:
 	// the GL-core wrap or a real Vulkan texture under --renderer=vulkan).
 	// 'format' is the RHI storage format (the dither mask is single-channel).
-	void init(uint16_t w, uint16_t h, Rhi::TextureFormat format);
+	// Under Vulkan, 'zero_fill' controls whether the RHI texture gets an
+	// immediate zero-filled upload: true for a render target (the minimap,
+	// the font and image caches), which must be samplable before anything is
+	// ever drawn into it; false for a constructor that uploads real pixel
+	// data right after init() returns, so that upload is not thrown away.
+	void init(uint16_t w, uint16_t h, Rhi::TextureFormat format, bool zero_fill = true);
 
 	// Runs 'draw' with this texture as the render target: on the core path it
 	// brackets the draw in the RHI's offscreen pass (begin_offscreen /

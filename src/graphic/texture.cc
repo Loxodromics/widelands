@@ -121,7 +121,10 @@ Texture::Texture(int w, int h) : owns_texture_(false) {
 }
 
 Texture::Texture(SDL_Surface* surface, bool intensity) : owns_texture_(false) {
-	init(surface->w, surface->h, intensity ? Rhi::TextureFormat::kR8 : Rhi::TextureFormat::kRGBA8);
+	// Real pixel data is uploaded below regardless of branch, so init()'s
+	// own zero-fill upload would be immediately overwritten (D7).
+	init(surface->w, surface->h, intensity ? Rhi::TextureFormat::kR8 : Rhi::TextureFormat::kRGBA8,
+	    /* zero_fill */ false);
 
 	// Convert image data. BGR Surface support is an extension for
 	// OpenGL ES 2, which we rather not rely on. So we convert our
@@ -225,7 +228,7 @@ int Texture::height() const {
 	return blit_data_.rect.h;
 }
 
-void Texture::init(uint16_t w, uint16_t h, const Rhi::TextureFormat format) {
+void Texture::init(uint16_t w, uint16_t h, const Rhi::TextureFormat format, const bool zero_fill) {
 	assert(is_initializer_thread());
 
 	blit_data_ = {
@@ -251,13 +254,19 @@ void Texture::init(uint16_t w, uint16_t h, const Rhi::TextureFormat format) {
 		                                   Rhi::TextureFilter::kLinear};
 		rhi_texture_ = Rhi::device().create_texture(descriptor);
 		blit_data_.texture = rhi_texture_.get();
-		// Zero-fill so the image is in a defined, samplable layout from the
-		// start: a texture created without an upload (the minimap and font
-		// render targets) must still be valid to sample - its GL counterpart
-		// is "undefined contents", so zeros are as good as anything.
-		const uint32_t bytes_per_texel = format == Rhi::TextureFormat::kR8 ? 1u : 4u;
-		const std::vector<uint8_t> zeroes(static_cast<size_t>(w) * h * bytes_per_texel, 0);
-		rhi_texture_->upload(zeroes.data());
+		if (zero_fill) {
+			// Zero-fill so the image is in a defined, samplable layout from the
+			// start: a texture created without an upload (the minimap and font
+			// render targets) must still be valid to sample - its GL counterpart
+			// is "undefined contents", so zeros are as good as anything. A
+			// texture whose constructor uploads real pixel data right after
+			// this call (Texture(SDL_Surface*)) skips this - the zero-fill
+			// would otherwise cost a second full upload (submit + blocking
+			// fence wait) for every image texture at startup (D7).
+			const uint32_t bytes_per_texel = format == Rhi::TextureFormat::kR8 ? 1u : 4u;
+			const std::vector<uint8_t> zeroes(static_cast<size_t>(w) * h * bytes_per_texel, 0);
+			rhi_texture_->upload(zeroes.data());
+		}
 	}
 
 	glGenTextures(1, &blit_data_.texture_id);
