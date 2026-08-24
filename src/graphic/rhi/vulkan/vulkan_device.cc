@@ -350,9 +350,13 @@ struct VulkanDevice::Impl {
 	// present.
 	uint32_t frame_image_index_ = 0;
 
-	// The number of begin_frame calls so far (WP-17): stamps deferred texture
-	// frees so they are released kFramesInFlight frames after their texture
-	// died, when no in-flight frame can reference them anymore.
+	// The number of *real* frames begin_frame has produced so far (WP-17;
+	// D6 fixed this to exclude dropped calls): stamps deferred texture frees
+	// so they are released kFramesInFlight real frames after their texture
+	// died, when no in-flight frame can reference them anymore. A dropped
+	// begin_frame retries the same slot rather than advancing to a fresh
+	// one, so it must not advance this counter either - see the comment in
+	// begin_frame.
 	uint64_t frame_stamp_ = 0;
 	std::vector<PendingTextureFree> pending_texture_frees_;
 
@@ -1068,13 +1072,17 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 	// acquire's semaphore (not a fence, and no blocking wait) orders the
 	// presentation engine's read of the image against the submit that
 	// renders into it.
-	++frame_stamp_;
 	const uint32_t slot = frame_slot_;
 	check_vulkan_result(vkWaitForFences(device, 1, &frame_fences[slot], VK_TRUE, UINT64_MAX),
 	                    "vkWaitForFences");
 	// The fence wait completed the frame from kFramesInFlight ago - the last
 	// one that could reference a deferred texture free stamped before this
-	// frame began.
+	// frame began. frame_stamp_ is not incremented yet (D6): it only counts
+	// frames that actually reach a fresh fence-wait on their own slot, and a
+	// dropped frame below retries the same slot rather than advancing to
+	// one, so counting it here would let the age check in
+	// drain_pending_texture_frees free an entry before kFramesInFlight
+	// distinct slots have genuinely been waited on since it was retired.
 	drain_pending_texture_frees(false);
 	arenas[slot]->reset();
 	current_arena_ = arenas[slot].get();
@@ -1119,6 +1127,9 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 	   "vkBeginCommandBuffer");
 
 	frame_dropped_ = false;
+	// Only a real frame - one that reaches its own fresh fence-wait above -
+	// advances the retirement clock (D6).
+	++frame_stamp_;
 	frame_image_index_ = image_index;
 	const VulkanCommandBuffer::Target target{
 	   pipelines->render_pass(), framebuffers[image_index], extent, 2};
