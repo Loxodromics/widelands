@@ -1,11 +1,11 @@
 #version 330
 
-/* The water pass (Claude/WATER.md §4.2, WP-6). Two visualisations of the same signed
- * distance-to-shore field, chosen by u_debug: the real wash (default) composites a flat colour
- * over the seabed the terrain pass now draws for water triangles, with its edge coming from the
- * warped field below; --water-debug (u_debug > 0.5) instead draws the WP-3 false-colour view of
- * the field itself, unmixed with any seabed, so the field can be seen and trusted independently
- * of how the wash reads it.
+/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7). Two visualisations of the same signed
+ * distance-to-shore field, chosen by u_debug: the real wash (default) composites a shallow-to-deep
+ * colour ramp over the seabed the terrain pass now draws for water triangles, with its edge coming
+ * from the warped field below; --water-debug (u_debug > 0.5) instead draws the WP-3 false-colour
+ * view of the field itself, unmixed with any seabed, so the field can be seen and trusted
+ * independently of how the wash reads it.
  */
 
 in vec2 var_texture_position;
@@ -21,7 +21,7 @@ layout(std140) uniform per_program_state {
 	float u_cloud_amplitude;
 	// Selects between the false-colour field visualisation (WP-3) and the real wash (WP-6):
 	// a uniform rather than an enqueue gate, so --water-debug is a mode of this one pass, not
-	// its on-switch (RenderQueue::water_debug_enabled(), render_queue.cc).
+	// its on-switch (RenderQueue::set_water_debug(), render_queue.cc).
 	float u_debug;
 	// (cx0, cy0, 1/width, 1/height) of the distance field's grid window.
 	vec4 u_grid;
@@ -72,6 +72,14 @@ vec2 water_shore_warp(vec2 world_pos) {
 	return kWaterWarpAmplitude * vec2(
 		snoise(world_pos * kWaterWarpFrequency + kWaterWarpOffset1),
 		snoise(world_pos * kWaterWarpFrequency + kWaterWarpOffset2));
+}
+
+// The depth ramp (Claude/WATER.md WP-7): two linear segments through the shallow/mid/deep stops,
+// keyed on 't' in [0, 1] -- callers pass depth_t = clamp(shore / u_max_distance, 0, 1), the same
+// normalisation the debug view above already applies to |shore| for its own ramp.
+vec3 water_depth_color(float t) {
+	return mix(mix(kWaterColorShallow, kWaterColorMid, clamp(t / 0.5, 0.0, 1.0)),
+	           kWaterColorDeep, clamp((t - 0.5) / 0.5, 0.0, 1.0));
 }
 
 void main() {
@@ -167,23 +175,33 @@ void main() {
 		return;
 	}
 
-	/* The real wash (WP-6): a flat colour composited over the seabed the terrain pass draws for
-	 * water triangles (and over ordinary land, at zero coverage, everywhere else). The edge comes
-	 * from the same warped field the debug view above visualises, read through a smooth ramp
-	 * rather than a hard threshold -- see water_shore_warp()'s own comment for the (smaller, but
-	 * not zero) panning residual this ramp still shows relative to the debug view's.
+	/* The real wash (WP-6 pass, WP-7 colour/opacity): a shallow-to-deep ramp composited over the
+	 * seabed the terrain pass draws for water triangles (and over ordinary land, at zero coverage,
+	 * everywhere else). The edge comes from the same warped field the debug view above visualises,
+	 * read through a smooth ramp rather than a hard threshold -- see water_shore_warp()'s own
+	 * comment for the (smaller, but not zero) panning residual this ramp still shows relative to
+	 * the debug view's.
+	 *
+	 * depth_t drives both colour (water_depth_color()) and opacity: 0 at the shoreline and beyond,
+	 * onto the land side, so the shallow stop and the lower shallow opacity are what's used through
+	 * the whole coastline transition, letting the seabed genuinely show through there; 1 once
+	 * |shore| reaches u_max_distance out in open water. This is independent of coverage below,
+	 * which only antialiases the land/water edge itself (WATER.md WP-7).
 	 *
 	 * w is kWaterEdgeWidth in practice: the screen-space fwidth(shore) term next to it is the same
 	 * floor-under-the-transition-width idiom dither.fp uses for kDitherMinWidth, but it does not
 	 * currently bind at any zoom the game offers (terrain_noise_params.glsl) -- kept as a guard for
-	 * when WP-7's ramp or WP-9's foam band narrows the transition enough for it to matter. coverage
-	 * is 0 deep inland, 1 in open water, and ramps smoothly through the coastline in between;
-	 * frag_color.a scales it by kWaterOpacity so
-	 * kBlendAlpha's mix(dst, src, a) reads as mix(seabed_or_land, water, kWaterOpacity * coverage)
-	 * -- Claude/WATER.md §4.8's cancellation identity is why applying the cloud shadow here and in
-	 * terrain.fp (on the seabed) composites correctly instead of double-darkening.
+	 * when WP-9's foam band narrows the transition enough for it to matter. coverage is 0 deep
+	 * inland, 1 in open water, and ramps smoothly through the coastline in between; frag_color.a
+	 * scales it by the depth-driven opacity so kBlendAlpha's mix(dst, src, a) reads as
+	 * mix(seabed_or_land, water, opacity(depth_t) * coverage) -- Claude/WATER.md §4.8's
+	 * cancellation identity is why applying the cloud shadow here and in terrain.fp (on the seabed)
+	 * composites correctly instead of double-darkening.
 	 */
+	float depth_t = clamp(shore / u_max_distance, 0.0, 1.0);
+	vec3 color = water_depth_color(depth_t);
+	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
 	float w = max(kWaterEdgeWidth, 0.5 * fwidth(shore));
 	float coverage = smoothstep(-w, w, shore);
-	frag_color = vec4(kWaterColor * var_brightness * var_cloud_shadow, kWaterOpacity * coverage);
+	frag_color = vec4(color * var_brightness * var_cloud_shadow, opacity * coverage);
 }

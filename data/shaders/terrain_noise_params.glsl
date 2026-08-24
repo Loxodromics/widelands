@@ -249,24 +249,40 @@ const float kWaterWarpAmplitude = 0.8;    // peak displacement, field widths
 const vec2 kWaterWarpOffset1 = vec2(-128.6, 84.2);
 const vec2 kWaterWarpOffset2 = vec2(63.4, -147.1);
 
-// The water wash (water.fp; Claude/WATER.md WP-6): a flat colour composited over the seabed the
+// The water wash (water.fp; Claude/WATER.md WP-6/WP-7): a colour composited over the seabed the
 // terrain pass draws for water triangles, with its edge coming from water_shore_warp()'s field
-// rather than the field lattice. No depth ramp yet -- WP-7 replaces kWaterColor with a
-// shallow/mid/deep stop ramp keyed on |shore|; these three constants are its STARTING POINT.
+// rather than the field lattice. WP-7 keys both colour and opacity off |shore| itself (via
+// water.fp's depth_t = clamp(shore / u_max_distance, 0.0, 1.0), reusing the uniform already bound
+// to ShoreDistanceField::kMaxShoreDistance rather than adding a second width constant): a river
+// narrower than that span never reaches the deep stop, with no special-case code, because it is
+// never far from a shore.
 //
-// kWaterColor is the Appendix's measured reference *mid* tone (80,135,175)/255, picked as the
-// single flat colour because WP-6 has no depth signal to choose shallow or deep from yet.
-// kWaterOpacity is high enough that deep water does not show the seabed through it (the
-// Appendix's complaint about our own water texture was the opposite failure -- a wash so weak the
-// floor read as visible everywhere), while still leaving a tenth of the seabed subtly readable
-// per §4.4 ("depth controls how much of it survives"). kWaterEdgeWidth is in field widths (the
+// The three colour stops are the Appendix's measured reference ramp verbatim -- kWaterColorMid is
+// what WP-6 shipped as the single flat kWaterColor, now the ramp's midpoint rather than its only
+// value. The Appendix ramp is a hue swing toward cyan, not a brightness ramp (green rises 73%
+// across it against 43% for red/blue), which is why these are three independent stops rather than
+// a single-axis brightness mix.
+//
+// kWaterOpacityDeep is unchanged from WP-6's kWaterOpacity: high enough that deep water does not
+// show the seabed through it (the Appendix's complaint about our own water texture was the
+// opposite failure -- a wash so weak the floor read as visible everywhere), while still leaving a
+// tenth of the seabed subtly readable per §4.4 ("depth controls how much of it survives").
+// kWaterOpacityShallow is the one number here with no reference measurement behind it -- lower, so
+// the seabed WP-6 draws genuinely shows through right at the shoreline, tuned by eye against a
+// capture rather than transcribed.
+//
+// kWaterEdgeWidth is a separate mechanism from the depth ramp above: it is in field widths (the
 // same unit |shore| is stored in) -- one whole cell either side of the coastline (kCellSize = 32
-// against a 64 px field, so one cell is 0.5 field widths). water.fp's
-// max(kWaterEdgeWidth, 0.5 * fwidth(shore)) floor follows what kDitherMinWidth does for dither.fp,
-// but unlike there it does not currently bind at any zoom the game offers: at the game's maximum
-// zoom-out the fwidth() term reaches only about 0.08 field widths (including the warp's gradient
-// amplification) against kWaterEdgeWidth's 0.5. Kept as a guard for when WP-7's ramp or WP-9's
-// foam band narrows the transition enough for it to matter.
-const vec3 kWaterColor = vec3(80.0, 135.0, 175.0) / 255.0;
-const float kWaterOpacity = 0.9;
+// against a 64 px field, so one cell is 0.5 field widths) -- and only antialiases the coastline
+// edge itself, at a scale (0.5 field widths) far narrower than the depth ramp's (up to
+// kMaxShoreDistance = 12 field widths). water.fp's max(kWaterEdgeWidth, 0.5 * fwidth(shore)) floor
+// follows what kDitherMinWidth does for dither.fp, but unlike there it does not currently bind at
+// any zoom the game offers: at the game's maximum zoom-out the fwidth() term reaches only about
+// 0.08 field widths (including the warp's gradient amplification) against kWaterEdgeWidth's 0.5.
+// Kept as a guard for when WP-9's foam band narrows the transition enough for it to matter.
+const vec3 kWaterColorShallow = vec3(100.0, 190.0, 215.0) / 255.0;
+const vec3 kWaterColorMid = vec3(80.0, 135.0, 175.0) / 255.0;
+const vec3 kWaterColorDeep = vec3(70.0, 110.0, 150.0) / 255.0;
+const float kWaterOpacityShallow = 0.5;  // STARTING POINT -- tuned against a capture
+const float kWaterOpacityDeep = 0.9;     // unchanged from WP-6's kWaterOpacity
 const float kWaterEdgeWidth = 0.5;  // one whole cell either side of the coastline, in field widths
