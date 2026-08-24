@@ -243,6 +243,13 @@ void VulkanCommandBuffer::bind_descriptor_set(const DescriptorSet* set) {
 	const VkDescriptorSet descriptor_set = descriptor_pool_->allocate(vulkan_set->set_layout());
 
 	// Translate and write the recorded bindings.
+	// writes below takes &image_infos.back() / &buffer_infos.back() as it
+	// goes, so these two vectors must never reallocate while writes is being
+	// built (D9): the loops push at most textures().size() and
+	// uniform_buffers().size() entries respectively (one per binding they
+	// iterate), which is exactly what is reserved here - keep the two in
+	// lock-step if either loop below ever grows to push more than one entry
+	// per binding.
 	std::vector<VkWriteDescriptorSet> writes;
 	std::vector<VkDescriptorImageInfo> image_infos;
 	std::vector<VkDescriptorBufferInfo> buffer_infos;
@@ -362,6 +369,12 @@ void VulkanCommandBuffer::transition(const Texture* texture, const TextureLayout
 		vk_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		break;
 	case TextureLayout::kPresentSource:
+		// Reserved for the swapchain-present transition (rhi.h), which the
+		// screen render pass's finalLayout already performs - no sampled
+		// VulkanTexture is ever transitioned to it, so
+		// layout_transition_source/_destination below deliberately do not
+		// handle VK_IMAGE_LAYOUT_PRESENT_SRC_KHR and would throw if this
+		// case were ever reached with a real barrier to build (D9).
 		vk_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 		break;
 	}
@@ -420,7 +433,9 @@ void VulkanCommandBuffer::finish() {
 		}
 		offscreen_pass_ = false;
 	}
-	vkEndCommandBuffer(command_buffer_);
+	if (vkEndCommandBuffer(command_buffer_) != VK_SUCCESS) {
+		throw wexception("Vulkan: vkEndCommandBuffer failed");
+	}
 	finished_ = true;
 }
 

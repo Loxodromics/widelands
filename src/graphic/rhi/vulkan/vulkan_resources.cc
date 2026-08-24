@@ -533,7 +533,9 @@ void VulkanTexture::upload(const void* pixels) {
 	// The fence is reset before the submit: it starts signaled, so a submit
 	// without the reset would make the wait a no-op. The wait makes the
 	// staging buffer reusable on return.
-	vkResetFences(context.device, 1, &context.fence);
+	if (vkResetFences(context.device, 1, &context.fence) != VK_SUCCESS) {
+		throw wexception("Vulkan: vkResetFences failed for a texture upload");
+	}
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 	submit_info.commandBufferCount = 1;
