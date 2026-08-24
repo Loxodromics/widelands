@@ -1,11 +1,13 @@
 #version 330
 
-/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7/WP-8/WP-8a). Two visualisations of the same signed
- * distance-to-shore field, chosen by u_debug: the real wash (default) composites an animated
+/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7/WP-8/WP-8a/WP-9). Two visualisations of the same
+ * signed distance-to-shore field, chosen by u_debug: the real wash (default) composites an animated
  * shallow-to-deep colour ramp over the seabed the terrain pass now draws for water triangles, with
- * its edge coming from the warped field below; --water-debug (u_debug > 0.5) instead draws the
- * WP-3 false-colour view of the field itself, unmixed with any seabed or wave motion, so the field
- * can be seen and trusted independently of how the wash reads it.
+ * its edge coming from the warped field below and a foam band running along the coast in the
+ * shallowest zone (WP-9); --water-debug (u_debug > 0.5) instead draws the WP-3 false-colour view of
+ * the field itself, unmixed with any seabed or wave motion, so the field can be seen and trusted
+ * independently of how the wash reads it -- with the WP-9 shore frame tinted in where it is used,
+ * as the instrument for judging frame stability.
  */
 
 in vec2 var_texture_position;
@@ -74,6 +76,122 @@ vec2 water_shore_warp(vec2 world_pos) {
 	return kWaterWarpAmplitude * vec2(
 		snoise(world_pos * kWaterWarpFrequency + kWaterWarpOffset1),
 		snoise(world_pos * kWaterWarpFrequency + kWaterWarpOffset2));
+}
+
+/* The warped-field lookup (the cell-coordinate / half-cell correction / C1 reconstruction / texture
+ * fetch that used to sit inline in main(); factored out at WP-9 because the shore frame calls it
+ * four more times). u_grid and u_shore_distance are file-scope uniforms, so this is callable from
+ * any function. It samples at a *warped* position -- callers pass the position the warp produced.
+ */
+float shore_at(vec2 warped_pos) {
+	/* One grid cell is 32 map pixels, hence the factor two into global cell
+	 * coordinates. No further y flip is needed for the lookup: glTexImage2D's
+	 * row 0 is v = 0, and the field is uploaded in increasing cy, i.e.
+	 * increasing map y.
+	 */
+	vec2 cell = vec2(warped_pos.x, -warped_pos.y) * 2.0;
+	/* Half a cell up, in v only. Cell (cx, cy) is centred on map pixel
+	 * (32*cx, 32*cy), but the two triangles it describes both lie in
+	 * y = [32*cy, 32*cy + 32] -- entirely *below* the centre, their centroids
+	 * 21.3 and 10.7 map pixels down. The sample lattice therefore sits half a
+	 * cell high against the geometry it describes, which measured as a 15.5 px
+	 * offset of the zero crossing from the real waterline before this
+	 * correction. x needs none: both triangles' centroids fall exactly on their
+	 * cell centre there.
+	 */
+	cell.y -= 0.5;
+	/* C1 reconstruction (§4.3): smoothstep the fractional part of the texel
+	 * coordinate before the lerp, so the warped field is continuously
+	 * differentiable rather than showing kinks at the 32 px cell grid.
+	 * Applying the smoothstep to the sample *position* rather than four manual
+	 * taps keeps this at one hardware bilinear fetch -- sampling at
+	 * base + frac + 0.5 makes the hardware's own lerp weight exactly frac.
+	 * With frac left as the identity this is algebraically the plain C0
+	 * lookup, which makes the smoothstep an isolated A/B for the kink check
+	 * (Claude/WATER.md WP-5): the two reconstructions differ everywhere inside
+	 * a cell, not just at its boundary, so the A/B shows up as a systematic
+	 * shift of every contour line's position rather than only at the 32 px
+	 * grid -- diffed and confirmed to fall exactly on contour lines, not on
+	 * flat colour, before this was trusted as "the reconstruction, not a bug".
+	 */
+	vec2 texel = cell - u_grid.xy;
+	vec2 base = floor(texel);
+	vec2 frac = texel - base;
+	frac = frac * frac * (3.0 - 2.0 * frac);
+	vec2 uv = (base + frac + 0.5) * u_grid.zw;
+	return texture(u_shore_distance, uv).r;
+}
+
+/* Jacobian of water_shore_warp() (WP-9). The warp samples the two noise fields at
+ * world_pos * kWaterWarpFrequency + kWaterWarpOffset, so by the chain rule its derivative is
+ * kWaterWarpAmplitude * kWaterWarpFrequency times the two fields' gradients, laid out column by
+ * column (column 0 = d/dx, column 1 = d/dy). The frame's central differences sit in *warped*
+ * space (shore_at() takes the warped position), while the visible contour normal lives in
+ * *world* space, and the two differ by this Jacobian -- which is far from identity here: with
+ * A*f = 0.2 and Ashima simplex peaking near |grad| ~= 4.2, the off-diagonal terms reach ~0.84,
+ * i.e. direction errors of tens of degrees if the correction is skipped. snoise_grad() also
+ * computes the value water_shore_warp()'s snoise() calls produce; only the gradient components
+ * are used here, so no consistency question with the main path arises.
+ */
+mat2 water_shore_warp_jacobian(vec2 world_pos) {
+	vec3 n1 = snoise_grad(world_pos * kWaterWarpFrequency + kWaterWarpOffset1);
+	vec3 n2 = snoise_grad(world_pos * kWaterWarpFrequency + kWaterWarpOffset2);
+	float j = kWaterWarpAmplitude * kWaterWarpFrequency;
+	return mat2(vec2(1.0 + j * n1.y, j * n2.y), vec2(j * n1.z, 1.0 + j * n2.z));
+}
+
+/* The shore frame (Claude/WATER.md §4.6, WP-9): the cross-shore unit normal (away from shore) and
+ * the along-shore tangent, from central differences of the warped field at a fixed world-space
+ * step of one grid cell (kFoamGradStep, in the var_texture_position units the field is expressed
+ * in -- both axes are map pixels / 64, so the space is isotropic and |grad shore| ~= 1 for a
+ * well-formed distance field). A fixed step is zoom-independent and well-conditioned; dFdx/dFdy
+ * of shore was rejected because it is quad-constant (2x2 blockiness in the frame direction) and,
+ * at high magnification, the per-pixel step of shore falls to the same order as the kR16F
+ * texture's own quantisation.
+ *
+ * Stability notes. The chamfer produces exactly flat plateaus (WP-3's carried-forward
+ * observation), so |grad| can legitimately reach 0; the epsilon guard handles it, and plateaus
+ * sit far from shore, where the foam is already zero, so the (1, 0) fallback direction is never
+ * visible. In a channel narrower than twice the band reach, both banks' foam overlaps and the
+ * frame flips across the medial axis -- correct behaviour, not a defect: waves run in opposite
+ * directions on opposite banks. Only the tangent's *sign* flips, and the elongation below is
+ * symmetric in +/-t, so this pass is insensitive to it; WP-10's advection must be aware of it.
+ *
+ * There is no global along-shore coordinate: t = perp(grad s / |grad s|) is not curl-free in
+ * general, so no scalar potential has it as its gradient, and the obvious approximation
+ * dot(world, t) is numerically unusable here -- var_texture_position reaches ~150 on the
+ * water_coast view and up to ~500 on a large map, so a frame rotation of order 1 rad/field turns
+ * into hundreds of cycles of noise-argument change per field, i.e. white noise. The frame is
+ * therefore used as a *direction*, not a coordinate: foam_noise() offsets a few taps along +/-t
+ * by a local distance, with no dependence on |world|. WP-10 inherits this constraint: it must
+ * advect the *sample position* along t by a bounded offset (flow-map style, with a cross-faded
+ * wrap), not advance an unbounded along-shore coordinate.
+ */
+vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent) {
+	vec2 g_warped =
+	   vec2(shore_at(warped_pos + vec2(kFoamGradStep, 0.0)) - shore_at(warped_pos - vec2(kFoamGradStep, 0.0)),
+	        shore_at(warped_pos + vec2(0.0, kFoamGradStep)) - shore_at(warped_pos - vec2(0.0, kFoamGradStep)));
+	vec2 g_world = transpose(water_shore_warp_jacobian(world_pos)) * g_warped;
+	float len = length(g_world);
+	if (len < kFoamGradEpsilon) {
+		tangent = vec2(0.0, -1.0);
+		return vec2(1.0, 0.0);
+	}
+	vec2 normal = g_world / len;
+	tangent = vec2(-normal.y, normal.x);
+	return normal;
+}
+
+/* Foam breakup (WP-9): three simplex taps offset along the along-shore tangent by a local
+ * distance, averaged -- this is what elongates the breakup along the coast rather than along the
+ * tile grid. The taps span roughly one wavelength of the breakup field (2 * kFoamStretch ~=
+ * 1 / kFoamFrequency), so features stretch along the shore by a factor of ~2-3. Sampled at
+ * var_texture_position, unwarped, the same domain the wave field uses.
+ */
+float foam_noise(vec2 world_pos, vec2 tangent) {
+	vec2 base = world_pos * kFoamFrequency + kFoamOffset;
+	vec2 stretch = tangent * (kFoamStretch * kFoamFrequency);
+	return (snoise(base - stretch) + snoise(base) + snoise(base + stretch)) / 3.0;
 }
 
 // The depth ramp (Claude/WATER.md WP-7): two linear segments through the shallow/mid/deep stops,
@@ -174,49 +292,18 @@ void water_wave_field(vec2 world_pos,
 
 void main() {
 	/* attr_texture_position is (map_x / 64, -map_y / 64) (fields_to_draw.cc,
-	 * where the y flip compensates for GL's upward y). One grid cell is 32 map
-	 * pixels, hence the factor two into global cell coordinates. No further y
-	 * flip is needed for the lookup: glTexImage2D's row 0 is v = 0, and the
-	 * field is uploaded in increasing cy, i.e. increasing map y.
+	 * where the y flip compensates for GL's upward y).
 	 *
 	 * The warp is applied here, to var_texture_position before the frame
 	 * conversion, so its noise domain matches the one terrain.fp feeds
 	 * terrain_variation.glsl (raw var_texture_position, map pixels / 64 with y
 	 * negated) and the offset budget's decorrelation argument
-	 * (terrain_noise_params.glsl) holds.
+	 * (terrain_noise_params.glsl) holds. shore_at() then does the lookup
+	 * itself -- the half-cell correction and C1 reconstruction it applies are
+	 * the ones this function used to carry inline.
 	 */
 	vec2 world = var_texture_position + water_shore_warp(var_texture_position);
-	vec2 cell = vec2(world.x, -world.y) * 2.0;
-	/* Half a cell up, in v only. Cell (cx, cy) is centred on map pixel
-	 * (32*cx, 32*cy), but the two triangles it describes both lie in
-	 * y = [32*cy, 32*cy + 32] -- entirely *below* the centre, their centroids
-	 * 21.3 and 10.7 map pixels down. The sample lattice therefore sits half a
-	 * cell high against the geometry it describes, which measured as a 15.5 px
-	 * offset of the zero crossing from the real waterline before this
-	 * correction. x needs none: both triangles' centroids fall exactly on their
-	 * cell centre there.
-	 */
-	cell.y -= 0.5;
-	/* C1 reconstruction (§4.3): smoothstep the fractional part of the texel
-	 * coordinate before the lerp, so the warped field is continuously
-	 * differentiable rather than showing kinks at the 32 px cell grid.
-	 * Applying the smoothstep to the sample *position* rather than four manual
-	 * taps keeps this at one hardware bilinear fetch -- sampling at
-	 * base + frac + 0.5 makes the hardware's own lerp weight exactly frac.
-	 * With frac left as the identity this is algebraically the plain C0
-	 * lookup, which makes the smoothstep an isolated A/B for the kink check
-	 * (Claude/WATER.md WP-5): the two reconstructions differ everywhere inside
-	 * a cell, not just at its boundary, so the A/B shows up as a systematic
-	 * shift of every contour line's position rather than only at the 32 px
-	 * grid -- diffed and confirmed to fall exactly on contour lines, not on
-	 * flat colour, before this was trusted as "the reconstruction, not a bug".
-	 */
-	vec2 texel = cell - u_grid.xy;
-	vec2 base = floor(texel);
-	vec2 frac = texel - base;
-	frac = frac * frac * (3.0 - 2.0 * frac);
-	vec2 uv = (base + frac + 0.5) * u_grid.zw;
-	float shore = texture(u_shore_distance, uv).r;
+	float shore = shore_at(world);
 
 	if (u_debug > 0.5) {
 		float magnitude = abs(shore);
@@ -255,6 +342,22 @@ void main() {
 		if (magnitude >= u_max_distance - 0.01) {
 			color = kSaturated;
 		}
+
+		/* The WP-9 shore frame, tinted where the foam band will actually use it -- the wash's own
+		 * rendered band, i.e. inside the early-out's land-side edge (-kWaterEdgeWidth, kFoamReach);
+		 * shore < kFoamReach alone would cover every inland pixel, where the foam code never runs.
+		 * R carries the cross-shore normal's x, G its y. This is the instrument for the "no
+		 * flipping or singularities" criterion -- judged on the debug view rather than as an
+		 * eyeball judgement on the foam itself. The zero-crossing band below is applied after
+		 * this, so the waterline still reads on top of the frame.
+		 */
+		if (shore > -kWaterEdgeWidth && shore < kFoamReach) {
+			vec2 tangent;
+			vec2 normal = water_shore_frame(var_texture_position, world, tangent);
+			color.r = 0.5 + 0.5 * normal.x;
+			color.g = 0.5 + 0.5 * normal.y;
+		}
+
 		if (magnitude < u_zero_band) {
 			color = kZeroCrossing;
 		}
@@ -280,8 +383,9 @@ void main() {
 	 *
 	 * w is kWaterEdgeWidth in practice: the screen-space fwidth(shore) term next to it is the same
 	 * floor-under-the-transition-width idiom dither.fp uses for kDitherMinWidth, but it does not
-	 * currently bind at any zoom the game offers (terrain_noise_params.glsl) -- kept as a guard for
-	 * when WP-9's foam band narrows the transition enough for it to matter. coverage is 0 deep
+	 * currently bind at any zoom the game offers (terrain_noise_params.glsl) -- kept as a guard;
+	 * WP-9's foam band is additive to this transition, not a narrowing of it, so the floor still
+	 * does not bind. coverage is 0 deep
 	 * inland, 1 in open water, and ramps smoothly through the coastline in between; frag_color.a
 	 * scales it by the depth-driven opacity so kBlendAlpha's mix(dst, src, a) reads as
 	 * mix(seabed_or_land, water, opacity(depth_t) * coverage) -- Claude/WATER.md §4.8's
@@ -306,7 +410,8 @@ void main() {
 	 * kBlendAlpha, mix(dst, src, 0) == dst regardless of src's colour, and w is computed early
 	 * purely so this check can use it -- it is the same value coverage uses further down.
 	 */
-	float w = max(kWaterEdgeWidth, 0.5 * fwidth(shore));
+	float shore_fwidth = fwidth(shore);
+	float w = max(kWaterEdgeWidth, 0.5 * shore_fwidth);
 	if (shore <= -w) {
 		frag_color = vec4(0.0);
 		return;
@@ -351,7 +456,47 @@ void main() {
 	              smoothstep(kGlintDepthMin, kGlintDepthMax, depth_t) * crest_fade;
 	color = clamp(color + kGlintColor * (kGlintWeight * glint), 0.0, 1.0);
 
+	/* Foam band (WP-9, Claude/WATER.md §4.6): a band in the shallowest water zone, centred at
+	 * kFoamCenter -- not falling off from zero. With kWaterEdgeWidth = 0.5 field widths the
+	 * coverage transition is genuinely soft (coverage is only ~0.5 at shore = 0), so foam peaking
+	 * at the waterline would be half transparent over sand and read as pale beach rather than
+	 * white foam; kFoamCenter = 0.35 puts the peak where coverage is ~0.85, still visually at the
+	 * contact. The band spans shore ~= [-0.15, 0.85] before the wobble -- essentially all
+	 * water-side, leaving the land side entirely to WP-12's wet sand. kFoamWobble displaces the
+	 * band in and out along the cross-shore axis, which is what produces the Appendix's "band
+	 * boundaries wobble by roughly one to two tiles and are blotchy rather than contoured"
+	 * without a second mechanism.
+	 *
+	 * The pixel floor (kFoamMinWidthPixels * fwidth(shore), the kDitherMinWidth idiom) is a guard
+	 * -- kFoamHalfWidth binds at every zoom the game offers (measured at water_coast_zoom4, see
+	 * WATER.md WP-9).
+	 *
+	 * Everything here -- the frame's four extra taps, the Jacobian's two snoise_grad() calls and
+	 * the three breakup taps -- runs only inside the kFoamReach gate, so open water pays nothing.
+	 * The gate is spatially coherent (whole screen regions of water are either near-shore or
+	 * not), so the Jacobian's duplicate lattice work over the main path's snoise() calls is
+	 * cheaper than upgrading every fragment's warp to snoise_grad() (measured, WATER.md WP-9).
+	 */
+	float foam = 0.0;
+	if (shore < kFoamReach) {
+		vec2 tangent;
+		water_shore_frame(var_texture_position, world, tangent);
+		float fn = foam_noise(var_texture_position, tangent);
+		float shore_foam = shore + kFoamWobble * fn;
+		float half_width = max(kFoamHalfWidth, kFoamMinWidthPixels * shore_fwidth);
+		float d = abs(shore_foam - kFoamCenter) / half_width;
+		foam = (1.0 - smoothstep(kFoamCore, 1.0, d)) * kFoamStrength;
+	}
+
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
 	float coverage = smoothstep(-w, w, shore);
+
+	/* Foam folds into color as a linear mix *before* the cloud-shadow multiply, and into opacity
+	 * independently of the shadow -- Claude/WATER.md §4.8's cancellation identity is what breaks
+	 * if foam went in additively. kFoamOpacity near 1 is what hides the seabed under the band
+	 * and makes it read white rather than sand-tinted.
+	 */
+	color = mix(color, kFoamColor, foam);
+	opacity = mix(opacity, kFoamOpacity, foam);
 	frag_color = vec4(color * var_brightness * var_cloud_shadow, opacity * coverage);
 }

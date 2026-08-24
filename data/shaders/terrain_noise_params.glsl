@@ -23,6 +23,7 @@
 // water warp      kWaterWarpFrequency     static             kWaterWarpOffset1, kWaterWarpOffset2
 // wave wander     kWanderFrequency        kWanderEvolve      kWanderOffset
 // wave detail     kDetailFrequency        kDetailEvolve      kDetailOffset
+// foam breakup    kFoamFrequency          static             kFoamOffset
 //
 // The two wave fields (WP-8a) are the only 3D ones: they take time as a third noise axis
 // (snoise3(), simplex_noise_3d.glsl) rather than as a drift added to the sample position, so they
@@ -285,7 +286,9 @@ const vec2 kWaterWarpOffset2 = vec2(63.4, -147.1);
 // follows what kDitherMinWidth does for dither.fp, but unlike there it does not currently bind at
 // any zoom the game offers: at the game's maximum zoom-out the fwidth() term reaches only about
 // 0.08 field widths (including the warp's gradient amplification) against kWaterEdgeWidth's 0.5.
-// Kept as a guard for when WP-9's foam band narrows the transition enough for it to matter.
+// Kept as a guard: WP-9's foam band turned out to be *additional* to this transition rather than
+// a narrowing of it, so the floor still does not bind -- it is there for any future change that
+// does narrow the transition far enough for it to matter.
 const vec3 kWaterColorShallow = vec3(100.0, 190.0, 215.0) / 255.0;
 const vec3 kWaterColorMid = vec3(80.0, 135.0, 175.0) / 255.0;
 const vec3 kWaterColorDeep = vec3(70.0, 110.0, 150.0) / 255.0;
@@ -416,3 +419,47 @@ const float kWaveTimeWrapPeriod = 10000.0;
 // (same technique as kTintOffset).
 const vec2 kWanderOffset = vec2(-183.5, 29.7);
 const vec2 kDetailOffset = vec2(112.9, -203.4);
+
+// Foam band (water.fp, WP-9; Claude/WATER.md §4.6): a band of pale foam in the shallowest water
+// zone, its breakup elongated along the coast by the shore frame. All distances are in field
+// widths -- the unit |shore| is stored in.
+//
+// kFoamCenter is a centre, not a falloff-from-zero: kWaterEdgeWidth = 0.5 field widths is a
+// genuinely soft transition (coverage is ~0.5 at shore = 0), so foam peaking at the waterline
+// would be half transparent over sand and read as pale beach rather than white foam. 0.35 puts
+// the peak where coverage is ~0.85, still visually at the contact.
+//
+// kFoamHalfWidth spans the band over shore ~= [-0.15, 0.85] before the wobble -- essentially all
+// water-side, leaving the land side to WP-12's wet sand. kFoamWobble displaces the band in and
+// out along the cross-shore axis, which produces the Appendix's "band boundaries wobble by
+// roughly one to two tiles and are blotchy rather than contoured" with no second mechanism.
+//
+// The pixel floor under the half-width is the kDitherMinWidth idiom: at maximum zoom-out
+// fwidth(shore) reaches ~0.08 field widths, so kFoamMinWidthPixels * fwidth(shore) only binds
+// below a half-width of ~0.12 field widths -- kFoamHalfWidth binds at every zoom the game offers
+// (measured at water_coast_zoom4, WATER.md WP-9). Kept as the guard the "Done when" asks for.
+//
+// The breakup field's three taps span roughly one wavelength (2 * kFoamStretch ~=
+// 1 / kFoamFrequency), which is what elongates features along the shore by a factor of ~2-3.
+const float kFoamFrequency = 1.2;   // cycles per field: ~0.8-field breakup wavelength
+const float kFoamStretch = 0.4;     // field widths, along the shore tangent
+const float kFoamCenter = 0.35;     // field widths, band centre
+const float kFoamHalfWidth = 0.5;   // field widths
+const float kFoamWobble = 0.25;     // field widths, cross-shore displacement of the band
+const float kFoamMinWidthPixels = 1.5;
+const float kFoamCore = 0.75;  // |d| below which the band is at full strength
+const float kFoamStrength = 1.0;
+const float kFoamOpacity = 0.95;  // near 1: the band hides the seabed and reads white, not sand
+const float kFoamGradStep = 0.5;  // shore-frame finite-difference step: one grid cell
+const float kFoamGradEpsilon = 0.05;  // plateau guard for the frame's normalisation
+const float kFoamReach = 1.1;  // kFoamCenter + kFoamHalfWidth + kFoamWobble: the inner gate
+// Measured from referenceImages/AoE2_1.png (the bright foam at the land contact), 9x9 patch
+// averages as the Appendix measures: 24 patches, mean (189, 217, 228), median (184, 214, 226).
+// The plan's fallback (230, 240, 245) is the same cool white but brighter than the reference's
+// foam actually reads -- a white that bright would bloom against the wash.
+const vec3 kFoamColor = vec3(189.0, 217.0, 228.0) / 255.0;
+
+// Arbitrary; checked against the budget table at the top (per its own instruction) rather than
+// against a neighbouring constant: lands far from every offset listed there, in the one quadrant
+// none of them reach (largest x, largest positive y).
+const vec2 kFoamOffset = vec2(226.4, 174.9);
