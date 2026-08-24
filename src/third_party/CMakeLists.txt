@@ -21,6 +21,9 @@ if (OPTION_BUILD_VULKAN)
   # The canonical volk include is <volk.h>, so the volk directory itself goes
   # on the include path (unlike glad2, which is included as glad/gl.h).
   wl_include_system_directories(third_party_volk ${CMAKE_CURRENT_SOURCE_DIR}/volk)
+  # volk.h pulls in the Vulkan headers themselves; find_package(Vulkan) above
+  # only locates them, it does not add them to any target's include path.
+  wl_include_system_directories(third_party_volk ${Vulkan_INCLUDE_DIR})
 endif()
 
 if (NOT MINIZIP_STATIC_LIBRARIES)

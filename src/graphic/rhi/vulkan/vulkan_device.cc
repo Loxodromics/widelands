@@ -63,6 +63,18 @@ constexpr VkDeviceSize kInitialArenaSize = 32u * 1024u * 1024u;
 // kFramesInFlight + 1 images so the acquire never blocks under FIFO.
 constexpr uint32_t kFramesInFlight = 2;
 
+// VK_KHR_portability_subset has no declaration in <volk.h>/<vulkan_core.h>:
+// it is still a provisional KHR "beta" extension, only exposed by defining
+// VK_ENABLE_BETA_EXTENSIONS before including the Vulkan headers. That macro
+// pulls in every other beta extension's declarations too (video encode/
+// decode and friends), and the vendored volk.h assumes a newer set of those
+// than the Vulkan SDK headers on this machine provide, which fails to
+// compile. We only need the extension's name to enable it at device
+// creation - MoltenVK is the only driver that ever advertises it - so we
+// spell the name out locally instead of pulling in the rest of the beta
+// surface.
+constexpr const char* kPortabilitySubsetExtensionName = "VK_KHR_portability_subset";
+
 // The floor the renderer needs from maxImageDimension2D - the same number as
 // graphic.h's kMinimumSizeForTextures (the atlas builder throws below it).
 // Duplicated locally so the RHI library does not depend on the graphic layer.
@@ -388,6 +400,47 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 		instance_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 	}
 
+	// MoltenVK is a portability driver, not a conformant Vulkan
+	// implementation: the loader only enumerates it when the instance opts in
+	// via VK_KHR_portability_enumeration, otherwise vkCreateInstance below
+	// fails with VK_ERROR_INCOMPATIBLE_DRIVER on macOS. Requested only when
+	// the loader actually offers the extension (native Vulkan drivers on
+	// other platforms do not).
+	//
+	// VK_KHR_get_physical_device_properties2 is a hard dependency of
+	// VK_KHR_portability_subset (enabled further down, once the physical
+	// device is known to advertise it): the instance is created at API 1.0,
+	// so the promoted-to-1.1 core entry points are not implicitly available
+	// and this has to be requested explicitly too.
+	bool portability_enumeration_supported = false;
+	bool get_physical_device_properties2_supported = false;
+	{
+		uint32_t extension_count = 0;
+		check_vulkan_result(
+		   vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, nullptr),
+		   "vkEnumerateInstanceExtensionProperties");
+		std::vector<VkExtensionProperties> extensions(extension_count);
+		check_vulkan_result(
+		   vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, extensions.data()),
+		   "vkEnumerateInstanceExtensionProperties");
+		for (const VkExtensionProperties& extension : extensions) {
+			if (strncmp(extension.extensionName, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+			            VK_MAX_EXTENSION_NAME_SIZE) == 0) {
+				portability_enumeration_supported = true;
+			} else if (strncmp(extension.extensionName,
+			                   VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+			                   VK_MAX_EXTENSION_NAME_SIZE) == 0) {
+				get_physical_device_properties2_supported = true;
+			}
+		}
+	}
+	if (portability_enumeration_supported) {
+		instance_extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+	}
+	if (get_physical_device_properties2_supported) {
+		instance_extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+	}
+
 	// Enable the validation layer when present (it should be on the primary
 	// box); a missing layer is warned about rather than fatal, so a debug
 	// build still runs on machines without it.
@@ -419,6 +472,9 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 
 	VkInstanceCreateInfo instance_create_info{};
 	instance_create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+	if (portability_enumeration_supported) {
+		instance_create_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+	}
 	instance_create_info.pApplicationInfo = &application_info;
 	instance_create_info.enabledExtensionCount = instance_extensions.size();
 	instance_create_info.ppEnabledExtensionNames = instance_extensions.data();
@@ -515,6 +571,7 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	// the committed SPIR-V's Y negation (see VulkanCommandBuffer::set_viewport).
 	// It is core since Vulkan 1.1 and universally available, but the instance
 	// is created at API 1.0, so it has to be enabled explicitly.
+	bool portability_subset_supported = false;
 	{
 		uint32_t extension_count = 0;
 		check_vulkan_result(vkEnumerateDeviceExtensionProperties(
@@ -533,6 +590,9 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 			} else if (strncmp(extension.extensionName, VK_KHR_MAINTENANCE1_EXTENSION_NAME,
 			                   VK_MAX_EXTENSION_NAME_SIZE) == 0) {
 				maintenance1_supported = true;
+			} else if (strncmp(extension.extensionName, kPortabilitySubsetExtensionName,
+			                   VK_MAX_EXTENSION_NAME_SIZE) == 0) {
+				portability_subset_supported = true;
 			}
 		}
 		if (!swapchain_supported) {
@@ -543,15 +603,21 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 		}
 	}
 
-	const char* device_extensions[] = {
+	// The spec requires enabling VK_KHR_portability_subset whenever a
+	// physical device advertises it (every MoltenVK device does); it is not
+	// optional the way the other extensions here are.
+	std::vector<const char*> device_extensions = {
 	   VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_MAINTENANCE1_EXTENSION_NAME};
+	if (portability_subset_supported) {
+		device_extensions.push_back(kPortabilitySubsetExtensionName);
+	}
 	VkDeviceCreateInfo device_create_info{};
 	device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 	device_create_info.queueCreateInfoCount = 1;
 	device_create_info.pQueueCreateInfos = &queue_create_info;
 	device_create_info.enabledExtensionCount =
-	   static_cast<uint32_t>(std::size(device_extensions));
-	device_create_info.ppEnabledExtensionNames = device_extensions;
+	   static_cast<uint32_t>(device_extensions.size());
+	device_create_info.ppEnabledExtensionNames = device_extensions.data();
 	check_vulkan_result(vkCreateDevice(physical_device, &device_create_info, nullptr, &device),
 	                    "vkCreateDevice");
 	volkLoadDevice(device);
@@ -1370,6 +1436,13 @@ VulkanDevice::~VulkanDevice() = default;
 
 Backend VulkanDevice::backend() const {
 	return Backend::kVulkan;
+}
+
+uint32_t VulkanDevice::max_texture_size() const {
+	return 0;
+}
+
+void VulkanDevice::notify_resolution_changed() {
 }
 
 std::unique_ptr<CommandBuffer> VulkanDevice::begin_frame() {
