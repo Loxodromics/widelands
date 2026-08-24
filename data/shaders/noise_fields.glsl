@@ -18,6 +18,15 @@ float scrolling_snoise(vec2 world_pos, float frequency, vec2 velocity, vec2 offs
 	return snoise(world_pos * frequency + time * velocity + offset);
 }
 
+// Same sample as scrolling_snoise(), but also returns its gradient (Claude/WATER.md §4.6, WP-8):
+// (value, d/dx, d/dy). world_pos enters the argument scaled by 'frequency', so the chain rule
+// scales snoise_grad()'s own gradient by 'frequency' too; the time/velocity/offset terms are
+// constant with respect to world_pos and contribute nothing to it.
+vec3 scrolling_snoise_grad(vec2 world_pos, float frequency, vec2 velocity, vec2 offset, float time) {
+	vec3 g = snoise_grad(world_pos * frequency + time * velocity + offset);
+	return vec3(g.x, g.yz * frequency);
+}
+
 // Cloud shadow (Claude/VISUAL_FIDELITY_RANKED.md §4.8): one scrolling_snoise() sample at regional
 // scale, darkening the terrain where it is positive. See terrain_cloud_shadow()
 // (terrain_variation.glsl) for the full rationale; this is that function's body with

@@ -1,11 +1,11 @@
 #version 330
 
-/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7). Two visualisations of the same signed
- * distance-to-shore field, chosen by u_debug: the real wash (default) composites a shallow-to-deep
- * colour ramp over the seabed the terrain pass now draws for water triangles, with its edge coming
- * from the warped field below; --water-debug (u_debug > 0.5) instead draws the WP-3 false-colour
- * view of the field itself, unmixed with any seabed, so the field can be seen and trusted
- * independently of how the wash reads it.
+/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7/WP-8). Two visualisations of the same signed
+ * distance-to-shore field, chosen by u_debug: the real wash (default) composites an animated
+ * shallow-to-deep colour ramp over the seabed the terrain pass now draws for water triangles, with
+ * its edge coming from the warped field below; --water-debug (u_debug > 0.5) instead draws the
+ * WP-3 false-colour view of the field itself, unmixed with any seabed or wave motion, so the field
+ * can be seen and trusted independently of how the wash reads it.
  */
 
 in vec2 var_texture_position;
@@ -31,6 +31,7 @@ uniform sampler2D u_shore_distance;
 
 #include "terrain_noise_params.glsl"
 #include "simplex_noise.glsl"
+#include "noise_fields.glsl"
 
 out vec4 frag_color;
 
@@ -80,6 +81,24 @@ vec2 water_shore_warp(vec2 world_pos) {
 vec3 water_depth_color(float t) {
 	return mix(mix(kWaterColorShallow, kWaterColorMid, clamp(t / 0.5, 0.0, 1.0)),
 	           kWaterColorDeep, clamp((t - 0.5) / 0.5, 0.0, 1.0));
+}
+
+// Wave surface motion (Claude/WATER.md §4.6, WP-8): two scrolled simplex layers, swell (layer 1,
+// lower frequency) and chop (layer 2, higher frequency), blended into one signal roughly in
+// [-1, 1]. See the constants' own comments (terrain_noise_params.glsl) for the frequency/velocity
+// derivation and the swirl displacement below.
+//
+// Layer 1 needs its gradient, not just its value, so it is evaluated with
+// scrolling_snoise_grad() even though only n1 (g1.x) enters the blend -- the gradient (g1.yz)
+// drives where layer 2 samples. Rotating it 90 degrees, (-g1.z, g1.y), gives a displacement
+// *along* layer 1's level sets rather than across them: layer 1's crests shear layer 2 sideways
+// instead of carrying it along, so the pair reads as interference evolving in place rather than
+// as two textures translating as a rigid block.
+float water_wave_field(vec2 world_pos, float wave_time) {
+	vec3 g1 = scrolling_snoise_grad(world_pos, kWave1Frequency, kWave1Velocity, kWave1Offset, wave_time);
+	vec2 swirl = kWaveSwirl * vec2(-g1.z, g1.y);
+	float n2 = scrolling_snoise(world_pos + swirl, kWave2Frequency, kWave2Velocity, kWave2Offset, wave_time);
+	return (kWave1Weight * g1.x + kWave2Weight * n2) / kWaveWeightSum;
 }
 
 void main() {
@@ -198,10 +217,40 @@ void main() {
 	 * cancellation identity is why applying the cloud shadow here and in terrain.fp (on the seabed)
 	 * composites correctly instead of double-darkening.
 	 */
+	/* Early-out (WP-8): every triangle in frame reaches this shader, water and land alike
+	 * (water_program.cc), so a fragment more than half a field width inland already contributes
+	 * nothing -- coverage below is exactly 0 there. Skipping it here also skips the wave field for
+	 * such fragments, which is the point: without this, every land pixel on screen would pay for
+	 * two more snoise samples it can never show. Bit-exact, not an approximation: under
+	 * kBlendAlpha, mix(dst, src, 0) == dst regardless of src's colour, and w is computed early
+	 * purely so this check can use it -- it is the same value coverage uses further down.
+	 */
+	float w = max(kWaterEdgeWidth, 0.5 * fwidth(shore));
+	if (shore <= -w) {
+		frag_color = vec4(0.0);
+		return;
+	}
+
 	float depth_t = clamp(shore / u_max_distance, 0.0, 1.0);
 	vec3 color = water_depth_color(depth_t);
+
+	/* Wave field (WP-8): a colour swing along the ramp's own shallow/deep hue axis, scaled by
+	 * depth (shallower water swings less, calming the surface near the shoreline where WP-9's foam
+	 * will take over) rather than by a depth-varying speed, which would shear the field instead
+	 * (see kWaveAmplitudeShallow/Deep's own comment). Opacity and coverage below are deliberately
+	 * left keyed to the unperturbed depth_t/shore -- waves modulating how much seabed shows through
+	 * would make the seabed itself shimmer, and moving the coastline edge here would pre-empt
+	 * WP-9/WP-10's shore frame.
+	 *
+	 * wave_time wraps u_time again at a shorter, exact-divisor period -- see kWaveTimeWrapPeriod's
+	 * own comment for the float-precision reasoning.
+	 */
+	float wave_time = mod(u_time, kWaveTimeWrapPeriod);
+	float wave = water_wave_field(var_texture_position, wave_time);
+	float wave_amplitude = mix(kWaveAmplitudeShallow, kWaveAmplitudeDeep, depth_t);
+	color = clamp(color + kWaveColorSwing * wave_amplitude * wave, 0.0, 1.0);
+
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
-	float w = max(kWaterEdgeWidth, 0.5 * fwidth(shore));
 	float coverage = smoothstep(-w, w, shore);
 	frag_color = vec4(color * var_brightness * var_cloud_shadow, opacity * coverage);
 }

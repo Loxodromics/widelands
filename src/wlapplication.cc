@@ -1982,12 +1982,6 @@ void WLApplication::handle_commandline_parameters() {
 			log_warn("--capture-show-ui: captures including the toolbar and info panel are not "
 			         "reproducible between runs\n");
 		}
-		if (game_type_ == GameType::kEditor && DevHarness::capture_options().capture_at > 0) {
-			throw ParameterError(
-			   CmdLineVerbosity::None,
-			   ("The game time never advances in the editor, so --capture-at can only be used "
-			    "with --scenario or --loadgame."));
-		}
 	} else {
 		// Reject capture sub-switches without --capture instead of silently
 		// treating them as config overrides.

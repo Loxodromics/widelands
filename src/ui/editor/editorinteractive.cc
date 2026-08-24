@@ -654,10 +654,15 @@ void EditorInteractive::think() {
 	realtime_ = SDL_GetTicks();
 
 	// The editor advances gametime by wall clock, which drives the frame
-	// animation of water and immovables. A capture must be reproducible, so
-	// pin it while the dev harness is running; the simulation is frozen by the
-	// game controller in game mode, the editor has no controller to do that.
-	if (!DevHarness::capture_enabled()) {
+	// animation of water and immovables. A capture must be reproducible, so pin
+	// it to the requested --capture-at value while the dev harness is running;
+	// the simulation is frozen by the game controller in game mode, the editor
+	// has no controller to do that. Unlike that game-mode freeze -- a lower
+	// bound, landing on whichever logic tick is at or after the requested time
+	// -- this is exact: there is no tick to overshoot on.
+	if (DevHarness::capture_enabled()) {
+		egbase().get_gametime_pointer() = Time(DevHarness::capture_options().capture_at);
+	} else {
 		egbase().get_gametime_pointer().increment(Duration(realtime_ - lasttime));
 	}
 }
