@@ -208,6 +208,10 @@ void VulkanCommandBuffer::bind_pipeline(const Pipeline* pipeline) {
 	}
 	vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, handle);
 	current_pipeline_ = vulkan_pipeline;
+	// A new pipeline invalidates any set bound to the previous one - the
+	// draw() guard below must not pass a set recorded against a foreign
+	// pipeline layout just because some earlier program left one bound (D4).
+	current_descriptor_set_ = nullptr;
 }
 
 void VulkanCommandBuffer::bind_descriptor_set(const DescriptorSet* set) {
