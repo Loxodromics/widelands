@@ -30,6 +30,7 @@
 
 namespace Rhi {
 
+class VulkanDescriptorPool;
 class VulkanDescriptorSet;
 class VulkanPipeline;
 class VulkanPipelineCache;
@@ -77,10 +78,12 @@ public:
 	// 'cache' may be null when every bound pipeline carries a direct handle
 	// and no descriptor set is ever bound (the headless test's
 	// descriptor-less cases); the screen path always passes the real cache,
-	// the per-frame descriptor pool and the dummy texture.
+	// the per-frame descriptor pool and the dummy texture. 'descriptor_pool'
+	// is borrowed - owned by the device, one per frame slot - and may grow
+	// itself on exhaustion (D3); the command buffer never destroys it.
 	VulkanCommandBuffer(VkDevice device, VkCommandBuffer command_buffer,
 	                    const VulkanPipelineCache* cache, Target screen_target,
-	                    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE,
+	                    VulkanDescriptorPool* descriptor_pool = nullptr,
 	                    const VulkanTexture* dummy_texture = nullptr);
 	~VulkanCommandBuffer() override;
 
@@ -112,7 +115,7 @@ private:
 	VkDevice device_;
 	VkCommandBuffer command_buffer_;
 	const VulkanPipelineCache* cache_;
-	VkDescriptorPool descriptor_pool_;
+	VulkanDescriptorPool* descriptor_pool_;
 	const VulkanTexture* dummy_texture_;
 
 	Target screen_target_;

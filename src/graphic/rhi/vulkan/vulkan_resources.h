@@ -26,6 +26,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <volk.h>
 
@@ -33,6 +34,43 @@
 #include "graphic/rhi/vulkan/vulkan_manifest.h"
 
 namespace Rhi {
+
+// A per-frame-slot descriptor pool that grows instead of failing. WP-16
+// sized a single pool at a generous fixed upper bound; the Phase D review
+// (finding D3) measured a scene that used a quarter of it and found no
+// growth path behind that bound - vkAllocateDescriptorSets failing was a
+// fatal wexception. allocate() now retries against a freshly created pool
+// of the same size on VK_ERROR_OUT_OF_POOL_MEMORY / VK_ERROR_FRAGMENTED_POOL
+// instead of throwing, and reset() rewinds every pool in the chain
+// together, mirroring the per-slot arena's reset.
+class VulkanDescriptorPool {
+public:
+	VulkanDescriptorPool(VkDevice device,
+	                     uint32_t max_sets,
+	                     uint32_t max_samplers,
+	                     uint32_t max_uniform_buffers);
+	~VulkanDescriptorPool();
+
+	// Allocates one set of 'layout', growing the chain by one pool and
+	// retrying if the current pool is exhausted. Throws only if the retry
+	// against the fresh pool also fails.
+	VkDescriptorSet allocate(VkDescriptorSetLayout layout);
+
+	// Resets every pool the chain has grown to. Called once begin_frame's
+	// fence wait has proved the queue is done with every set they hold.
+	void reset();
+
+private:
+	VkDescriptorPool add_pool() const;
+
+	VkDevice device_;
+	uint32_t max_sets_;
+	uint32_t max_samplers_;
+	uint32_t max_uniform_buffers_;
+	std::vector<VkDescriptorPool> pools_;
+
+	DISALLOW_COPY_AND_ASSIGN(VulkanDescriptorPool);
+};
 
 // Everything VulkanTexture::upload needs beyond its own image, shared with
 // the device so textures do not each carry a queue or command pool. The

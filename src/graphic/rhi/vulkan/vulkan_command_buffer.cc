@@ -66,7 +66,7 @@ VulkanCommandBuffer::VulkanCommandBuffer(const VkDevice device,
                                          const VkCommandBuffer command_buffer,
                                          const VulkanPipelineCache* cache,
                                          Target screen_target,
-                                         const VkDescriptorPool descriptor_pool,
+                                         VulkanDescriptorPool* const descriptor_pool,
                                          const VulkanTexture* dummy_texture)
    : device_(device),
      command_buffer_(command_buffer),
@@ -217,7 +217,7 @@ void VulkanCommandBuffer::bind_descriptor_set(const DescriptorSet* set) {
 	if (set == nullptr) {
 		throw wexception("Rhi::CommandBuffer::bind_descriptor_set: null descriptor set.");
 	}
-	if (descriptor_pool_ == VK_NULL_HANDLE) {
+	if (descriptor_pool_ == nullptr) {
 		throw wexception("Rhi::CommandBuffer::bind_descriptor_set: no descriptor pool.");
 	}
 	const VulkanDescriptorSet* vulkan_set = static_cast<const VulkanDescriptorSet*>(set);
@@ -233,17 +233,10 @@ void VulkanCommandBuffer::bind_descriptor_set(const DescriptorSet* set) {
 		                 vulkan_set->program_name().c_str());
 	}
 
-	VkDescriptorSetAllocateInfo allocate_info{};
-	allocate_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-	allocate_info.descriptorPool = descriptor_pool_;
-	allocate_info.descriptorSetCount = 1;
-	const VkDescriptorSetLayout set_layout = vulkan_set->set_layout();
-	allocate_info.pSetLayouts = &set_layout;
-	VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-	if (vkAllocateDescriptorSets(device_, &allocate_info, &descriptor_set) != VK_SUCCESS) {
-		throw wexception("Vulkan: vkAllocateDescriptorSets failed for program '%s'",
-		                 vulkan_set->program_name().c_str());
-	}
+	// Grows itself (a fresh pool, same sizes) on exhaustion rather than
+	// throwing (D3); only an allocation failure that survives a grow is
+	// still fatal.
+	const VkDescriptorSet descriptor_set = descriptor_pool_->allocate(vulkan_set->set_layout());
 
 	// Translate and write the recorded bindings.
 	std::vector<VkWriteDescriptorSet> writes;

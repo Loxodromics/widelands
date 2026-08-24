@@ -23,6 +23,7 @@
 #include <cstring>
 #include <utility>
 
+#include "base/log.h"
 #include "base/wexception.h"
 
 namespace Rhi {
@@ -115,6 +116,77 @@ const std::unordered_map<uint32_t, const Texture*>& VulkanDescriptorSet::texture
 const std::unordered_map<uint32_t, VulkanDescriptorSet::UniformBinding>&
 VulkanDescriptorSet::uniform_buffers() const {
 	return uniform_buffers_;
+}
+
+VulkanDescriptorPool::VulkanDescriptorPool(const VkDevice device,
+                                           const uint32_t max_sets,
+                                           const uint32_t max_samplers,
+                                           const uint32_t max_uniform_buffers)
+   : device_(device),
+     max_sets_(max_sets),
+     max_samplers_(max_samplers),
+     max_uniform_buffers_(max_uniform_buffers) {
+	pools_.push_back(add_pool());
+}
+
+VulkanDescriptorPool::~VulkanDescriptorPool() {
+	for (const VkDescriptorPool pool : pools_) {
+		vkDestroyDescriptorPool(device_, pool, nullptr);
+	}
+}
+
+VkDescriptorPool VulkanDescriptorPool::add_pool() const {
+	VkDescriptorPoolSize pool_sizes[2] {};
+	pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	pool_sizes[0].descriptorCount = max_samplers_;
+	pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	pool_sizes[1].descriptorCount = max_uniform_buffers_;
+	VkDescriptorPoolCreateInfo pool_create_info{};
+	pool_create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	pool_create_info.maxSets = max_sets_;
+	pool_create_info.poolSizeCount = 2;
+	pool_create_info.pPoolSizes = pool_sizes;
+	VkDescriptorPool pool = VK_NULL_HANDLE;
+	if (vkCreateDescriptorPool(device_, &pool_create_info, nullptr, &pool) != VK_SUCCESS) {
+		throw wexception("Vulkan: vkCreateDescriptorPool failed");
+	}
+	return pool;
+}
+
+VkDescriptorSet VulkanDescriptorPool::allocate(const VkDescriptorSetLayout layout) {
+	VkDescriptorSetAllocateInfo allocate_info{};
+	allocate_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	allocate_info.descriptorSetCount = 1;
+	allocate_info.pSetLayouts = &layout;
+	allocate_info.descriptorPool = pools_.back();
+
+	VkDescriptorSet set = VK_NULL_HANDLE;
+	VkResult result = vkAllocateDescriptorSets(device_, &allocate_info, &set);
+	if (result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL) {
+		// The scene's draw-batch count outgrew this slot's pool (Phase D
+		// review, D3): grow rather than crash. The exhausted pool is not
+		// destroyed - its already-allocated sets may still be bound by
+		// in-flight draws - it simply stops receiving new allocations and
+		// joins the chain that reset() rewinds together next time this slot
+		// comes back around.
+		log_warn("Vulkan: descriptor pool exhausted (%u sets), allocating another pool\n",
+		        max_sets_);
+		pools_.push_back(add_pool());
+		allocate_info.descriptorPool = pools_.back();
+		result = vkAllocateDescriptorSets(device_, &allocate_info, &set);
+	}
+	if (result != VK_SUCCESS) {
+		throw wexception("Vulkan: vkAllocateDescriptorSets failed after growing the pool");
+	}
+	return set;
+}
+
+void VulkanDescriptorPool::reset() {
+	for (const VkDescriptorPool pool : pools_) {
+		if (vkResetDescriptorPool(device_, pool, 0) != VK_SUCCESS) {
+			throw wexception("Vulkan: vkResetDescriptorPool failed");
+		}
+	}
 }
 
 namespace {

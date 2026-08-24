@@ -307,8 +307,9 @@ struct VulkanDevice::Impl {
 	// (same lifetime argument as the arenas). Sets are allocated at
 	// bind_descriptor_set time; a slot's pool resets at the start of that
 	// slot's next use, after its fence wait, so no recorded draw references
-	// a set from the pool being reset.
-	std::array<VkDescriptorPool, kFramesInFlight> descriptor_pools{};
+	// a set from the pool being reset. Each grows itself on exhaustion
+	// instead of throwing (D3).
+	std::array<std::unique_ptr<VulkanDescriptorPool>, kFramesInFlight> descriptor_pools;
 
 	// WP-16b: the offscreen submit machinery. One-shot command buffers come
 	// from a dedicated pool (never the frame's or the upload pool's), and
@@ -634,23 +635,13 @@ VulkanDevice::Impl::Impl(SDL_Window* sdl_window) : window(sdl_window) {
 	// counts are generous upper bounds for one frame of Widelands: sets are
 	// allocated per bind_descriptor_set call (draw batches), a set carries
 	// at most 2 samplers + 1 uniform buffer. A slot's pool resets at the
-	// start of that slot's next use.
-	VkDescriptorPoolSize pool_sizes[2] {};
-	pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	pool_sizes[0].descriptorCount = 4096;
-	pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	pool_sizes[1].descriptorCount = 4096;
-	VkDescriptorPoolCreateInfo descriptor_pool_create_info{};
-	descriptor_pool_create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	descriptor_pool_create_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-	descriptor_pool_create_info.maxSets = 4096;
-	descriptor_pool_create_info.poolSizeCount = 2;
-	descriptor_pool_create_info.pPoolSizes = pool_sizes;
+	// start of that slot's next use, and grows itself (a fresh pool of the
+	// same size) rather than failing if a scene ever needs more (D3). No
+	// individual set is ever freed - only the whole chain is reset together
+	// - so VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT would only cost
+	// allocator quality and is not set.
 	for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
-		check_vulkan_result(
-		   vkCreateDescriptorPool(device, &descriptor_pool_create_info, nullptr,
-		                          &descriptor_pools[slot]),
-		   "vkCreateDescriptorPool");
+		descriptor_pools[slot].reset(new VulkanDescriptorPool(device, 4096, 4096, 4096));
 	}
 
 	// The offscreen submit path (WP-16b): a one-shot command pool and a
@@ -714,7 +705,7 @@ VulkanDevice::Impl::~Impl() {
 		arenas[slot].reset();
 		vkDestroyFence(device, frame_fences[slot], nullptr);
 		vkDestroySemaphore(device, image_available_semaphores[slot], nullptr);
-		vkDestroyDescriptorPool(device, descriptor_pools[slot], nullptr);
+		descriptor_pools[slot].reset();
 	}
 	for (VkSemaphore semaphore : render_finished_semaphores) {
 		vkDestroySemaphore(device, semaphore, nullptr);
@@ -1086,10 +1077,10 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 	arenas[slot]->reset();
 	current_arena_ = arenas[slot].get();
 	// The slot's descriptor pool has the same lifetime as the slot's arena
-	// (WP-16): every set a recorded draw references came from this pool, and
-	// the fence wait above guarantees the queue is done with all of them.
-	check_vulkan_result(vkResetDescriptorPool(device, descriptor_pools[slot], 0),
-	                    "vkResetDescriptorPool");
+	// (WP-16): every set a recorded draw references came from this pool (or
+	// a pool it grew into, D3), and the fence wait above guarantees the
+	// queue is done with all of them.
+	descriptor_pools[slot]->reset();
 
 	uint32_t image_index = 0;
 	const VkResult acquire_result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
@@ -1128,7 +1119,7 @@ std::unique_ptr<CommandBuffer> VulkanDevice::Impl::begin_frame() {
 	const VulkanCommandBuffer::Target target{
 	   pipelines->render_pass(), framebuffers[image_index], extent, 2};
 	return std::unique_ptr<CommandBuffer>(new VulkanCommandBuffer(
-	   device, command_buffers[slot], pipelines.get(), target, descriptor_pools[slot],
+	   device, command_buffers[slot], pipelines.get(), target, descriptor_pools[slot].get(),
 	   dummy_texture.get()));
 }
 
@@ -1231,7 +1222,7 @@ std::unique_ptr<CommandBuffer> VulkanDevice::begin_offscreen() {
 	                    "vkBeginCommandBuffer (offscreen)");
 	std::unique_ptr<CommandBuffer> command_buffer(new VulkanCommandBuffer(
 	   impl_->device, commands, impl_->pipelines.get(), VulkanCommandBuffer::Target{},
-	   impl_->descriptor_pools[impl_->frame_slot_], impl_->dummy_texture.get()));
+	   impl_->descriptor_pools[impl_->frame_slot_].get(), impl_->dummy_texture.get()));
 	push_command_buffer(command_buffer.get());
 	return command_buffer;
 }

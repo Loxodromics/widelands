@@ -1465,24 +1465,10 @@ TESTCASE(descriptor_set_binding_allocates_writes_and_binds) {
 
 	// The per-frame descriptor pool (the device owns one; the headless test
 	// creates its own for the command buffer to allocate from).
-	VkDescriptorPoolSize pool_sizes[2] {};
-	pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	pool_sizes[0].descriptorCount = 8;
-	pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	pool_sizes[1].descriptorCount = 8;
-	VkDescriptorPoolCreateInfo pool_info{};
-	pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	pool_info.maxSets = 8;
-	pool_info.poolSizeCount = 2;
-	pool_info.pPoolSizes = pool_sizes;
-	VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-	if (vkCreateDescriptorPool(context.device, &pool_info, nullptr, &descriptor_pool) !=
-	    VK_SUCCESS) {
-		throw wexception("test_vulkan: vkCreateDescriptorPool failed");
-	}
+	Rhi::VulkanDescriptorPool descriptor_pool(context.device, 8, 8, 8);
 
 	Rhi::VulkanCommandBuffer command_buffer(
-	   context.device, target.command_buffer, nullptr, target.target(), descriptor_pool, nullptr);
+	   context.device, target.command_buffer, nullptr, target.target(), &descriptor_pool, nullptr);
 	command_buffer.begin_pass(target.texture.get(),
 	                          Rhi::PassClear{true, kClearR, kClearG, kClearB, 1.f});
 	command_buffer.set_viewport(Recti(0, 0, kTargetSize, kTargetSize));
@@ -1513,7 +1499,6 @@ TESTCASE(descriptor_set_binding_allocates_writes_and_binds) {
 
 	check_equal(g_validation_errors, errors_before);
 
-	vkDestroyDescriptorPool(context.device, descriptor_pool, nullptr);
 	vkDestroyPipeline(context.device, fill_rect_with_bindings, nullptr);
 	vkDestroyPipelineLayout(context.device, pipeline_layout, nullptr);
 	vkDestroyDescriptorSetLayout(context.device, set_layout, nullptr);
