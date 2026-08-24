@@ -910,6 +910,11 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 	swapchain_create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 	swapchain_create_info.presentMode = present_mode;
 	swapchain_create_info.clipped = VK_TRUE;
+	// A native window can only be associated with one non-retired swapchain,
+	// and oldSwapchain is the retirement mechanism: without it the creation
+	// below fails with VK_ERROR_NATIVE_WINDOW_IN_USE_KHR on every recreation
+	// (NVIDIA enforces this; Mesa does not). VK_NULL_HANDLE on the first call.
+	swapchain_create_info.oldSwapchain = swapchain;
 
 	VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
 	check_vulkan_result(
