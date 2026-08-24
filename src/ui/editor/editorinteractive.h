@@ -107,6 +107,13 @@ public:
 	};
 	explicit EditorInteractive(Widelands::EditorGameBase&);
 
+	// The editor's own pinned display flags, applied regardless of the user's saved global
+	// "display_flags" config value -- editor use isn't the iterative gameplay session that config
+	// value is tuned for. Named so the dev harness can read a `--display_flags` override against
+	// this exact value as its fallback (Claude/DEV_HARNESS.md).
+	static constexpr int32_t kDefaultDisplayFlags =
+	   dfShowResources | dfShowImmovables | dfShowBobs | dfShowGrid;
+
 	enum class Init {
 		kLoadMapDirectly,  // load the given map file, then run the given script if any
 		kDefault,          // create new empty map

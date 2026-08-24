@@ -151,8 +151,9 @@ void fill_parameter_vector() {
 	      "dependent content, which makes captures differ between runs. Only valid with --capture."),
 	    false},
 	   {"", "water-debug", "",
-	    _("Draw the shore distance field as a false-colour debug overlay over the map. A "
-	      "development instrument for the water rendering work; it makes the game unplayable."),
+	    _("Replace the water wash with a false-colour view of the shore distance field it is "
+	      "computed from. A development instrument for the water rendering work; it makes the game "
+	      "unplayable."),
 	    false},
 	   {"", "fixed-timestep",
 	    /** TRANSLATORS: A placeholder for a time value in milliseconds */

@@ -65,8 +65,9 @@ const float kContourPhaseOffset = 0.25;
 // delta 1, 0.0021% of pixels differing horizontally and 0.0005% vertically -- smaller than the
 // debug pass's own <0.01%, consistent with a smooth ramp being less sensitive to few-ULP position
 // jitter than the debug view's near-hard fwidth() threshold, but not zero: the ramp's own
-// half-width (kWaterEdgeWidth, or fwidth(shore) where that is larger) is still crossed by the same
-// jitter at the rare pixel sitting exactly on it.
+// half-width (kWaterEdgeWidth in practice -- fwidth(shore) does not bind at any zoom the game
+// offers, see terrain_noise_params.glsl) is still crossed by the same jitter at the rare pixel
+// sitting exactly on it.
 vec2 water_shore_warp(vec2 world_pos) {
 	return kWaterWarpAmplitude * vec2(
 		snoise(world_pos * kWaterWarpFrequency + kWaterWarpOffset1),
@@ -172,10 +173,12 @@ void main() {
 	 * rather than a hard threshold -- see water_shore_warp()'s own comment for the (smaller, but
 	 * not zero) panning residual this ramp still shows relative to the debug view's.
 	 *
-	 * w is a screen-space floor under the transition width, the same technique dither.fp uses for
-	 * kDitherMinWidth: without it the band collapses to sub-pixel and aliases once zoomed out far
-	 * enough that a field width is under a pixel. coverage is 0 deep inland, 1 in open water, and
-	 * ramps smoothly through the coastline in between; frag_color.a scales it by kWaterOpacity so
+	 * w is kWaterEdgeWidth in practice: the screen-space fwidth(shore) term next to it is the same
+	 * floor-under-the-transition-width idiom dither.fp uses for kDitherMinWidth, but it does not
+	 * currently bind at any zoom the game offers (terrain_noise_params.glsl) -- kept as a guard for
+	 * when WP-7's ramp or WP-9's foam band narrows the transition enough for it to matter. coverage
+	 * is 0 deep inland, 1 in open water, and ramps smoothly through the coastline in between;
+	 * frag_color.a scales it by kWaterOpacity so
 	 * kBlendAlpha's mix(dst, src, a) reads as mix(seabed_or_land, water, kWaterOpacity * coverage)
 	 * -- Claude/WATER.md §4.8's cancellation identity is why applying the cloud shadow here and in
 	 * terrain.fp (on the seabed) composites correctly instead of double-darkening.

@@ -203,9 +203,6 @@ public:
 	void set_water_debug(const bool enabled) {
 		water_debug_ = enabled;
 	}
-	[[nodiscard]] bool water_debug_enabled() const {
-		return water_debug_;
-	}
 
 private:
 	RenderQueue();

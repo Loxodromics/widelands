@@ -190,8 +190,18 @@ EditorInteractive::EditorInteractive(Widelands::EditorGameBase& e)
 
 	finalize_toolbar();
 
-	set_display_flags(EditorInteractive::dfShowResources | EditorInteractive::dfShowImmovables |
-	                  EditorInteractive::dfShowBobs | EditorInteractive::dfShowGrid);
+	/* Outside capture mode the editor always starts from its own pinned set (kDefaultDisplayFlags),
+	 * ignoring the user's saved global "display_flags" -- unlike InteractiveBase's own constructor,
+	 * which reads that config value for in-game use. Under the dev harness, though, a capture needs
+	 * --display_flags to actually reach the editor (e.g. to gate the height heat map), so read the
+	 * config there, with kDefaultDisplayFlags as its fallback rather than
+	 * InteractiveBase::kDefaultDisplayFlags: with the harness's fresh homedir and no
+	 * --display_flags, get_config_int() is a pure read that returns this same default, so a
+	 * flagless capture stays byte-identical to before this change.
+	 */
+	set_display_flags(DevHarness::capture_enabled() ?
+	                     get_config_int("display_flags", EditorInteractive::kDefaultDisplayFlags) :
+	                     EditorInteractive::kDefaultDisplayFlags);
 #ifndef NDEBUG
 	set_display_flag(InteractiveBase::dfDebug, true);
 #else

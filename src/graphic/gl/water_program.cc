@@ -75,7 +75,16 @@ void WaterProgram::add_vertex(const FieldsToDraw::Field& field) {
 	back.brightness = field.brightness;
 }
 
-void WaterProgram::report_rebuild_cost() {
+void WaterProgram::report_rebuild_cost(const bool debug) {
+	/* Only reachable at all under --water-debug: the pass itself runs
+	 * unconditionally since WP-6, but this instrument is a one-off measurement
+	 * against WP-3's baseline (WATER.md WP-11), not shipping telemetry -- left
+	 * running it would log every kTimingWindow rebuilds in normal gameplay.
+	 */
+	if (!debug) {
+		return;
+	}
+
 	/* A grid size change means the zoom or the window changed, which is exactly
 	 * the axis the cost measurement varies, so each new size reports its first
 	 * rebuild on its own before settling into windowed means. Without that, a
@@ -133,7 +142,7 @@ void WaterProgram::draw(
    const uint32_t gametime,
    const bool debug) {
 	field_.rebuild(fields_to_draw, map, terrains, player);
-	report_rebuild_cost();
+	report_rebuild_cost(debug);
 	upload_distance_texture();
 
 	/* The same triangle stream and winding as TerrainProgram::draw. Both signs

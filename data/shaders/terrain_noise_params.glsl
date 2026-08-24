@@ -260,8 +260,13 @@ const vec2 kWaterWarpOffset2 = vec2(63.4, -147.1);
 // Appendix's complaint about our own water texture was the opposite failure -- a wash so weak the
 // floor read as visible everywhere), while still leaving a tenth of the seabed subtly readable
 // per §4.4 ("depth controls how much of it survives"). kWaterEdgeWidth is in field widths (the
-// same unit |shore| is stored in), with an fwidth() floor following what kDitherMinWidth does for
-// dither.fp -- so the transition band never collapses to sub-pixel and aliases when zoomed out.
+// same unit |shore| is stored in) -- one whole cell either side of the coastline (kCellSize = 32
+// against a 64 px field, so one cell is 0.5 field widths). water.fp's
+// max(kWaterEdgeWidth, 0.5 * fwidth(shore)) floor follows what kDitherMinWidth does for dither.fp,
+// but unlike there it does not currently bind at any zoom the game offers: at the game's maximum
+// zoom-out the fwidth() term reaches only about 0.08 field widths (including the warp's gradient
+// amplification) against kWaterEdgeWidth's 0.5. Kept as a guard for when WP-7's ramp or WP-9's
+// foam band narrows the transition enough for it to matter.
 const vec3 kWaterColor = vec3(80.0, 135.0, 175.0) / 255.0;
 const float kWaterOpacity = 0.9;
-const float kWaterEdgeWidth = 0.5;  // half a cell either side of the coastline, in field widths
+const float kWaterEdgeWidth = 0.5;  // one whole cell either side of the coastline, in field widths

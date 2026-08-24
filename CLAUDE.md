@@ -141,4 +141,6 @@ Two independent serialization layers: `map_io` (the map itself — terrain, trib
 used by both the editor and the game) and `game_io` (full running-game state — savegames).
 
 ### Misc
-The dirctory "Claude" is its own repo
+- The dirctory "Claude" is its own repo
+- The clang-format binary is called on macOS `clang-format-mp-22`
+- Many helpful tasks and tools for the agent to test are described in Claude/DEV_HARNESS.md, read is as needed.

@@ -88,24 +88,33 @@ void draw_terrain(uint32_t gametime,
 	i.terrain_arguments.map = &map;
 	RenderQueue::instance().enqueue(i);
 
-	// Enqueue the drawing of the dither layer or height heat map layer.
-	i.blend_mode = BlendMode::UseAlpha;
-	i.program_id = RenderQueue::Program::kTerrainDitherOrHeightHeatMap;
-	RenderQueue::instance().enqueue(i);
-
 	/* The water pass (WATER.md WP-6): a flat colour wash over the seabed the terrain pass just
 	 * drew for water triangles, with its edge coming from the shore distance field. Runs
 	 * unconditionally -- water is an ordinary terrain layer now, with no on/off switch (D2) --
 	 * unlike the WP-3/WP-5 debug-only overlay this replaces, which only enqueued under
 	 * --water-debug. That flag still exists, but now selects the pass's false-colour
-	 * visualisation instead of gating whether it draws at all (RenderQueue::water_debug_enabled()).
+	 * visualisation instead of gating whether it draws at all (RenderQueue::set_water_debug()).
 	 *
-	 * After the dither, not before it: blended items draw in enqueue order, and the dither draws
-	 * terrain texture at partial alpha exactly along the coastline, which is where D2's wash has
-	 * to composite.
+	 * Blended items draw in enqueue order, so this needs to sit on the right side of the dither
+	 * layer depending on what that layer is. Normally after it: the dither draws terrain texture
+	 * at partial alpha exactly along the coastline, which is where D2's wash has to composite.
+	 * But the height heat map draws at color_a = 0.9 (fill_rect_program.cc), which composited over
+	 * an already-drawn wash would leave only 0.9 * (1 - kWaterOpacity) = 9% of the wash's colour
+	 * showing through; drawing water first instead restores water reading as water underneath the
+	 * diagnostic, exactly as it did as bare seabed sand before this pass existed.
 	 */
-	i.program_id = RenderQueue::Program::kTerrainWater;
-	RenderQueue::instance().enqueue(i);
+	i.blend_mode = BlendMode::UseAlpha;
+	if (height_heat_map) {
+		i.program_id = RenderQueue::Program::kTerrainWater;
+		RenderQueue::instance().enqueue(i);
+		i.program_id = RenderQueue::Program::kTerrainDitherOrHeightHeatMap;
+		RenderQueue::instance().enqueue(i);
+	} else {
+		i.program_id = RenderQueue::Program::kTerrainDitherOrHeightHeatMap;
+		RenderQueue::instance().enqueue(i);
+		i.program_id = RenderQueue::Program::kTerrainWater;
+		RenderQueue::instance().enqueue(i);
+	}
 
 	if (!workarea.empty()) {
 		// Enqueue the drawing of the workarea overlay layer.

@@ -39,7 +39,7 @@ class Player;
  * over every terrain triangle; WP-6 turns the same pass into the real wash over the seabed the
  * terrain pass now draws for water triangles (graphic/gl/seabed.h), which is why it was built as
  * the water pass rather than as scaffolding to be thrown away. --water-debug
- * (RenderQueue::water_debug_enabled()) now selects between the two as a uniform, not an enqueue
+ * (RenderQueue::set_water_debug()) now selects between the two as a uniform, not an enqueue
  * gate: the pass runs unconditionally, since water is an ordinary terrain layer with no on/off
  * switch (D2, Claude/WATER.md).
  *
@@ -113,8 +113,9 @@ private:
 	 */
 	void upload_distance_texture();
 
-	/// Logs the chamfer's own cost, averaged over a window of rebuilds.
-	void report_rebuild_cost();
+	/// Logs the chamfer's own cost, averaged over a window of rebuilds. A no-op unless 'debug'
+	/// (--water-debug): shipping gameplay must not carry this instrument's logging cost.
+	void report_rebuild_cost(bool debug);
 
 	std::unique_ptr<Rhi::Pipeline> pipeline_;
 	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
