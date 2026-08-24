@@ -4,12 +4,12 @@
 		"blit": {
 			"samplers": {"u_texture": 0, "u_mask": 1},
 			"uniform_blocks": {},
-			"attributes": {"attr_mask_texture_position": 0, "attr_texture_position": 1, "attr_position": 2, "attr_blend": 3, "attr_program_flavor": 4}
+			"attributes": {"attr_mask_texture_position": 0, "attr_texture_position": 1, "attr_position": 2, "attr_blend": 3, "attr_program_flavor": 4, "attr_light": 5}
 		},
 		"dither": {
-			"samplers": {"u_dither_texture": 0, "u_terrain_texture": 1},
-			"uniform_blocks": {"per_program_state": {"binding": 2, "stages": ["vertex", "fragment"]}},
-			"attributes": {"attr_brightness": 0, "attr_dither_texture_position": 1, "attr_position": 2, "attr_texture_offset": 3, "attr_texture_position": 4}
+			"samplers": {"u_terrain_texture": 0},
+			"uniform_blocks": {"per_program_state": {"binding": 1, "stages": ["vertex", "fragment"]}},
+			"attributes": {"attr_brightness": 0, "attr_dither_params": 1, "attr_dither_ramp": 2, "attr_normal": 3, "attr_position": 4, "attr_texture_offset": 5, "attr_texture_position": 6}
 		},
 		"draw_line": {
 			"samplers": {},
@@ -34,7 +34,7 @@
 		"terrain": {
 			"samplers": {"u_terrain_texture": 0},
 			"uniform_blocks": {"per_program_state": {"binding": 1, "stages": ["vertex", "fragment"]}},
-			"attributes": {"attr_brightness": 0, "attr_position": 1, "attr_texture_offset": 2, "attr_texture_position": 3}
+			"attributes": {"attr_brightness": 0, "attr_normal": 1, "attr_position": 2, "attr_texture_offset": 3, "attr_texture_position": 4}
 		},
 		"workarea": {
 			"samplers": {},

@@ -106,36 +106,40 @@ TESTCASE(verify_vertex_layout) {
 
 	// A matching layout passes.
 	Rhi::verify_vertex_layout(
-	   "terrain", terrain.vertex_layout, 28,
+	   "terrain", terrain.vertex_layout, 40,
 	   {{"attr_brightness", Rhi::VertexFormat::kFloat, 8},
+	    {"attr_normal", Rhi::VertexFormat::kVec3, 12},
 	    {"attr_position", Rhi::VertexFormat::kVec2, 0},
-	    {"attr_texture_offset", Rhi::VertexFormat::kVec2, 20},
-	    {"attr_texture_position", Rhi::VertexFormat::kVec2, 12}});
+	    {"attr_texture_offset", Rhi::VertexFormat::kVec2, 32},
+	    {"attr_texture_position", Rhi::VertexFormat::kVec2, 24}});
 
 	// A drifted stride throws.
 	check_error(WException, "Vertex layout drift", [&terrain]() {
-		Rhi::verify_vertex_layout("terrain", terrain.vertex_layout, 32,
+		Rhi::verify_vertex_layout("terrain", terrain.vertex_layout, 44,
 		                          {{"attr_brightness", Rhi::VertexFormat::kFloat, 8},
+		                           {"attr_normal", Rhi::VertexFormat::kVec3, 12},
 		                           {"attr_position", Rhi::VertexFormat::kVec2, 0},
-		                           {"attr_texture_offset", Rhi::VertexFormat::kVec2, 20},
-		                           {"attr_texture_position", Rhi::VertexFormat::kVec2, 12}});
+		                           {"attr_texture_offset", Rhi::VertexFormat::kVec2, 32},
+		                           {"attr_texture_position", Rhi::VertexFormat::kVec2, 24}});
 	});
 
 	// A drifted offset throws.
 	check_error(WException, "Vertex layout drift", [&terrain]() {
-		Rhi::verify_vertex_layout("terrain", terrain.vertex_layout, 28,
+		Rhi::verify_vertex_layout("terrain", terrain.vertex_layout, 40,
 		                          {{"attr_brightness", Rhi::VertexFormat::kFloat, 8},
+		                           {"attr_normal", Rhi::VertexFormat::kVec3, 12},
 		                           {"attr_position", Rhi::VertexFormat::kVec2, 0},
-		                           {"attr_texture_offset", Rhi::VertexFormat::kVec2, 20},
-		                           {"attr_texture_position", Rhi::VertexFormat::kVec2, 16}});
+		                           {"attr_texture_offset", Rhi::VertexFormat::kVec2, 32},
+		                           {"attr_texture_position", Rhi::VertexFormat::kVec2, 28}});
 	});
 
 	// A dropped attribute throws.
 	check_error(WException, "Vertex layout drift", [&terrain]() {
-		Rhi::verify_vertex_layout("terrain", terrain.vertex_layout, 28,
+		Rhi::verify_vertex_layout("terrain", terrain.vertex_layout, 40,
 		                          {{"attr_brightness", Rhi::VertexFormat::kFloat, 8},
+		                           {"attr_normal", Rhi::VertexFormat::kVec3, 12},
 		                           {"attr_position", Rhi::VertexFormat::kVec2, 0},
-		                           {"attr_texture_offset", Rhi::VertexFormat::kVec2, 20}});
+		                           {"attr_texture_offset", Rhi::VertexFormat::kVec2, 32}});
 	});
 }
 
