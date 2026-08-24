@@ -21,12 +21,16 @@
 //                                                             so it cannot correlate with the
 //                                                             fields above by construction
 // water warp      kWaterWarpFrequency     static             kWaterWarpOffset1, kWaterWarpOffset2
-// water wave 1    kWave1Frequency         kWave1Velocity     kWave1Offset
-// water wave 2    kWave2Frequency         kWave2Velocity     kWave2Offset
+// wave wander     kWanderFrequency        kWanderEvolve      kWanderOffset
+// wave detail     kDetailFrequency        kDetailEvolve      kDetailOffset
 //
-// Cloud shadow and the two wave layers (WP-8) are the scrolling fields; scrolling_snoise() /
-// scrolling_snoise_grad() (noise_fields.glsl, moved out of terrain_variation.glsl at WP-6) are the
-// shared helpers. A new field goes in this table with its own row when it lands.
+// The two wave fields (WP-8a) are the only 3D ones: they take time as a third noise axis
+// (snoise3(), simplex_noise_3d.glsl) rather than as a drift added to the sample position, so they
+// evolve in place instead of translating, and their "velocity" column is the rate that third
+// coordinate advances. The wave *trains* themselves carry no offset -- they are sines, not noise,
+// and share the wander field above rather than sampling their own. Cloud shadow is the remaining
+// scrolling field; scrolling_snoise() (noise_fields.glsl, moved out of terrain_variation.glsl at
+// WP-6) is its shared helper. A new field goes in this table with its own row when it lands.
 
 // Rotate between octaves so the simplex lattice axes never line up.
 const mat2 kOctaveRotation = mat2(0.80, 0.60, -0.60, 0.80);
@@ -289,64 +293,126 @@ const float kWaterOpacityShallow = 0.5;  // STARTING POINT -- tuned against a ca
 const float kWaterOpacityDeep = 0.9;     // unchanged from WP-6's kWaterOpacity
 const float kWaterEdgeWidth = 0.5;  // one whole cell either side of the coastline, in field widths
 
-// Wave surface motion (water_wave_field(), water.fp; Claude/WATER.md §4.6, WP-8): two scrolled
-// simplex layers, swell (layer 1, lower frequency) and chop (layer 2, higher frequency, its
-// sample position displaced along layer 1's level sets by kWaveSwirl), blended and applied as a
-// colour swing along the wash's own shallow/deep hue axis (kWaveColorSwing below) rather than by
-// perturbing depth_t before the ramp -- see water_wave_field()'s caller in water.fp for why the
-// latter was rejected (it clamps asymmetrically at the ramp's two ends).
+// Wave surface motion (water_wave_field(), water.fp; Claude/WATER.md §4.6, WP-8a): three
+// travelling wave trains, each a sharpened sine whose crest lines run perpendicular to its own
+// direction, plus one fine detail layer. WP-8 built this as two scrolled simplex layers instead;
+// that read as smooth blobs sliding, because a translating noise field has no crest structure and
+// nothing in it ever forms or breaks. A sine train has both for free, and sharpening it (below)
+// is what makes the surface legible at a swing an observer barely notices when it is spread over
+// smooth noise.
 //
-// Frequencies: STARTING POINT, chosen for a swell/chop scale split by eye, not measured.
-const float kWave1Frequency = 0.45;  // ~2.2-field wavelength
-const float kWave2Frequency = 1.3;   // ~0.8-field wavelength
+// Directions are unit vectors in var_texture_position's frame (map pixels / 64, y negated), which
+// mirrors them vertically against map space -- immaterial, since the directions are arbitrary and
+// a reflection preserves the angles between them.
+const vec2 kWaveDirA = vec2(0.951, 0.309);    // 18 degrees
+const vec2 kWaveDirB = vec2(0.469, 0.883);    // 62 degrees
+const vec2 kWaveDirC = vec2(0.906, -0.423);   // -25 degrees
 
-// Both layers drift at the same physical speed, 0.2 field widths/second (~13 map pixels/second at
-// zoom 1.0, since one field width = 64 map pixels -- kDitherGrainFrequency's own comment), in
-// directions 25 degrees apart so neither layer's crests stay parallel to the other's for long.
-// scrolling_snoise()'s time term enters the frequency-scaled domain directly
-// (world_pos * frequency + time * velocity, noise_fields.glsl), so matching physical speed across
-// two different frequencies means the velocity constant itself scales with frequency:
-// kWaveNVelocity = kWaveNFrequency * 0.2 * direction_n.
-const vec2 kWave1Velocity = vec2(0.0869, 0.0233);  // 0.45 * 0.2 * (cos 15 deg, sin 15 deg)
-const vec2 kWave2Velocity = vec2(0.1992, 0.1671);  // 1.3 * 0.2 * (cos 40 deg, sin 40 deg)
+// Wavenumbers (radians per field width) and angular frequencies (radians per second) for
+// wavelengths of 1.8 / 1.05 / 0.6 field widths at periods of 2.50 / 1.91 / 1.44 seconds.
+//
+// The periods are not free: deep-water waves disperse as T = c * sqrt(lambda), and these follow
+// that law at c = 1.86, so the long train travels fastest (0.72 / 0.55 / 0.42 field widths per
+// second, i.e. 46 / 35 / 27 map pixels per second at zoom 1.0). That is what makes the
+// interference between the trains form and dissolve instead of repeating: three trains at a
+// common speed would keep a fixed relative phase. Keep the relation if these are retuned.
+const float kWaveNumberA = 3.491;   // 2*pi / 1.8
+const float kWaveNumberB = 5.984;   // 2*pi / 1.05
+const float kWaveNumberC = 10.472;  // 2*pi / 0.6
+const float kWaveOmegaA = 2.513;    // 2*pi / 2.50
+const float kWaveOmegaB = 3.290;    // 2*pi / 1.91
+const float kWaveOmegaC = 4.363;    // 2*pi / 1.44
 
-// Layer 2 samples at world_pos + kWaveSwirl * (layer 1's gradient rotated 90 degrees) rather than
-// at world_pos itself -- a displacement *along* layer 1's level sets, not across them. This is
-// what keeps the pair from reading as one pattern translating as a rigid block: layer 1's crests
-// shear layer 2 sideways instead of carrying it along with them, so the interference between the
-// two evolves in place as both drift. STARTING POINT.
-const float kWaveSwirl = 0.15;
+// One train dominates and the other two perturb it. Equal weights do not work: three sharpened
+// sines of comparable weight average into blotches with no crest lines left, because each one's
+// troughs fill the others' crests (tried, and it is what the first tuning pass looked like).
+const float kWaveWeightA = 1.0;
+const float kWaveWeightB = 0.22;
+const float kWaveWeightC = 0.14;
+const float kWaveWeightSum = 1.36;
+const float kWaveLambdaC = 0.6;  // the chop train's wavelength, in field widths; drives the fade
 
-const float kWave1Weight = 1.0;
-const float kWave2Weight = 0.5;
-const float kWaveWeightSum = 1.5;
+// Crest shaping: crest = pow(0.5 + 0.5*sin(phase), sharpness), which narrows the crest and widens
+// the trough the way real water does. The mean of that expression is not 0.5, so water.fp
+// subtracts it (wave_crest_mean()) to keep the sharpening from shifting the water's base tone.
+// The sharpness itself fades toward 1.0 when zoomed out -- see kCrestFade*Px below.
+const float kCrestSharpness = 2.2;
+
+// One shared noise field displaces every train along its own direction, so crest lines bend
+// rather than running dead straight, and -- because the field's third axis is time, not a drift
+// velocity -- the bends themselves appear and dissolve in place instead of sliding past. Sampled
+// through snoise3() (simplex_noise_3d.glsl), one evaluation for all three trains.
+const float kWaveWanderAmp = 0.22;    // peak displacement, field widths
+const float kWanderFrequency = 0.35;  // cycles per field
+const float kWanderEvolve = 0.15;     // third-axis units per second
+
+// Shore phase: bends the crests near the coast, WP-8a's stand-in for refraction. Added to each
+// train's phase (water.fp's wave_train()), never multiplied into its wavenumber -- see that
+// function's comment for why a depth-varying wavenumber destroys the field far from the map
+// origin. In radians, so a train's crests shift by at most this over its own wavenumber, in field
+// widths: at 2.0 radians that is a third of a wavelength for every train alike.
+const float kShorePhase = 2.0;
+
+// Fine detail between the crests: a second snoise3() evaluation, also evolving in place.
+const float kDetailFrequency = 3.5;  // cycles per field
+const float kDetailWeight = 0.15;
+const float kDetailEvolve = 0.6;  // third-axis units per second
+
+// Crest highlight: a sparse near-white touch on the strongest crest coincidences, gated away from
+// the shoreline so it does not pre-empt WP-9's foam band. This is a deliberate, low-amplitude
+// partial take on the whitecaps of Claude/WATER.md §6 ("easy to overdo"): the bar is that it
+// reads as sparkle on moving crests, never as flat-white caps.
+const float kGlintStart = 0.68;  // crest sum, in [0, 1], at which the highlight begins
+// How far the detail field can pull the crest sum down before it is thresholded for the
+// highlight, so the highlights scatter instead of repeating on the trains' own beat lattice.
+const float kGlintMaskFloor = 0.55;
+const vec3 kGlintColor = vec3(0.85, 0.95, 1.0);
+const float kGlintWeight = 0.15;
+const float kGlintDepthMin = 0.05;  // depth_t gate: no highlight right at the waterline
+const float kGlintDepthMax = 0.15;
+
+// Zoom fades, in screen pixels per wavelength (water.fp derives pixels-per-field from
+// fwidth(var_texture_position.x), the same idiom kDitherGrainFadeMin/Max uses). Sharpened crests
+// concentrate their energy into roughly a quarter wavelength, so the chop train reaches the
+// aliasing floor before its wavelength does: at kMaxZoom its 0.85 fields are 13.6 screen pixels.
+// Below kCrestFadeMinPx the sharpening is gone (sharpness 1.0, a plain sine) and below
+// kDetailFadeMinPx the detail layer is gone entirely.
+const float kCrestFadeMinPx = 10.0;
+const float kCrestFadeMaxPx = 24.0;
+const float kDetailFadeMinPx = 5.0;
+const float kDetailFadeMaxPx = 12.0;
 
 // Amplitude varies by *depth*, not speed by depth: a spatially varying speed shears the field
-// (snoise(p*f + t*v*s(p)) drifts the effective phase apart by hundreds of cycles between depth
-// levels within a few minutes, tearing the surface along depth contours). Modulating amplitude
-// instead calms the water near the shoreline, where WP-9's foam band takes over. STARTING POINT.
-const float kWaveAmplitudeShallow = 0.35;
+// (a time term multiplied by a spatially varying factor drifts the effective phase apart by
+// hundreds of cycles between depth levels within a few minutes, tearing the surface along the
+// depth contours). Modulating amplitude instead calms the water near the shoreline, where WP-9's
+// foam band takes over. STARTING POINT.
+const float kWaveAmplitudeShallow = 0.75;
 const float kWaveAmplitudeDeep = 1.0;
 
-// Peak colour swing, at kWaveAmplitudeDeep and wave = +/-1: (kWaterColorShallow -
-// kWaterColorDeep) * 0.2, written out as a literal so it does not depend on evaluation order
-// relative to those two constants above. Crests move cyan-ward and lighter, troughs blue-ward and
-// darker -- the same axis the Appendix's reference ramp measurably moves along, and physically
-// the right one: a crest is less water above the seabed. Peak swing is about 6/16/13 8-bit codes
-// on R/G/B.
-const vec3 kWaveColorSwing = vec3(0.024, 0.063, 0.051);
+// Colour swing, applied along the wash's own shallow/deep hue axis (crests cyan-ward and lighter,
+// troughs blue-ward and darker -- the axis the Appendix's reference ramp measurably moves along,
+// and physically the right one: a crest is less water above the seabed). Written out as a literal
+// rather than derived from kWaterColorShallow/Deep so it does not depend on declaration order.
+//
+// Quote the *measured* effect, not the notional peak: WP-8's comment gave only its wave = +/-1
+// peak, which its own smooth-noise blend reached so rarely that the visible result was four times
+// smaller (mean 2, p95 5, max 11 8-bit codes -- barely above kWarmTint's "below about 1 code is
+// invisible"). Measured the same way (differencing against a capture with this constant zeroed,
+// over the water fragments of water_coast_zoom4): PLACEHOLDER -- filled in after tuning.
+const vec3 kWaveColorSwing = vec3(0.18, 0.45, 0.37);
 
-// Wraps u_time a second time, independent of kCloudTimeWrapPeriod (terrain_noise.h, 100000s): the
-// noise argument is world*frequency + time*velocity, and at kCloudTimeWrapPeriod a chop-scale
-// velocity pushes that argument to around 3e4, where a float32 step (~4e-3) is a sizeable
-// fraction of the per-screen-pixel step (f/64 at zoom 1, f/256 at zoom 0.25, the game's maximum
-// magnification) -- a handful of distinct values per pixel, i.e. visible quantisation on
-// long-running games. Wrapping at 10000s -- dividing kCloudTimeWrapPeriod exactly, so no second,
-// irregular discontinuity is added on top of the outer wrap -- keeps the argument under ~1e3, at
-// the cost of one pattern discontinuity roughly every 2.8 gametime hours.
+// Wraps u_time a second time, independent of kCloudTimeWrapPeriod (terrain_noise.h, 100000s), to
+// keep the time-derived terms in a range where float32 still resolves them: the largest is the
+// chop train's phase, omega_C * wave_time, which reaches 3.7e4 radians at this period (a float32
+// step of 4.4e-3 radians there, invisible inside a sin()), and the two snoise3() third-axis
+// coordinates reach 1.5e3 and 6e3. At kCloudTimeWrapPeriod itself they would be ten times that,
+// where the noise fields start quantising visibly against their per-screen-pixel step. 10000s
+// divides kCloudTimeWrapPeriod exactly, so no second, irregular discontinuity is added on top of
+// the outer wrap; the cost is one pattern discontinuity roughly every 2.8 gametime hours.
 const float kWaveTimeWrapPeriod = 10000.0;
 
 // Arbitrary; only need to land far from p=0 and from every other offset in the budget table above
 // (same technique as kTintOffset).
-const vec2 kWave1Offset = vec2(-183.5, 29.7);
-const vec2 kWave2Offset = vec2(112.9, -203.4);
+const vec2 kWanderOffset = vec2(-183.5, 29.7);
+const vec2 kDetailOffset = vec2(112.9, -203.4);

@@ -1,6 +1,6 @@
 #version 330
 
-/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7/WP-8). Two visualisations of the same signed
+/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7/WP-8/WP-8a). Two visualisations of the same signed
  * distance-to-shore field, chosen by u_debug: the real wash (default) composites an animated
  * shallow-to-deep colour ramp over the seabed the terrain pass now draws for water triangles, with
  * its edge coming from the warped field below; --water-debug (u_debug > 0.5) instead draws the
@@ -32,6 +32,7 @@ uniform sampler2D u_shore_distance;
 #include "terrain_noise_params.glsl"
 #include "simplex_noise.glsl"
 #include "noise_fields.glsl"
+#include "simplex_noise_3d.glsl"
 
 out vec4 frag_color;
 
@@ -83,22 +84,92 @@ vec3 water_depth_color(float t) {
 	           kWaterColorDeep, clamp((t - 0.5) / 0.5, 0.0, 1.0));
 }
 
-// Wave surface motion (Claude/WATER.md §4.6, WP-8): two scrolled simplex layers, swell (layer 1,
-// lower frequency) and chop (layer 2, higher frequency), blended into one signal roughly in
-// [-1, 1]. See the constants' own comments (terrain_noise_params.glsl) for the frequency/velocity
-// derivation and the swirl displacement below.
-//
-// Layer 1 needs its gradient, not just its value, so it is evaluated with
-// scrolling_snoise_grad() even though only n1 (g1.x) enters the blend -- the gradient (g1.yz)
-// drives where layer 2 samples. Rotating it 90 degrees, (-g1.z, g1.y), gives a displacement
-// *along* layer 1's level sets rather than across them: layer 1's crests shear layer 2 sideways
-// instead of carrying it along, so the pair reads as interference evolving in place rather than
-// as two textures translating as a rigid block.
-float water_wave_field(vec2 world_pos, float wave_time) {
-	vec3 g1 = scrolling_snoise_grad(world_pos, kWave1Frequency, kWave1Velocity, kWave1Offset, wave_time);
-	vec2 swirl = kWaveSwirl * vec2(-g1.z, g1.y);
-	float n2 = scrolling_snoise(world_pos + swirl, kWave2Frequency, kWave2Velocity, kWave2Offset, wave_time);
-	return (kWave1Weight * g1.x + kWave2Weight * n2) / kWaveWeightSum;
+/* Wave surface motion (Claude/WATER.md §4.6, WP-8a): three travelling wave trains plus a fine
+ * detail layer. WP-8 built this as two scrolled simplex layers; smooth noise translating across
+ * the surface has no crest structure and nothing in it ever forms or breaks, so it read as a
+ * sliding texture at any amplitude. See terrain_noise_params.glsl for the constants' derivation
+ * (the dispersion relation the three periods follow, the shore phase, the fades).
+ */
+
+/* One train: a sine in the direction 'dir', sharpened into a narrow crest and a wide trough.
+ *
+ * The wander term displaces the train along its own direction, so its crest lines bend; because
+ * the field supplying it takes time as a third axis rather than a drift (see water_wave_field()),
+ * the bends themselves form and dissolve in place.
+ *
+ * 'shore_phase' bends the crests near the coast (WP-8a's stand-in for refraction). It is added to
+ * the phase, not multiplied into the wavenumber, and that distinction is the whole of it: a
+ * depth-varying wavenumber multiplies against dot(dir, world_pos), i.e. against *absolute* map
+ * position, so its distortion grows without bound with distance from the map origin -- at the far
+ * side of a 190-field map a 50% wavenumber variation is already hundreds of radians, and the
+ * surface reads as marbling rather than as waves (measured on Riverlands' bay, 172 fields out,
+ * which is what put this comment here). It is also origin-dependent, which nothing else in this
+ * shader is. A phase offset is bounded by construction and shifts crests by at most
+ * kShorePhase / wave_number field widths.
+ */
+float wave_train(vec2 world_pos,
+                 vec2 dir,
+                 float wave_number,
+                 float omega,
+                 float wander,
+                 float shore_phase,
+                 float sharpness,
+                 float wave_time) {
+	float phase = wave_number * (dot(dir, world_pos) + kWaveWanderAmp * wander) -
+	              omega * wave_time + shore_phase;
+	return pow(0.5 + 0.5 * sin(phase), sharpness);
+}
+
+/* The mean of pow(0.5 + 0.5*sin(x), s) over a full period, subtracted from each train so that
+ * sharpening changes the surface's texture without shifting its base tone -- and so that a
+ * sharpness which fades with zoom (kCrestFade*Px) does not make the water brighten as the camera
+ * pulls out.
+ *
+ * Exactly, that mean is binomial(2s, s) / 4^s = gamma(2s+1) / (gamma(s+1)^2 * 4^s), which GLSL
+ * cannot evaluate. inversesqrt(pi*s + 0.858) fits it to better than 0.3% over s in [1, 3] (0.500 /
+ * 0.374 / 0.339 / 0.312 against exact 0.500 / 0.375 / 0.340 / 0.313 at s = 1 / 2 / 2.5 / 3), which
+ * is far inside the 8-bit quantisation of the swing it corrects.
+ */
+float wave_crest_mean(float sharpness) {
+	return inversesqrt(3.14159265 * sharpness + 0.858);
+}
+
+/* Blends the three trains and the detail layer. Returns the signed field in 'wave' (roughly
+ * [-1, 1], zero-mean) and the masked crest sum in 'crest' ([0, 1]), which the caller thresholds
+ * for the crest highlight: a highlight belongs where the trains' crests coincide, so it reads as
+ * sparkle at a few points rather than as an outline of every crest.
+ */
+void water_wave_field(vec2 world_pos,
+                      float wave_time,
+                      float depth_t,
+                      float crest_fade,
+                      float detail_fade,
+                      out float wave,
+                      out float crest) {
+	float wander =
+	   snoise3(vec3(world_pos * kWanderFrequency + kWanderOffset, wave_time * kWanderEvolve));
+	float shore_phase = kShorePhase * (1.0 - depth_t);
+	float sharpness = mix(1.0, kCrestSharpness, crest_fade);
+
+	float a = wave_train(world_pos, kWaveDirA, kWaveNumberA, kWaveOmegaA, wander, shore_phase,
+	                     sharpness, wave_time);
+	float b = wave_train(world_pos, kWaveDirB, kWaveNumberB, kWaveOmegaB, wander, shore_phase,
+	                     sharpness, wave_time);
+	float c = wave_train(world_pos, kWaveDirC, kWaveNumberC, kWaveOmegaC, wander, shore_phase,
+	                     sharpness, wave_time);
+
+	float crest_sum = (kWaveWeightA * a + kWaveWeightB * b + kWaveWeightC * c) / kWaveWeightSum;
+
+	float detail =
+	   snoise3(vec3(world_pos * kDetailFrequency + kDetailOffset, wave_time * kDetailEvolve));
+	wave = crest_sum - wave_crest_mean(sharpness) + kDetailWeight * detail_fade * detail;
+
+	/* The crest sum's maxima sit on the beat lattice of three sines, which is regular enough that
+	 * thresholding it directly for the highlight paints a visibly repeating grid of spots. Masking
+	 * it with the detail field -- the one term in here with no period at all -- scatters them back
+	 * onto the crests they belong to.
+	 */
+	crest = crest_sum * mix(kGlintMaskFloor, 1.0, 0.5 + 0.5 * detail);
 }
 
 void main() {
@@ -217,11 +288,21 @@ void main() {
 	 * cancellation identity is why applying the cloud shadow here and in terrain.fp (on the seabed)
 	 * composites correctly instead of double-darkening.
 	 */
+	/* Screen scale, for the zoom fades below. One field width is 1.0 in var_texture_position's x
+	 * (fields_to_draw.cc), so the reciprocal of its screen-space derivative is pixels per field.
+	 * Computed here, before the early-out, because a derivative taken after a conditional return
+	 * would be in non-uniform control flow and is undefined there -- the same reason w is computed
+	 * before the branch rather than next to coverage.
+	 */
+	float px_per_field = 1.0 / max(fwidth(var_texture_position.x), 1e-6);
+
 	/* Early-out (WP-8): every triangle in frame reaches this shader, water and land alike
 	 * (water_program.cc), so a fragment more than half a field width inland already contributes
 	 * nothing -- coverage below is exactly 0 there. Skipping it here also skips the wave field for
 	 * such fragments, which is the point: without this, every land pixel on screen would pay for
-	 * two more snoise samples it can never show. Bit-exact, not an approximation: under
+	 * the wave field's two snoise3 samples and three trains, none of which it can ever show. It
+	 * does not skip water_shore_warp() above, whose two snoise calls every fragment still pays:
+	 * this test needs 'shore', and 'shore' needs the warp. Bit-exact, not an approximation: under
 	 * kBlendAlpha, mix(dst, src, 0) == dst regardless of src's colour, and w is computed early
 	 * purely so this check can use it -- it is the same value coverage uses further down.
 	 */
@@ -234,21 +315,41 @@ void main() {
 	float depth_t = clamp(shore / u_max_distance, 0.0, 1.0);
 	vec3 color = water_depth_color(depth_t);
 
-	/* Wave field (WP-8): a colour swing along the ramp's own shallow/deep hue axis, scaled by
-	 * depth (shallower water swings less, calming the surface near the shoreline where WP-9's foam
-	 * will take over) rather than by a depth-varying speed, which would shear the field instead
-	 * (see kWaveAmplitudeShallow/Deep's own comment). Opacity and coverage below are deliberately
-	 * left keyed to the unperturbed depth_t/shore -- waves modulating how much seabed shows through
-	 * would make the seabed itself shimmer, and moving the coastline edge here would pre-empt
-	 * WP-9/WP-10's shore frame.
+	/* Wave field (WP-8, reshaped at WP-8a): a colour swing along the ramp's own shallow/deep hue
+	 * axis, scaled by depth (shallower water swings less, calming the surface near the shoreline
+	 * where WP-9's foam will take over) rather than by a depth-varying speed, which would shear the
+	 * field instead (see kWaveAmplitudeShallow/Deep's own comment). Opacity and coverage below are
+	 * deliberately left keyed to the unperturbed depth_t/shore -- waves modulating how much seabed
+	 * shows through would make the seabed itself shimmer, and moving the coastline edge here would
+	 * pre-empt WP-9/WP-10's shore frame.
 	 *
 	 * wave_time wraps u_time again at a shorter, exact-divisor period -- see kWaveTimeWrapPeriod's
 	 * own comment for the float-precision reasoning.
+	 *
+	 * The two fades keep the sharp end of the field off the aliasing floor when zoomed out: the
+	 * crest sharpening relaxes toward a plain sine, and the detail layer goes away entirely. Both
+	 * are expressed in screen pixels per wavelength, so they follow the camera rather than a zoom
+	 * number (terrain_noise_params.glsl).
 	 */
 	float wave_time = mod(u_time, kWaveTimeWrapPeriod);
-	float wave = water_wave_field(var_texture_position, wave_time);
+	float crest_fade = smoothstep(kCrestFadeMinPx, kCrestFadeMaxPx, px_per_field * kWaveLambdaC);
+	float detail_fade =
+	   smoothstep(kDetailFadeMinPx, kDetailFadeMaxPx, px_per_field / kDetailFrequency);
+	float wave;
+	float crest;
+	water_wave_field(
+	   var_texture_position, wave_time, depth_t, crest_fade, detail_fade, wave, crest);
 	float wave_amplitude = mix(kWaveAmplitudeShallow, kWaveAmplitudeDeep, depth_t);
 	color = clamp(color + kWaveColorSwing * wave_amplitude * wave, 0.0, 1.0);
+
+	/* Crest highlight: the top of the crest sum only, so it lands where the trains coincide rather
+	 * than along every crest, and gated off near the waterline (WP-9's foam belongs there) and when
+	 * the crests get too small on screen to hold it. A partial, deliberately quiet take on §6's
+	 * whitecaps -- see kGlintStart's comment.
+	 */
+	float glint = smoothstep(kGlintStart, 1.0, crest) *
+	              smoothstep(kGlintDepthMin, kGlintDepthMax, depth_t) * crest_fade;
+	color = clamp(color + kGlintColor * (kGlintWeight * glint), 0.0, 1.0);
 
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
 	float coverage = smoothstep(-w, w, shore);

@@ -130,10 +130,11 @@ void fill_parameter_vector() {
 	    /** TRANSLATORS: A placeholder for a time value in milliseconds */
 	    _("ms"),
 	    _("Freeze and capture at the given game time in milliseconds (default: 0, the game start). "
-	      "This is a lower bound: the capture happens at the first logic tick at or after this "
-	      "time, and loading a map advances the game time in bulk, so an early requested time can "
-	      "be overshot by seconds. The game time actually captured is written to the log. "
-	      "Only valid with --capture."),
+	      "With --scenario or --loadgame this is a lower bound: the capture happens at the first "
+	      "logic tick at or after this time, and loading a map advances the game time in bulk, so "
+	      "an early requested time can be overshot by seconds. The game time actually captured is "
+	      "written to the log. With --editor it is exact, because the editor has no logic tick and "
+	      "its game time is pinned to this value directly. Only valid with --capture."),
 	    false},
 	   {"", "capture-view", _("x,y,zoom"),
 	    _("Position the view with the top-left corner at the given map pixel and the given zoom "
