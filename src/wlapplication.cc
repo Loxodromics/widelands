@@ -498,7 +498,7 @@ WLApplication::WLApplication(int const argc, char const* const* const argv)
 	// Cloud shadows are a separate switch from the terrain-noise strength:
 	// unlike bump/tint/warp they are atmospheric motion, not surface texture,
 	// and stay on even at noise strength 0 (terrain_noise.h).
-	RenderQueue::instance().set_cloud_shadows(get_config_bool("cloud_shadows", true));
+	RenderQueue::instance().set_cloud_shadows(get_config_bool("cloud_shadows", false));
 
 	// The shore-distance-field debug overlay (--water-debug, WATER.md WP-3).
 	// A command line flag rather than a config option: it is a development
