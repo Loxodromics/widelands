@@ -65,6 +65,17 @@ public:
 	VulkanPipelineCache(const VulkanPipelineCache&) = delete;
 	VulkanPipelineCache& operator=(const VulkanPipelineCache&) = delete;
 
+	// Rebuilds the screen render pass and the screen pipelines for a new
+	// swapchain colour format (recreate_swapchain, on a surface-format
+	// change). Descriptor set layouts, pipeline layouts and the offscreen
+	// render pass/pipelines do not depend on the swapchain format and are
+	// left untouched, so a VulkanTexture or VulkanDescriptorSet that
+	// resolved a handle from this cache before the rebuild is still valid
+	// afterwards (Phase D review, finding D2 - the previous behaviour
+	// destroyed and rebuilt the whole cache, dangling every live texture's
+	// render pass and every program's descriptor/pipeline layout).
+	void rebuild_screen_pipelines(VkFormat color_format, VkFormat depth_format);
+
 	// The screen render pass: colour (CLEAR -> PRESENT_SRC) + depth (CLEAR ->
 	// DEPTH_STENCIL_ATTACHMENT_OPTIMAL), one subpass.
 	VkRenderPass render_pass() const;

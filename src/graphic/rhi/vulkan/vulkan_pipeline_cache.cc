@@ -165,6 +165,13 @@ struct VulkanPipelineCache::Impl {
 	                           VkPipelineLayout pipeline_layout,
 	                           VkRenderPass target_render_pass,
 	                           bool depth_enabled) const;
+
+	// Builds the screen render pass and the screen pipelines. Shared between
+	// initial construction and rebuild_screen_pipelines: on a rebuild, the
+	// 'programs' map already holds descriptor/pipeline layouts from the
+	// first call, so those are reused rather than recreated - only the
+	// render pass and the pipelines baked against it are format-dependent.
+	void build_screen_render_pass_and_pipelines(VkFormat color_format, VkFormat depth_format);
 };
 
 VulkanPipelineCache::Impl::Impl(const VkDevice init_device,
@@ -184,103 +191,7 @@ VulkanPipelineCache::Impl::Impl(const VkDevice init_device,
 		throw wexception("Vulkan: vkCreatePipelineCache failed");
 	}
 
-	// The screen render pass: one colour attachment (the swapchain image,
-	// cleared every frame, presented afterwards) plus one depth attachment
-	// (cleared to 1.0 = far, matching RHI_INTERFACE.md §2.5). The initial
-	// layouts are UNDEFINED - loadOp CLEAR discards the previous contents, so
-	// no pre-pass barrier is needed for either attachment.
-	VkAttachmentDescription attachments[2] {};
-	attachments[0].format = color_format;
-	attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-	attachments[1].format = depth_format;
-	attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-	VkAttachmentReference color_reference{};
-	color_reference.attachment = 0;
-	color_reference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	VkAttachmentReference depth_reference{};
-	depth_reference.attachment = 1;
-	depth_reference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-	VkSubpassDescription subpass{};
-	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments = &color_reference;
-	subpass.pDepthStencilAttachment = &depth_reference;
-
-	// The standard external -> subpass dependency: the clear of both
-	// attachments must happen after any earlier use of the images.
-	VkSubpassDependency dependency{};
-	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-	dependency.dstSubpass = 0;
-	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-	                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-	                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-	dependency.srcAccessMask = 0;
-	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-	                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-	dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-	VkRenderPassCreateInfo render_pass_create_info{};
-	render_pass_create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	render_pass_create_info.attachmentCount = 2;
-	render_pass_create_info.pAttachments = attachments;
-	render_pass_create_info.subpassCount = 1;
-	render_pass_create_info.pSubpasses = &subpass;
-	render_pass_create_info.dependencyCount = 1;
-	render_pass_create_info.pDependencies = &dependency;
-	if (vkCreateRenderPass(device, &render_pass_create_info, nullptr, &render_pass) != VK_SUCCESS) {
-		throw wexception("Vulkan: vkCreateRenderPass failed");
-	}
-
-	// Descriptor set layouts, pipeline layouts, and the pipelines themselves
-	// for every pipeline-catalog entry.
-	for (const PipelineDescriptor& desc : pipeline_catalog()) {
-		const ManifestProgram* manifest_program = manifest.find_program(desc.program_name);
-		if (manifest_program == nullptr) {
-			throw wexception(
-			   "Vulkan: program '%s' is in the pipeline catalog but not in the bindings manifest",
-			   desc.program_name.c_str());
-		}
-		ProgramPipelines& program = programs[desc.program_name];
-		if (program.descriptor_set_layout == VK_NULL_HANDLE) {
-			program.descriptor_set_layout = make_descriptor_set_layout(*manifest_program);
-			program.has_bindings = !manifest_program->samplers.empty() ||
-			                       !manifest_program->uniform_blocks.empty();
-			VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
-			pipeline_layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-			pipeline_layout_create_info.setLayoutCount = 1;
-			pipeline_layout_create_info.pSetLayouts = &program.descriptor_set_layout;
-			if (vkCreatePipelineLayout(
-			       device, &pipeline_layout_create_info, nullptr, &program.pipeline_layout) !=
-			    VK_SUCCESS) {
-				throw wexception("Vulkan: vkCreatePipelineLayout failed for program '%s'",
-				                 desc.program_name.c_str());
-			}
-		}
-		program.pipelines.emplace_back(desc.blend,
-		                               create_pipeline(desc, *manifest_program,
-		                                               program.pipeline_layout, render_pass,
-		                                               desc.depth.test_enabled));
-		verb_log_info("Graphics: Vulkan: Pipeline: %s (blend %d)\n", desc.program_name.c_str(),
-		              static_cast<int>(desc.blend.src_factor) * 100 +
-		                 static_cast<int>(desc.blend.dst_factor) * 10 +
-		                 static_cast<int>(desc.blend.op));
-	}
+	build_screen_render_pass_and_pipelines(color_format, depth_format);
 
 	// The offscreen render pass (WP-16b): one RGBA8 colour attachment - the
 	// fixed format graphic::Texture creates its Vulkan textures with - loaded
@@ -396,6 +307,125 @@ VulkanPipelineCache::Impl::~Impl() {
 	}
 	if (pipeline_cache != VK_NULL_HANDLE) {
 		vkDestroyPipelineCache(device, pipeline_cache, nullptr);
+	}
+}
+
+void VulkanPipelineCache::Impl::build_screen_render_pass_and_pipelines(
+   const VkFormat color_format, const VkFormat depth_format) {
+	// A rebuild (recreate_swapchain, on a surface-format change) tears down
+	// only the screen pipelines and the render pass they were built against;
+	// the descriptor/pipeline layouts in 'programs' are format-independent
+	// and are reused below rather than recreated, which is what keeps every
+	// already-resolved VulkanDescriptorSet valid across the rebuild.
+	for (auto& entry : programs) {
+		for (auto& variant : entry.second.pipelines) {
+			vkDestroyPipeline(device, variant.second, nullptr);
+		}
+		entry.second.pipelines.clear();
+	}
+	if (render_pass != VK_NULL_HANDLE) {
+		vkDestroyRenderPass(device, render_pass, nullptr);
+		render_pass = VK_NULL_HANDLE;
+	}
+
+	// The screen render pass: one colour attachment (the swapchain image,
+	// cleared every frame, presented afterwards) plus one depth attachment
+	// (cleared to 1.0 = far, matching RHI_INTERFACE.md §2.5). The initial
+	// layouts are UNDEFINED - loadOp CLEAR discards the previous contents, so
+	// no pre-pass barrier is needed for either attachment.
+	VkAttachmentDescription attachments[2] {};
+	attachments[0].format = color_format;
+	attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+	attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+	attachments[1].format = depth_format;
+	attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+	attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkAttachmentReference color_reference{};
+	color_reference.attachment = 0;
+	color_reference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	VkAttachmentReference depth_reference{};
+	depth_reference.attachment = 1;
+	depth_reference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkSubpassDescription subpass{};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &color_reference;
+	subpass.pDepthStencilAttachment = &depth_reference;
+
+	// The standard external -> subpass dependency: the clear of both
+	// attachments must happen after any earlier use of the images.
+	VkSubpassDependency dependency{};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+	                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+	                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+	                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+	VkRenderPassCreateInfo render_pass_create_info{};
+	render_pass_create_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	render_pass_create_info.attachmentCount = 2;
+	render_pass_create_info.pAttachments = attachments;
+	render_pass_create_info.subpassCount = 1;
+	render_pass_create_info.pSubpasses = &subpass;
+	render_pass_create_info.dependencyCount = 1;
+	render_pass_create_info.pDependencies = &dependency;
+	if (vkCreateRenderPass(device, &render_pass_create_info, nullptr, &render_pass) != VK_SUCCESS) {
+		throw wexception("Vulkan: vkCreateRenderPass failed");
+	}
+
+	// Descriptor set layouts and pipeline layouts are created once per
+	// program (skipped on a rebuild, where 'programs' already holds them);
+	// the pipelines themselves always bake in 'render_pass' and are rebuilt
+	// every time this runs.
+	for (const PipelineDescriptor& desc : pipeline_catalog()) {
+		const ManifestProgram* manifest_program = manifest.find_program(desc.program_name);
+		if (manifest_program == nullptr) {
+			throw wexception(
+			   "Vulkan: program '%s' is in the pipeline catalog but not in the bindings manifest",
+			   desc.program_name.c_str());
+		}
+		ProgramPipelines& program = programs[desc.program_name];
+		if (program.descriptor_set_layout == VK_NULL_HANDLE) {
+			program.descriptor_set_layout = make_descriptor_set_layout(*manifest_program);
+			program.has_bindings = !manifest_program->samplers.empty() ||
+			                       !manifest_program->uniform_blocks.empty();
+			VkPipelineLayoutCreateInfo pipeline_layout_create_info{};
+			pipeline_layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+			pipeline_layout_create_info.setLayoutCount = 1;
+			pipeline_layout_create_info.pSetLayouts = &program.descriptor_set_layout;
+			if (vkCreatePipelineLayout(
+			       device, &pipeline_layout_create_info, nullptr, &program.pipeline_layout) !=
+			    VK_SUCCESS) {
+				throw wexception("Vulkan: vkCreatePipelineLayout failed for program '%s'",
+				                 desc.program_name.c_str());
+			}
+		}
+		program.pipelines.emplace_back(desc.blend,
+		                               create_pipeline(desc, *manifest_program,
+		                                               program.pipeline_layout, render_pass,
+		                                               desc.depth.test_enabled));
+		verb_log_info("Graphics: Vulkan: Pipeline: %s (blend %d)\n", desc.program_name.c_str(),
+		              static_cast<int>(desc.blend.src_factor) * 100 +
+		                 static_cast<int>(desc.blend.dst_factor) * 10 +
+		                 static_cast<int>(desc.blend.op));
 	}
 }
 
@@ -623,6 +653,11 @@ VulkanPipelineCache::VulkanPipelineCache(const VkDevice device,
 }
 
 VulkanPipelineCache::~VulkanPipelineCache() = default;
+
+void VulkanPipelineCache::rebuild_screen_pipelines(const VkFormat color_format,
+                                                   const VkFormat depth_format) {
+	impl_->build_screen_render_pass_and_pipelines(color_format, depth_format);
+}
 
 VkRenderPass VulkanPipelineCache::render_pass() const {
 	return impl_->render_pass;

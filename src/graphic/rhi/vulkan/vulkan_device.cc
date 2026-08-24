@@ -874,16 +874,20 @@ bool VulkanDevice::Impl::recreate_swapchain() {
 	}
 	depth_memories.clear();
 
-	// Pipelines bake in the render pass, and the render pass bakes in the
-	// swapchain image format. A format change is the one reason to rebuild
-	// the cache; a plain resize keeps it (viewports are dynamic state).
+	// The screen pipelines bake in the screen render pass, and that render
+	// pass bakes in the swapchain image format, so a format change is the one
+	// reason to rebuild them; a plain resize keeps them (viewports are
+	// dynamic state). The rebuild only touches the screen render pass and
+	// its pipelines - descriptor/pipeline layouts and the offscreen render
+	// pass are format-independent and are left alone, so live textures and
+	// descriptor sets (which resolved handles from this cache before the
+	// rebuild) stay valid across it (Phase D review, finding D2).
 	const bool format_changed = image_format != surface_format.format;
 	image_format = surface_format.format;
-	if (format_changed) {
-		pipelines.reset();
-	}
 	if (pipelines == nullptr) {
 		pipelines.reset(new VulkanPipelineCache(device, image_format, depth_format));
+	} else if (format_changed) {
+		pipelines->rebuild_screen_pipelines(image_format, depth_format);
 	}
 
 	// Request kFramesInFlight + 1 images (WP-17): with two frames in flight
