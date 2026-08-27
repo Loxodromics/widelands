@@ -24,6 +24,7 @@
 // wave wander     kWanderFrequency        kWanderEvolve      kWanderOffset
 // wave detail     kDetailFrequency        kDetailEvolve      kDetailOffset
 // foam breakup    kFoamFrequency          static             kFoamOffset
+// foam fine       kFoamFineFrequency      static             kFoamFineOffset
 //
 // The two wave fields (WP-8a) are the only 3D ones: they take time as a third noise axis
 // (snoise3(), simplex_noise_3d.glsl) rather than as a drift added to the sample position, so they
@@ -361,18 +362,35 @@ const float kDetailFrequency = 3.5;  // cycles per field
 const float kDetailWeight = 0.15;
 const float kDetailEvolve = 0.6;  // third-axis units per second
 
-// Crest highlight: a sparse near-white touch on the strongest crest coincidences, gated away from
-// the shoreline so it does not pre-empt WP-9's foam band. This is a deliberate, low-amplitude
-// partial take on the whitecaps of Claude/WATER.md §6 ("easy to overdo"): the bar is that it
-// reads as sparkle on moving crests, never as flat-white caps.
-const float kGlintStart = 0.68;  // crest sum, in [0, 1], at which the highlight begins
-// How far the detail field can pull the crest sum down before it is thresholded for the
-// highlight, so the highlights scatter instead of repeating on the trains' own beat lattice.
-const float kGlintMaskFloor = 0.55;
-const vec3 kGlintColor = vec3(0.85, 0.95, 1.0);
-const float kGlintWeight = 0.15;
-const float kGlintDepthMin = 0.05;  // depth_t gate: no highlight right at the waterline
-const float kGlintDepthMax = 0.15;
+// Whitecaps (water.fp main(), Claude/WATER.md §6 / WP-9a). WP-8a built this as a quiet near-white
+// "glint" thresholded on the coincidence of the three wave trains: a deliberate, low-amplitude
+// partial take on §6's whitecaps, added additively so it read as sparkle. WP-9a promotes the same
+// term -- retuned, and re-composited as foam rather than as brightening -- so the caps sit *on*
+// the water instead of lightening it. It is the same crest field, not a parallel one: two stacked
+// highlights over one crest sum would double up.
+//
+// - Lower threshold than WP-8a's 0.68, so more crests pass and the result reads as streaks rather
+//   than as isolated sparkle.
+// - Composited by mixing toward kFoamColor and contributing to opacity, the way the shore band is
+//   (main()). kFoamColor is the measured reference foam tone -- no reason for a second white -- so
+//   kGlintColor is gone.
+// - Both WP-8a gates kept: the depth_t gate keeps whitecaps off the waterline where the shore
+//   band owns the look, and crest_fade drops them when crests get too small on screen to hold
+//   detail.
+// - Combined with the shore band by max() before a single mix and a single opacity term, so the
+//   two never stack two mixes toward the same colour, and §4.8's cloud-shadow cancellation stays
+//   intact (foam folds into color before the * var_cloud_shadow, alpha stays cloud-independent).
+//
+// kWhitecapStart and kWhitecapStrength have no model behind them: crest depends on the three wave
+// trains and snoise3(), which is not ported, so both are A/B'd on captures and the achieved
+// near-white water fraction is measured (WATER.md WP-9a), not asserted.
+const float kWhitecapStart = 0.5;     // crest sum, in [0, 1], at which whitecaps begin
+const float kWhitecapStrength = 0.7;   // foam coverage the strongest crest coincidences reach
+const float kWhitecapDepthMin = 0.05;  // depth_t gate: no whitecaps right at the waterline,
+const float kWhitecapDepthMax = 0.15;  // the shore band owns that zone
+// How far the detail field can pull the crest sum down before it is thresholded, so the whitecaps
+// scatter instead of repeating on the trains' own beat lattice (water_wave_field()).
+const float kCrestMaskFloor = 0.55;
 
 // Zoom fades, in screen pixels per wavelength (water.fp derives pixels-per-field from
 // fwidth(var_texture_position.x), the same idiom kDitherGrainFadeMin/Max uses). Sharpened crests
@@ -420,42 +438,85 @@ const float kWaveTimeWrapPeriod = 10000.0;
 const vec2 kWanderOffset = vec2(-183.5, 29.7);
 const vec2 kDetailOffset = vec2(112.9, -203.4);
 
-// Foam band (water.fp, WP-9; Claude/WATER.md §4.6): a band of pale foam in the shallowest water
-// zone, its breakup elongated along the coast by the shore frame. All distances are in field
-// widths -- the unit |shore| is stored in.
+// Foam band (water.fp, WP-9; reworked at WP-9a; Claude/WATER.md §4.6): a band of pale foam in the
+// shallowest water zone, its breakup elongated along the coast by the shore frame. All distances
+// are in field widths -- the unit |shore| is stored in.
+//
+// WP-9 drew the band as a near-opaque plateau (kFoamCore = 0.75 made |d| <= ~0.375 exactly full
+// strength -- a 48 px flat top inside a 64 px band at zoom 1, at kFoamOpacity = 0.95), with a
+// single-octave breakup that only displaced the band's hard edge, and by only ~4 px RMS. Against
+// referenceImages/AoE2_1.png -- a thin fringe at the bank plus turbulent streaky structure -- ours
+// was the inverse. WP-9a breaks it up two ways:
+//
+//  - A second, higher-frequency octave (kFoamFineFrequency). Modelled on a straight coast with a
+//    numpy Ashima port: raising the single field's amplitude only deepens the edge indentations,
+//    the ribbon stays continuous. A fine octave is what produces detached patches and holes. It is
+//    a single tap, deliberately not elongated -- fine-scale foam texture is not strongly
+//    directional, and one tap keeps the total at four (from three) while carrying more amplitude
+//    for the same weight (the three-tap box costs half the RMS: raw snoise RMS 0.47, three-tap
+//    0.25).
+//  - A one-sided threshold remap (kFoamOvershoot) inside the band, the idiom dither.fp establishes
+//    at its grain threshold: a continuous coverage field (falling smoothly from 1 at the band
+//    centre to 0 at its edge, no plateau) compared against a noise-driven threshold, where the
+//    coverage decides how much foam and the noise decides where. thresh = kFoamDissolve + (1 +
+//    kFoamOvershoot - kFoamDissolve) * u, u = clamp(0.5 + 0.5 * blend, 0, 1). The clamp matters --
+//    the coarse/fine blend's max |value| exceeds 1. thresh >= kFoamDissolve by construction, so
+//    smoothstep(thresh - kFoamDissolve, ..., 0) == 0 exactly outside the band: foam is
+//    self-limiting, kFoamReach is a tight bound again, and the land side stays clear (WP-9's
+//    decision). Modelled max foam outside the band: 0.0000.
+//
+// The remap is one-sided on purpose. Mapping u into [kFoamDissolve, 1 - kFoamDissolve] (the
+// symmetric form) forces foam == 1 wherever coverage == 1, i.e. it removes the holes at the band
+// core by construction. Mapping into [kFoamDissolve, 1 + kFoamOvershoot] fixes the outside-band
+// leak *and* lets the core break. kFoamOvershoot is the knob for how broken the core is; modelled
+// core (d < 0.25) empty / partial / solid fractions at kFoamDissolve = 0.20: 0.00 -> 0 / 27 / 73 %;
+// 0.25 -> 7 / 41 / 52 %; 0.35 -> 13 / 41 / 46 %; 0.45 -> 19 / 41 / 41 %; 0.70 -> 33 / 36 / 31 %
+// (numpy port, this machine). 0.35 is the shipped value: most of the core no longer flat, real
+// holes beginning.
+//
+// kFoamDissolve was 0.30 in the plan's constants table but its own modelled fractions match at
+// 0.20, and 0.30 read as a soft grey haze on the capture rather than as foam with structure, so
+// the tuned value is 0.20 (WATER.md WP-9a).
+//
+// WP-9's kFoamWobble (cross-shore displacement of the hard edge) and kFoamCore (the plateau
+// width) are both gone -- subsumed. The band reads lighter than WP-9's near-plateau (modelled
+// mean foam over the band ~0.29); if a capture reads faint, the compensating levers are
+// kFoamStrength / kFoamOpacity or a lower kFoamOvershoot, in that order, tuned on the capture.
 //
 // kFoamCenter is a centre, not a falloff-from-zero: kWaterEdgeWidth = 0.5 field widths is a
 // genuinely soft transition (coverage is ~0.5 at shore = 0), so foam peaking at the waterline
 // would be half transparent over sand and read as pale beach rather than white foam. 0.35 puts
 // the peak where coverage is ~0.85, still visually at the contact.
 //
-// kFoamHalfWidth spans the band over shore ~= [-0.15, 0.85] before the wobble -- essentially all
-// water-side, leaving the land side to WP-12's wet sand. kFoamWobble displaces the band in and
-// out along the cross-shore axis, which produces the Appendix's "band boundaries wobble by
-// roughly one to two tiles and are blotchy rather than contoured" with no second mechanism.
-//
 // The pixel floor under the half-width is the kDitherMinWidth idiom: at maximum zoom-out
 // fwidth(shore) reaches ~0.08 field widths, so kFoamMinWidthPixels * fwidth(shore) only binds
 // below a half-width of ~0.12 field widths -- kFoamHalfWidth binds at every zoom the game offers
 // (measured at water_coast_zoom4, WATER.md WP-9). Kept as the guard the "Done when" asks for.
-//
-// The breakup field's three taps span roughly one wavelength (2 * kFoamStretch ~=
-// 1 / kFoamFrequency), which is what elongates features along the shore by a factor of ~2-3.
-const float kFoamFrequency = 1.2;   // cycles per field: ~0.8-field breakup wavelength
-const float kFoamStretch = 0.4;     // field widths, along the shore tangent
-const float kFoamCenter = 0.35;     // field widths, band centre
-const float kFoamHalfWidth = 0.5;   // field widths
-const float kFoamWobble = 0.25;     // field widths, cross-shore displacement of the band
+const float kFoamFrequency = 0.9;       // coarse octave, cycles per field: ~1.1-field wavelength,
+                                        // sets the band's large-scale shape
+const float kFoamStretch = 0.55;        // field widths along the shore tangent; the three coarse
+                                        // taps span ~one coarse wavelength, elongating the breakup
+const float kFoamFineFrequency = 2.6;   // fine octave, ~0.38-field: the octave that breaks the ribbon
+const float kFoamCoarseWeight = 0.62;   // coarse : fine, sum to 1 (so no separate weight-sum constant)
+const float kFoamFineWeight = 0.38;
+const float kFoamCenter = 0.35;         // field widths, band centre
+const float kFoamHalfWidth = 0.5;       // field widths
 const float kFoamMinWidthPixels = 1.5;
-const float kFoamCore = 0.75;  // |d| below which the band is at full strength
+// 1 / p95(|blend|), measured with the numpy Ashima port: raw weighted coarse+fine blend RMS
+// 0.236, p95 0.449, max 0.847. Coupled to the two frequencies, the stretch and the two weights --
+// re-measure with the port if any of them move.
+const float kFoamNoiseScale = 2.23;
+const float kFoamDissolve = 0.20;   // threshold softness, in coverage units; raises the partial fraction
+const float kFoamOvershoot = 0.35;  // how broken the band core is; higher = more holes (table above)
 const float kFoamStrength = 1.0;
 const float kFoamOpacity = 0.95;  // near 1: the band hides the seabed and reads white, not sand
 const float kFoamGradStep = 0.5;  // shore-frame finite-difference step: one grid cell
-const float kFoamGradEpsilon = 0.05;  // plateau guard for the frame's normalisation
-// kFoamCenter + kFoamHalfWidth + kFoamWobble: the inner gate. Only a TIGHT bound while
-// kFoamHalfWidth binds over the pixel floor below -- if the floor ever binds, the band extends
-// past this gate and gets a hard contour edge in open water instead of dissolving.
-const float kFoamReach = 1.1;
+const float kFoamGradEpsilon = 0.05;  // plateau guard, on the frame's gradient magnitude
+// kFoamCenter + kFoamHalfWidth: the inner gate. With the one-sided remap the band is exactly zero
+// beyond it (max foam outside == 0, modelled), so this is a tight bound -- but only while
+// kFoamHalfWidth binds over the pixel floor above. If the floor ever binds, the band extends past
+// this gate and gets a hard contour edge in open water instead of dissolving.
+const float kFoamReach = 0.85;
 // Measured from referenceImages/AoE2_1.png (the bright foam at the land contact), 9x9 patch
 // averages as the Appendix measures: 24 patches, mean (189, 217, 228), median (184, 214, 226).
 // The plan's fallback (230, 240, 245) is the same cool white but brighter than the reference's
@@ -466,3 +527,8 @@ const vec3 kFoamColor = vec3(189.0, 217.0, 228.0) / 255.0;
 // against a neighbouring constant: lands far from every offset listed there, in the one quadrant
 // none of them reach (largest x, largest positive y).
 const vec2 kFoamOffset = vec2(226.4, 174.9);
+// The fine octave's own offset (WP-9a), checked against the whole budget table: nearest listed
+// offset is kWaterWarpOffset1 (-128.6, 84.2) at ~220 field-width units, comfortably farther than
+// the spacing between several existing pairs, and the two fields differ in frequency by 10x
+// besides. Lands in the largest-positive-y strip none of the others reach.
+const vec2 kFoamFineOffset = vec2(-91.2, 301.5);

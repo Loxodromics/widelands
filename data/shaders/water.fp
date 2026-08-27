@@ -196,16 +196,27 @@ vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent) {
 	return normal;
 }
 
-/* Foam breakup (WP-9): three simplex taps offset along the along-shore tangent by a local
- * distance, averaged -- this is what elongates the breakup along the coast rather than along the
- * tile grid. The taps span roughly one wavelength of the breakup field (2 * kFoamStretch ~=
- * 1 / kFoamFrequency), so features stretch along the shore by a factor of ~2-3. Sampled at
- * var_texture_position, unwarped, the same domain the wave field uses.
+/* Foam breakup (WP-9, two octaves at WP-9a). The coarse octave is three simplex taps offset along
+ * the along-shore tangent by a local distance and averaged -- this is what elongates the breakup
+ * along the coast rather than along the tile grid; the taps span roughly one coarse wavelength
+ * (2 * kFoamStretch ~= 1 / kFoamFrequency), so features stretch along the shore by a factor of
+ * ~2-3. The three-tap average is a box filter along the tangent and attenuates the field (raw
+ * snoise RMS 0.47, three-tap 0.25), which is why kFoamNoiseScale is a measured normalisation
+ * coupled to the frequencies, the stretch and the weights.
+ *
+ * Amplitude alone does not break a ribbon -- modelled on a straight coast, raising the coarse
+ * octave's amplitude only deepens the edge indentations while the band stays continuous. The fine
+ * octave (kFoamFineFrequency, ~3x the coarse frequency) is what produces detached patches and
+ * holes. It is a single tap, deliberately not elongated: fine-scale foam texture is not strongly
+ * directional, and one tap keeps the total at four rather than six while carrying more amplitude
+ * for the same weight. Sampled at var_texture_position, unwarped, the domain the wave field uses.
  */
 float foam_noise(vec2 world_pos, vec2 tangent) {
 	vec2 base = world_pos * kFoamFrequency + kFoamOffset;
 	vec2 stretch = tangent * (kFoamStretch * kFoamFrequency);
-	return (snoise(base - stretch) + snoise(base) + snoise(base + stretch)) / 3.0;
+	float coarse = (snoise(base - stretch) + snoise(base) + snoise(base + stretch)) / 3.0;
+	float fine = snoise(world_pos * kFoamFineFrequency + kFoamFineOffset);
+	return kFoamNoiseScale * (kFoamCoarseWeight * coarse + kFoamFineWeight * fine);
 }
 
 // The depth ramp (Claude/WATER.md WP-7): two linear segments through the shallow/mid/deep stops,
@@ -301,7 +312,7 @@ void water_wave_field(vec2 world_pos,
 	 * it with the detail field -- the one term in here with no period at all -- scatters them back
 	 * onto the crests they belong to.
 	 */
-	crest = crest_sum * mix(kGlintMaskFloor, 1.0, 0.5 + 0.5 * detail);
+	crest = crest_sum * mix(kCrestMaskFloor, 1.0, 0.5 + 0.5 * detail);
 }
 
 void main() {
@@ -461,55 +472,72 @@ void main() {
 	float wave_amplitude = mix(kWaveAmplitudeShallow, kWaveAmplitudeDeep, depth_t);
 	color = clamp(color + kWaveColorSwing * wave_amplitude * wave, 0.0, 1.0);
 
-	/* Crest highlight: the top of the crest sum only, so it lands where the trains coincide rather
-	 * than along every crest, and gated off near the waterline (WP-9's foam belongs there) and when
-	 * the crests get too small on screen to hold it. A partial, deliberately quiet take on §6's
-	 * whitecaps -- see kGlintStart's comment.
+	/* Whitecaps (WP-9a, Claude/WATER.md §6): the top of the crest sum only, so they land where the
+	 * three trains coincide rather than along every crest, gated off near the waterline (the shore
+	 * band owns that zone) and when the crests get too small on screen to hold detail. WP-8a built
+	 * this as a quiet additive "glint" at a high threshold; WP-9a lowers the threshold so the
+	 * result reads as streaks rather than sparkle, and re-composites it as foam below -- together
+	 * with the shore band -- rather than as brightening, so the caps sit *on* the water instead of
+	 * lightening it. This is the same crest field retuned, not a parallel term: two stacked
+	 * highlights over one crest sum would double up.
 	 */
-	float glint = smoothstep(kGlintStart, 1.0, crest) *
-	              smoothstep(kGlintDepthMin, kGlintDepthMax, depth_t) * crest_fade;
-	color = clamp(color + kGlintColor * (kGlintWeight * glint), 0.0, 1.0);
+	float whitecap = smoothstep(kWhitecapStart, 1.0, crest) *
+	                 smoothstep(kWhitecapDepthMin, kWhitecapDepthMax, depth_t) *
+	                 crest_fade * kWhitecapStrength;
 
-	/* Foam band (WP-9, Claude/WATER.md §4.6): a band in the shallowest water zone, centred at
-	 * kFoamCenter -- not falling off from zero. With kWaterEdgeWidth = 0.5 field widths the
-	 * coverage transition is genuinely soft (coverage is only ~0.5 at shore = 0), so foam peaking
-	 * at the waterline would be half transparent over sand and read as pale beach rather than
-	 * white foam; kFoamCenter = 0.35 puts the peak where coverage is ~0.85, still visually at the
-	 * contact. The band spans shore ~= [-0.15, 0.85] before the wobble -- essentially all
-	 * water-side, leaving the land side entirely to WP-12's wet sand. kFoamWobble displaces the
-	 * band in and out along the cross-shore axis, which is what produces the Appendix's "band
-	 * boundaries wobble by roughly one to two tiles and are blotchy rather than contoured"
-	 * without a second mechanism.
+	/* Foam band (WP-9, reworked at WP-9a, Claude/WATER.md §4.6): a band in the shallowest water
+	 * zone, centred at kFoamCenter -- not falling off from zero. With kWaterEdgeWidth = 0.5 field
+	 * widths the coverage transition is genuinely soft (coverage is only ~0.5 at shore = 0), so
+	 * foam peaking at the waterline would be half transparent over sand and read as pale beach
+	 * rather than white foam; kFoamCenter = 0.35 puts the peak where coverage is ~0.85, still
+	 * visually at the contact.
+	 *
+	 * The band is dissolved against a coverage field rather than drawn as a solid ribbon (the
+	 * idiom dither.fp establishes at its grain threshold): cov falls smoothly from 1 at the band
+	 * centre to 0 at its edge with no plateau -- kFoamCore is gone -- and foam appears wherever cov
+	 * exceeds a noise-driven threshold. The remap is one-sided, into [kFoamDissolve,
+	 * 1 + kFoamOvershoot]: thresh >= kFoamDissolve by construction (hence the clamp on u -- the
+	 * two-octave blend's max |value| exceeds 1), so smoothstep(thresh - kFoamDissolve, ..., 0) == 0
+	 * exactly outside the band. That keeps the foam self-limiting (modelled max foam outside the
+	 * band 0.0000), restores kFoamReach as a tight bound and keeps foam off the land side.
+	 * kFoamOvershoot lets the band core break into holes -- the symmetric remap into
+	 * [kFoamDissolve, 1 - kFoamDissolve] would instead force foam == 1 wherever cov == 1 and remove
+	 * them. This replaces WP-9's kFoamWobble edge displacement: the boundary irregularity now comes
+	 * from the breakup field itself, at its own wavelength.
 	 *
 	 * The pixel floor (kFoamMinWidthPixels * fwidth(shore), the kDitherMinWidth idiom) is a guard
 	 * -- kFoamHalfWidth binds at every zoom the game offers (measured at water_coast_zoom4, see
 	 * WATER.md WP-9).
 	 *
 	 * Everything here -- the frame's four extra taps, the Jacobian's two snoise_grad() calls and
-	 * the three breakup taps -- runs only inside the kFoamReach gate, so open water pays nothing.
+	 * the four breakup taps -- runs only inside the kFoamReach gate, so open water pays nothing.
 	 * The gate is spatially coherent (whole screen regions of water are either near-shore or
 	 * not), so the Jacobian's duplicate lattice work over the main path's snoise() calls is
 	 * cheaper than upgrading every fragment's warp to snoise_grad() (measured, WATER.md WP-9).
 	 */
-	float foam = 0.0;
+	float band = 0.0;
 	if (shore < kFoamReach) {
 		vec2 tangent;
 		water_shore_frame(var_texture_position, world, tangent);
 		float fn = foam_noise(var_texture_position, tangent);
-		float shore_foam = shore + kFoamWobble * fn;
 		float half_width = max(kFoamHalfWidth, kFoamMinWidthPixels * shore_fwidth);
-		float d = abs(shore_foam - kFoamCenter) / half_width;
-		foam = (1.0 - smoothstep(kFoamCore, 1.0, d)) * kFoamStrength;
+		float d = clamp(abs(shore - kFoamCenter) / half_width, 0.0, 1.0);
+		float cov = 1.0 - smoothstep(0.0, 1.0, d);
+		float u = clamp(0.5 + 0.5 * fn, 0.0, 1.0);
+		float thresh = kFoamDissolve + (1.0 + kFoamOvershoot - kFoamDissolve) * u;
+		band = smoothstep(thresh - kFoamDissolve, thresh + kFoamDissolve, cov) * kFoamStrength;
 	}
 
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
 	float coverage = smoothstep(-w, w, shore);
 
-	/* Foam folds into color as a linear mix *before* the cloud-shadow multiply, and into opacity
-	 * independently of the shadow -- Claude/WATER.md §4.8's cancellation identity is what breaks
-	 * if foam went in additively. kFoamOpacity near 1 is what hides the seabed under the band
-	 * and makes it read white rather than sand-tinted.
+	/* The shore band and the whitecaps are one foam layer, combined by max() so the composite
+	 * never stacks two mixes toward kFoamColor. Foam then folds into color as a linear mix *before*
+	 * the cloud-shadow multiply, and into opacity independently of the shadow -- Claude/WATER.md
+	 * §4.8's cancellation identity is what breaks if foam went in additively. kFoamOpacity near 1
+	 * hides the seabed under the band and makes it read white rather than sand-tinted.
 	 */
+	float foam = max(band, whitecap);
 	color = mix(color, kFoamColor, foam);
 	opacity = mix(opacity, kFoamOpacity, foam);
 	frag_color = vec4(color * var_brightness * var_cloud_shadow, opacity * coverage);
