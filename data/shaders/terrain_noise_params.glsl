@@ -452,7 +452,10 @@ const float kFoamStrength = 1.0;
 const float kFoamOpacity = 0.95;  // near 1: the band hides the seabed and reads white, not sand
 const float kFoamGradStep = 0.5;  // shore-frame finite-difference step: one grid cell
 const float kFoamGradEpsilon = 0.05;  // plateau guard for the frame's normalisation
-const float kFoamReach = 1.1;  // kFoamCenter + kFoamHalfWidth + kFoamWobble: the inner gate
+// kFoamCenter + kFoamHalfWidth + kFoamWobble: the inner gate. Only a TIGHT bound while
+// kFoamHalfWidth binds over the pixel floor below -- if the floor ever binds, the band extends
+// past this gate and gets a hard contour edge in open water instead of dissolving.
+const float kFoamReach = 1.1;
 // Measured from referenceImages/AoE2_1.png (the bright foam at the land contact), 9x9 patch
 // averages as the Appendix measures: 24 patches, mean (189, 217, 228), median (184, 214, 226).
 // The plan's fallback (230, 240, 245) is the same cool white but brighter than the reference's

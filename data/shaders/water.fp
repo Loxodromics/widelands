@@ -119,7 +119,15 @@ float shore_at(vec2 warped_pos) {
 	vec2 frac = texel - base;
 	frac = frac * frac * (3.0 - 2.0 * frac);
 	vec2 uv = (base + frac + 0.5) * u_grid.zw;
-	return texture(u_shore_distance, uv).r;
+	/* Explicit LOD: this call runs inside non-uniform control flow (the reach gate and the debug
+	 * tint's condition), where texture()'s implicit-derivative LOD is undefined per the GLSL spec.
+	 * One mip level, GL_LINEAR min/mag, so the value is unchanged; measured on this driver (Apple
+	 * M1/Metal, the golden captures of this series): the branched texture() render is pixel-
+	 * identical to this one at all three water_coast views (max per-channel delta 0). The fix is
+	 * per-spec prophylaxis -- a conformant GL may legitimately pick a different LOD in divergent
+	 * lanes, so the undefined call must not be relied on even where it happens to be a no-op.
+	 */
+	return textureLod(u_shore_distance, uv, 0.0).r;
 }
 
 /* Jacobian of water_shore_warp() (WP-9). The warp samples the two noise fields at
@@ -168,9 +176,15 @@ mat2 water_shore_warp_jacobian(vec2 world_pos) {
  * wrap), not advance an unbounded along-shore coordinate.
  */
 vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent) {
+	/* Central difference over the full span 2*kFoamGradStep, so kFoamGradEpsilon below compares
+	 * against a true gradient magnitude whatever the step is. Before this fix the difference was
+	 * left unscaled, which happened to be correct only because the shipped step of 0.5 made the
+	 * divisor exactly 1.0 -- changing the step would silently have rescaled the plateau guard.
+	 */
 	vec2 g_warped =
 	   vec2(shore_at(warped_pos + vec2(kFoamGradStep, 0.0)) - shore_at(warped_pos - vec2(kFoamGradStep, 0.0)),
-	        shore_at(warped_pos + vec2(0.0, kFoamGradStep)) - shore_at(warped_pos - vec2(0.0, kFoamGradStep)));
+	        shore_at(warped_pos + vec2(0.0, kFoamGradStep)) - shore_at(warped_pos - vec2(0.0, kFoamGradStep))) /
+	   (2.0 * kFoamGradStep);
 	vec2 g_world = transpose(water_shore_warp_jacobian(world_pos)) * g_warped;
 	float len = length(g_world);
 	if (len < kFoamGradEpsilon) {
