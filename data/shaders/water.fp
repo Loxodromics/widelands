@@ -514,9 +514,13 @@ void main() {
 	 * offshore (referenceImages/SebastianLague00.jpg). Each arc is foam_arc() -- the WP-9a band
 	 * body: a coverage field falling smoothly from 1 at the arc centre to 0 at its half-width, with
 	 * foam appearing wherever it exceeds the one-sided noise threshold. Centres are at kFoamArcCentre*
-	 * rather than falling off from zero, so arc A's peak sits where the coastline coverage is ~0.85
+	 * rather than falling off from zero, so arc A's peak sits where the coastline coverage is ~0.72
 	 * rather than the ~0.5 it is at the waterline (kWaterEdgeWidth = 0.5 field widths is a genuinely
 	 * soft transition -- foam peaking at shore = 0 would read as pale beach, not white foam).
+	 *
+	 * The arcs must be separated by clear water to read as three lines rather than as one wider
+	 * band -- the constraint the first WP-9b constants missed, see the separation paragraph in
+	 * terrain_noise_params.glsl.
 	 *
 	 * The three arcs share one foam_noise() evaluation and one shore frame: they need no per-arc
 	 * noise decorrelation because each samples the breakup field at its own distance offshore, so
@@ -528,8 +532,9 @@ void main() {
 	 * two-octave blend's max |value| exceeds 1), so each arc is exactly 0 outside its own
 	 * half-width (modelled max foam outside all three arcs 0.0000). That keeps kFoamReach a tight
 	 * bound and foam off the land side. The pixel floor (kFoamMinWidthPixels * fwidth(shore), the
-	 * kDitherMinWidth idiom) is a guard; arc C's 0.18 half-width is the narrowest and the first at
-	 * risk of the floor binding at maximum zoom-out (WATER.md WP-9b).
+	 * kDitherMinWidth idiom) does bind for arc C at maximum zoom-out -- its 0.10 half-width is
+	 * 1.6 screen px there -- which is why kFoamReach is derived from the floor rather than from
+	 * the nominal half-width (terrain_noise_params.glsl).
 	 *
 	 * Everything here -- the frame's four extra taps, the Jacobian's two snoise_grad() calls and
 	 * the four breakup taps -- runs once inside the kFoamReach gate, so open water pays nothing and

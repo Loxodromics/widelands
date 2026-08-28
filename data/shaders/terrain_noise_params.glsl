@@ -472,15 +472,30 @@ const vec2 kDetailOffset = vec2(112.9, -203.4);
 //    holes: for arc A's geometry, 0.00 -> 0/19/81, 0.18 -> 6/29/65, 0.35 -> 16/31/53,
 //    0.70 -> 38/27/36.
 //
-// The three centres step by roughly 0.6 and 0.4 field widths, and half widths and strengths fall
-// by ~0.6x per arc -- a geometric law, so the set reads as deliberate rather than as three
-// independent guesses. If a capture reads faint, the levers are kFoamArcStrength* / kFoamOpacity
-// or a lower kFoamArcOvershoot*, in that order, tuned on the capture.
+// Half widths and strengths fall by ~0.5-0.65x per arc, but the constraint that actually sets the
+// geometry is SEPARATION, and it was got wrong first time round. WP-9b originally shipped
+// A 0.35/0.50, B 0.95/0.30, C 1.35/0.18, whose spans overlap ([-0.15, 0.85], [0.65, 1.25],
+// [1.17, 1.53]); the coverage envelope's trough between neighbours fell only to 0.131 and 0.040
+// and sat below the dissolve threshold over 0.05 and 0.12 field widths -- 3 px and 8 px at zoom 1,
+// under 2 px at zoom 4. Gaps that narrow cannot read, and the noise threshold's own variation
+// bridges what is left, so the three arcs rendered as one wider, more diffuse foam zone (confirmed
+// by isolating arcs B and C: they came back as a single lumpy band, not two lines). The current
+// spans are [-0.05, 0.55], [0.85, 1.15], [1.40, 1.60]: both troughs reach exactly zero coverage,
+// over 0.44 and 0.36 field widths (28 px and 23 px at zoom 1, 7.1 px and 5.7 px at zoom 4).
+//
+// The trade is arc A: a contact zone of 0.6 field widths rather than WP-9a's 1.0. Both a wide
+// arc A and separated outer arcs do not fit inside a ~1.6-field reach, and widening the reach
+// costs frame time (every fragment inside it pays for the shore frame and the breakup taps).
+//
+// If a capture reads faint, the levers are kFoamArcStrength* / kFoamOpacity or a lower
+// kFoamArcOvershoot*, in that order, tuned on the capture. If arc positions move, re-check the
+// envelope troughs rather than only the per-arc statistics -- checking the arcs one at a time is
+// exactly what missed the overlap above.
 //
 // kFoamArcCentreA is a centre, not a falloff-from-zero: kWaterEdgeWidth = 0.5 field widths is a
 // genuinely soft transition (coverage is ~0.5 at shore = 0), so foam peaking at the waterline
-// would be half transparent over sand and read as pale beach rather than white foam. 0.35 puts
-// the peak where coverage is ~0.85, still visually at the contact.
+// would be half transparent over sand and read as pale beach rather than white foam. 0.25 puts
+// the peak where coverage is ~0.72, still visually at the contact.
 //
 // WP-9a's second higher-frequency octave (kFoamFineFrequency) stays: on a straight coast raising
 // the coarse octave's amplitude only deepens the edge indentations while the ribbon stays
@@ -491,8 +506,11 @@ const vec2 kDetailOffset = vec2(112.9, -203.4);
 //
 // The pixel floor under each half-width is the kDitherMinWidth idiom: at maximum zoom-out
 // fwidth(shore) reaches ~0.08 field widths (WP-9, measured at _zoom4), so
-// kFoamMinWidthPixels * fwidth(shore) ~= 0.12 -- it does not bind for any arc, but arc C's 0.18 is
-// the narrowest the series has had, so the margin is thinner than WP-9a's 0.5 gave.
+// kFoamMinWidthPixels * fwidth(shore) ~= 0.12. With arc C at 0.10 the floor finally BINDS -- the
+// first time in this series -- and widens arc C to ~0.12 at maximum zoom-out, which is the guard
+// doing its job rather than a defect: a 0.10-field arc is 1.6 screen px there and would alias.
+// The consequence is that kFoamReach cannot be read off the nominal half-width any more; see its
+// own comment below.
 //
 // The arcs are static. Advancing their centres shoreward over time is WP-10 (Animate the foam),
 // which must advect the sample position along the frame tangent by a bounded offset rather than
@@ -515,27 +533,30 @@ const float kFoamGradStep = 0.5;  // shore-frame finite-difference step: one gri
 const float kFoamGradEpsilon = 0.05;  // plateau guard, on the frame's gradient magnitude
 
 // The three arcs (WP-9b). Naming follows kWaveDirA/B/C (WP-8a) rather than numeric suffixes.
-// A is WP-9a's band unchanged (the turbulent contact zone); B is a thinner, more continuous line;
-// C is a thin, nearly unbroken outer line. Geometric law: centres +~0.6/+~0.4 field widths, half
-// widths and strengths x~0.6 per step.
-const float kFoamArcCentreA = 0.35;
-const float kFoamArcHalfWidthA = 0.50;
+// A is the turbulent contact zone (WP-9a's band, narrowed to make room); B is a thinner, more
+// continuous line; C is a thin, nearly unbroken outer line. The spans are chosen so consecutive
+// arcs are separated by clear water -- see the separation paragraph above, which is the binding
+// constraint here, not the width ratio.
+const float kFoamArcCentreA = 0.25;
+const float kFoamArcHalfWidthA = 0.30;
 const float kFoamArcOvershootA = 0.35;
 const float kFoamArcStrengthA = 1.00;
-const float kFoamArcCentreB = 0.95;
-const float kFoamArcHalfWidthB = 0.30;
+const float kFoamArcCentreB = 1.00;
+const float kFoamArcHalfWidthB = 0.15;
 const float kFoamArcOvershootB = 0.18;
 const float kFoamArcStrengthB = 0.65;
-const float kFoamArcCentreC = 1.35;
-const float kFoamArcHalfWidthC = 0.18;
+const float kFoamArcCentreC = 1.50;
+const float kFoamArcHalfWidthC = 0.10;
 const float kFoamArcOvershootC = 0.10;
 const float kFoamArcStrengthC = 0.40;
-// kFoamArcCentreC + kFoamArcHalfWidthC: the inner gate. With the one-sided remap every arc is
-// exactly zero beyond its own half-width (max foam outside all arcs == 0, modelled), so this is a
-// tight bound -- but only while each arc's half-width binds over the pixel floor above. Arc C's
-// 0.18 is the narrowest and the first at risk if the floor ever binds; then that arc extends past
-// this gate and gets a hard contour edge in open water instead of dissolving.
-const float kFoamReach = 1.53;
+// The inner gate. With the one-sided remap every arc is exactly zero beyond its own half-width
+// (max foam outside all arcs == 0, modelled), so a bound of kFoamArcCentreC + kFoamArcHalfWidthC
+// = 1.60 would be tight -- but only while the nominal half-width is what the arc actually uses.
+// It is not: the pixel floor above widens arc C to ~0.12 at maximum zoom-out, putting its outer
+// edge at 1.62 and past that bound, where the gate would clip it into exactly the hard contour
+// edge the dissolve exists to avoid. So the gate is derived from max(half width, floor):
+// 1.50 + 0.12, rounded up. Raising a centre or narrowing an arc means redoing this arithmetic.
+const float kFoamReach = 1.65;
 // Measured from referenceImages/AoE2_1.png (the bright foam at the land contact), 9x9 patch
 // averages as the Appendix measures: 24 patches, mean (189, 217, 228), median (184, 214, 226).
 // The plan's fallback (230, 240, 245) is the same cool white but brighter than the reference's
