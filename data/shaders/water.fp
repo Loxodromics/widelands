@@ -565,9 +565,12 @@ void main() {
 	 * Along-shore motion is in foam_noise(): the breakup sample position is advected along the
 	 * frame tangent by a bounded, cross-faded drift, and the arc slot rides the third noise axis.
 	 * drift_conf fades the advection where the frame is ill-defined (medial axis of a narrow
-	 * channel). Everything here runs only inside the kFoamReach gate, so open water pays nothing;
-	 * against WP-9c this is one foam_arc() and two snoise3 taps where WP-9c had three and three,
-	 * partly given back by the wider gate (0.80 -> 0.97, the extra span is the birth fade).
+	 * channel). Everything here runs only inside the kFoamReach gate, so open water pays nothing.
+	 * Against WP-9c the per-fragment work is one foam_arc() and two snoise3 taps where WP-9c had
+	 * three foam_arc()s and three 2D snoise taps, inside a gate that widened 0.80 -> 0.97 (the extra
+	 * span is the birth fade). Which way that nets out is NOT measured -- a 3D tap costs more than a
+	 * 2D one, so the tap count alone does not settle it. Do not quote a saving here without running
+	 * WP-8's method (WATER.md WP-8's cost table).
 	 */
 	float band = 0.0;
 	if (shore < kFoamReach) {
@@ -611,8 +614,27 @@ void main() {
 	 * Clamped because kFoamStrengthNear = 1.10 (WP-10, the profile line extended to centre 0) lets
 	 * band exceed 1 at an arc's core, and mix() past 1 extrapolates past kFoamColor rather than
 	 * interpolating. WP-9c did not need this -- its arc strengths were all <= 1.
+	 *
+	 * Scaled by coverage: foam can only sit where there is water. WP-9c's arcs were static and
+	 * seaward of the waterline, so this never came up; WP-10's train marches its arcs *through* the
+	 * waterline under the life envelope, and for about half of each march cycle an arc's inner half
+	 * lands on the sand. Foam there cannot read as white foam -- kWaterEdgeWidth = 0.5 field widths
+	 * makes coverage only ~0.33 at shore = -0.12 -- but it does raise the water layer's opacity from
+	 * kWaterOpacityShallow to kFoamOpacity, which nearly doubles the alpha exactly where we want
+	 * less of it, so it read as a pale film washing the seaward margin of the beach. Scaling foam
+	 * by the same coverage the alpha carries takes that film from ~30 % foam-white over sand to
+	 * ~6 %. It is deliberately the same soft ramp rather than a separate land-side gate: one
+	 * multiply, no new constant, and it keeps the march reaching the waterline instead of killing
+	 * arcs before they get there.
+	 *
+	 * The cost is that it also dims the innermost arc, where coverage is ~0.65 rather than 1 (the
+	 * outer arcs sit at 0.87 and 1.0 and barely move). Measured, that came to 0.36 pp of near-white
+	 * water and no visible change to the contact line at march = 0, so nothing was compensated;
+	 * kFoamStrengthNear is the lever if it ever reads faint, being the profile's centre-0 end.
+	 * Whitecaps are unaffected: their depth_t gate keeps them beyond shore = 0.6, where coverage is
+	 * already 1.
 	 */
-	float foam = clamp(max(band, whitecap), 0.0, 1.0);
+	float foam = clamp(max(band, whitecap), 0.0, 1.0) * coverage;
 	color = mix(color, kFoamColor, foam);
 	opacity = mix(opacity, kFoamOpacity, foam);
 	frag_color = vec4(color * var_brightness * var_cloud_shadow, opacity * coverage);
