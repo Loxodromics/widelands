@@ -24,7 +24,6 @@
 // wave wander     kWanderFrequency        kWanderEvolve      kWanderOffset
 // wave detail     kDetailFrequency        kDetailEvolve      kDetailOffset
 // foam breakup    kFoamFrequency          static             kFoamOffset
-// foam fine       kFoamFineFrequency      static             kFoamFineOffset
 //
 // The two wave fields (WP-8a) are the only 3D ones: they take time as a third noise axis
 // (snoise3(), simplex_noise_3d.glsl) rather than as a drift added to the sample position, so they
@@ -483,9 +482,20 @@ const vec2 kDetailOffset = vec2(112.9, -203.4);
 // spans are [-0.05, 0.55], [0.85, 1.15], [1.40, 1.60]: both troughs reach exactly zero coverage,
 // over 0.44 and 0.36 field widths (28 px and 23 px at zoom 1, 7.1 px and 5.7 px at zoom 4).
 //
-// The trade is arc A: a contact zone of 0.6 field widths rather than WP-9a's 1.0. Both a wide
-// arc A and separated outer arcs do not fit inside a ~1.6-field reach, and widening the reach
-// costs frame time (every fragment inside it pays for the shore frame and the breakup taps).
+// WP-9c tightened the whole set: the outer edge moved from 1.60 to 0.72 field widths (102 px to
+// 46 px at zoom 1), because at the WP-9b spacing the foam read as bubble bath spread over the
+// ocean rather than as wave lines at the shore. The gaps still reach exactly zero coverage, over
+// 10.9 px and 10.4 px at zoom 1.
+//
+// These are tuned for zoom 1 and nothing else. At maximum zoom-out the pixel floor below is wider
+// than any of the three arcs, so they merge into one band; that is accepted (a deliberate choice,
+// not an oversight) rather than fixed with a per-arc screen-size fade, because the game is played
+// at zoom 1 and the merged band is not objectionable. If it ever becomes objectionable, the fix is
+// the kCrestFadeMinPx / kDitherGrainFadeMin idiom: fade an arc out below ~3 screen px of width.
+//
+// The trade is arc A: a contact zone of 0.22 field widths rather than WP-9a's 1.0. A wide arc A
+// and separated outer arcs do not both fit inside a tight reach, and widening the reach costs
+// frame time (every fragment inside it pays for the shore frame and the breakup taps).
 //
 // If a capture reads faint, the levers are kFoamArcStrength* / kFoamOpacity or a lower
 // kFoamArcOvershoot*, in that order, tuned on the capture. If arc positions move, re-check the
@@ -494,15 +504,21 @@ const vec2 kDetailOffset = vec2(112.9, -203.4);
 //
 // kFoamArcCentreA is a centre, not a falloff-from-zero: kWaterEdgeWidth = 0.5 field widths is a
 // genuinely soft transition (coverage is ~0.5 at shore = 0), so foam peaking at the waterline
-// would be half transparent over sand and read as pale beach rather than white foam. 0.25 puts
-// the peak where coverage is ~0.72, still visually at the contact.
+// would be half transparent over sand and read as pale beach rather than white foam. 0.10 puts
+// the peak where coverage is ~0.60 -- less than WP-9b's 0.25 gave, the price of pulling the whole
+// set in toward the shore, and the reason arc A carries the highest strength of the three.
 //
-// WP-9a's second higher-frequency octave (kFoamFineFrequency) stays: on a straight coast raising
-// the coarse octave's amplitude only deepens the edge indentations while the ribbon stays
-// continuous; the fine octave is what detaches patches and opens holes. It is a single tap,
-// deliberately not elongated -- fine-scale foam texture is not strongly directional, and one tap
-// keeps the total at four while carrying more amplitude for the same weight (the three-tap tangent
-// box costs half the RMS: raw snoise RMS 0.47, three-tap 0.25).
+// WP-9c cut the breakup back to a single tap per arc, displaced along the shore by kFoamStagger*.
+// Both of WP-9a's extra mechanisms were consequences of a band a whole field wide, and neither
+// survives the tightening:
+//  - WP-9a's fine octave (~0.38 field widths = 24 screen px at zoom 1) existed to break that
+//    ribbon into patches. At the WP-9c arc widths, 9-14 px, it is bubble scale and made
+//    the arcs read as foam bubbles rather than lines. The coarse octave alone gives runs of mean
+//    0.76 field widths -- 48 px at zoom 1, p10 20 px, p90 88 px, measured with the numpy Ashima
+//    port -- which is the long-dash look the reference has.
+//  - The three-tap tangent box elongated the breakup along the coast. An arc 0.14 field widths
+//    across is far thinner than one noise feature in any direction, so it had nothing left to
+//    suppress; it only cost amplitude (raw snoise RMS 0.47 against the three-tap 0.25).
 //
 // The pixel floor under each half-width is the kDitherMinWidth idiom: at maximum zoom-out
 // fwidth(shore) reaches ~0.08 field widths (WP-9, measured at _zoom4), so
@@ -515,18 +531,22 @@ const vec2 kDetailOffset = vec2(112.9, -203.4);
 // The arcs are static. Advancing their centres shoreward over time is WP-10 (Animate the foam),
 // which must advect the sample position along the frame tangent by a bounded offset rather than
 // advance an unbounded along-shore coordinate (§4.6); it is deliberately not pre-empted here.
-const float kFoamFrequency = 0.9;       // coarse octave, cycles per field: ~1.1-field wavelength,
-                                        // sets the band's large-scale shape
-const float kFoamStretch = 0.55;        // field widths along the shore tangent; the three coarse
-                                        // taps span ~one coarse wavelength, elongating the breakup
-const float kFoamFineFrequency = 2.6;   // fine octave, ~0.38-field: the octave that breaks the ribbon
-const float kFoamCoarseWeight = 0.62;   // coarse : fine, sum to 1 (so no separate weight-sum constant)
-const float kFoamFineWeight = 0.38;
+const float kFoamFrequency = 0.9;   // cycles per field: ~1.1-field wavelength, which sets the
+                                    // dash length -- runs average 48 px at zoom 1 (see above)
 const float kFoamMinWidthPixels = 1.5;
-// 1 / p95(|blend|), measured with the numpy Ashima port: raw weighted coarse+fine blend RMS
-// 0.236, p95 0.449, max 0.847. Coupled to the two frequencies, the stretch and the two weights --
-// re-measure with the port if any of them move. Unchanged at WP-9b: none of them moved.
-const float kFoamNoiseScale = 2.23;
+// Per-arc displacement of the breakup sample along the shore tangent, in field widths. The arcs
+// sit inside one noise wavelength of each other, so without this they break at the same places and
+// read as a stencil. Measured correlation between two taps at kFoamFrequency: 0.3 -> +0.36,
+// 0.5 -> -0.08, 0.7 -> -0.11, so 0.5 apart is enough. Slight anticorrelation is welcome: it offsets
+// the dashes between arcs, which is what the reference shows.
+const float kFoamStaggerA = 0.0;
+const float kFoamStaggerB = 0.5;
+const float kFoamStaggerC = 1.0;
+// 1 / p95(|snoise|) for one unattenuated tap, measured with the numpy Ashima port: RMS 0.471,
+// p95 0.784, max 1.000. Coupled to kFoamFrequency -- re-measure with the port if it moves. It fell
+// from WP-9a/WP-9b's 2.23 because that value normalised a coarse+fine blend the three-tap tangent
+// box had already halved in amplitude; one raw tap needs far less scaling.
+const float kFoamNoiseScale = 1.27;
 const float kFoamDissolve = 0.20;   // threshold softness, in coverage units; raises the partial fraction
 const float kFoamOpacity = 0.95;  // near 1: the band hides the seabed and reads white, not sand
 const float kFoamGradStep = 0.5;  // shore-frame finite-difference step: one grid cell
@@ -537,26 +557,26 @@ const float kFoamGradEpsilon = 0.05;  // plateau guard, on the frame's gradient 
 // continuous line; C is a thin, nearly unbroken outer line. The spans are chosen so consecutive
 // arcs are separated by clear water -- see the separation paragraph above, which is the binding
 // constraint here, not the width ratio.
-const float kFoamArcCentreA = 0.25;
-const float kFoamArcHalfWidthA = 0.30;
+const float kFoamArcCentreA = 0.10;     // 14 px wide at zoom 1
+const float kFoamArcHalfWidthA = 0.11;
 const float kFoamArcOvershootA = 0.35;
 const float kFoamArcStrengthA = 1.00;
-const float kFoamArcCentreB = 1.00;
-const float kFoamArcHalfWidthB = 0.15;
+const float kFoamArcCentreB = 0.40;     // 10 px
+const float kFoamArcHalfWidthB = 0.08;
 const float kFoamArcOvershootB = 0.18;
 const float kFoamArcStrengthB = 0.65;
-const float kFoamArcCentreC = 1.50;
-const float kFoamArcHalfWidthC = 0.10;
+const float kFoamArcCentreC = 0.65;     // 9 px
+const float kFoamArcHalfWidthC = 0.07;
 const float kFoamArcOvershootC = 0.10;
-const float kFoamArcStrengthC = 0.40;
+const float kFoamArcStrengthC = 0.45;
 // The inner gate. With the one-sided remap every arc is exactly zero beyond its own half-width
 // (max foam outside all arcs == 0, modelled), so a bound of kFoamArcCentreC + kFoamArcHalfWidthC
-// = 1.60 would be tight -- but only while the nominal half-width is what the arc actually uses.
-// It is not: the pixel floor above widens arc C to ~0.12 at maximum zoom-out, putting its outer
-// edge at 1.62 and past that bound, where the gate would clip it into exactly the hard contour
-// edge the dissolve exists to avoid. So the gate is derived from max(half width, floor):
-// 1.50 + 0.12, rounded up. Raising a centre or narrowing an arc means redoing this arithmetic.
-const float kFoamReach = 1.65;
+// = 0.72 would be tight -- but only while the nominal half-width is what the arc actually uses.
+// It is not: the pixel floor above reaches ~0.12 field widths at maximum zoom-out, wider than any
+// of the three arcs, and an arc widened past this gate would be clipped into exactly the hard
+// contour edge the dissolve exists to avoid. So the gate is derived from max(half width, floor):
+// 0.65 + 0.12, rounded up. Moving a centre or narrowing an arc means redoing this arithmetic.
+const float kFoamReach = 0.80;
 // Measured from referenceImages/AoE2_1.png (the bright foam at the land contact), 9x9 patch
 // averages as the Appendix measures: 24 patches, mean (189, 217, 228), median (184, 214, 226).
 // The plan's fallback (230, 240, 245) is the same cool white but brighter than the reference's
@@ -567,8 +587,3 @@ const vec3 kFoamColor = vec3(189.0, 217.0, 228.0) / 255.0;
 // against a neighbouring constant: lands far from every offset listed there, in the one quadrant
 // none of them reach (largest x, largest positive y).
 const vec2 kFoamOffset = vec2(226.4, 174.9);
-// The fine octave's own offset (WP-9a), checked against the whole budget table: nearest listed
-// offset is kWaterWarpOffset1 (-128.6, 84.2) at ~220 field-width units, comfortably farther than
-// the spacing between several existing pairs, and the two fields differ in frequency by 10x
-// besides. Lands in the largest-positive-y strip none of the others reach.
-const vec2 kFoamFineOffset = vec2(-91.2, 301.5);

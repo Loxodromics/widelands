@@ -196,27 +196,32 @@ vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent) {
 	return normal;
 }
 
-/* Foam breakup (WP-9, two octaves at WP-9a). The coarse octave is three simplex taps offset along
- * the along-shore tangent by a local distance and averaged -- this is what elongates the breakup
- * along the coast rather than along the tile grid; the taps span roughly one coarse wavelength
- * (2 * kFoamStretch ~= 1 / kFoamFrequency), so features stretch along the shore by a factor of
- * ~2-3. The three-tap average is a box filter along the tangent and attenuates the field (raw
- * snoise RMS 0.47, three-tap 0.25), which is why kFoamNoiseScale is a measured normalisation
- * coupled to the frequencies, the stretch and the weights.
+/* Foam breakup (WP-9, two octaves at WP-9a, one staggered tap per arc at WP-9c). A single simplex
+ * sample, displaced along the along-shore tangent by a per-arc 'stagger' so each arc breaks in
+ * different places along the coast. Sampled at var_texture_position, unwarped, the domain the wave
+ * field uses.
  *
- * Amplitude alone does not break a ribbon -- modelled on a straight coast, raising the coarse
- * octave's amplitude only deepens the edge indentations while the band stays continuous. The fine
- * octave (kFoamFineFrequency, ~3x the coarse frequency) is what produces detached patches and
- * holes. It is a single tap, deliberately not elongated: fine-scale foam texture is not strongly
- * directional, and one tap keeps the total at four rather than six while carrying more amplitude
- * for the same weight. Sampled at var_texture_position, unwarped, the domain the wave field uses.
+ * WP-9c stripped this back from four taps to one, and both removals are consequences of the arcs
+ * being tightened:
+ *  - The fine octave is gone. It existed to break WP-9a's solid one-field ribbon into patches, and
+ *    at ~0.38 field widths (24 screen px at zoom 1) it is exactly bubble scale -- with the arcs now
+ *    9-14 px wide it made them read as foam bubbles rather than as lines. The coarse octave alone
+ *    produces runs of mean 0.76 field widths (48 px at zoom 1; p10 20 px, p90 88 px, measured with
+ *    the numpy Ashima port), which is the long-dash look the reference has.
+ *  - The three-tap tangent box is gone. It elongated the breakup along the coast, which mattered
+ *    for a band a whole field wide; an arc 0.14 field widths across is far thinner than one noise
+ *    feature in any direction, so averaging along the tangent had nothing left to suppress.
+ *
+ * The stagger replaces what those taps were incidentally providing. WP-9b's arcs sat 0.6 field
+ * widths apart and decorrelated for free by sampling at their own distance offshore; WP-9c's sit
+ * 0.25-0.3 apart, well inside one wavelength, so without a stagger they would break at the same
+ * places and read as a stencil. Measured correlation between two taps displaced along the tangent
+ * at kFoamFrequency: 0.3 -> +0.36, 0.5 -> -0.08, 0.7 -> -0.11. kFoamStagger* are 0.0/0.5/1.0, so
+ * the arcs are uncorrelated to slightly anticorrelated -- dashes offset between arcs, which is
+ * what referenceImages/SebastianLague00.jpg shows.
  */
-float foam_noise(vec2 world_pos, vec2 tangent) {
-	vec2 base = world_pos * kFoamFrequency + kFoamOffset;
-	vec2 stretch = tangent * (kFoamStretch * kFoamFrequency);
-	float coarse = (snoise(base - stretch) + snoise(base) + snoise(base + stretch)) / 3.0;
-	float fine = snoise(world_pos * kFoamFineFrequency + kFoamFineOffset);
-	return kFoamNoiseScale * (kFoamCoarseWeight * coarse + kFoamFineWeight * fine);
+float foam_noise(vec2 world_pos, vec2 tangent, float stagger) {
+	return kFoamNoiseScale * snoise((world_pos + tangent * stagger) * kFoamFrequency + kFoamOffset);
 }
 
 /* One foam arc (WP-9b): the WP-9a band body, parameterised per arc so it runs three times for
@@ -522,23 +527,25 @@ void main() {
 	 * band -- the constraint the first WP-9b constants missed, see the separation paragraph in
 	 * terrain_noise_params.glsl.
 	 *
-	 * The three arcs share one foam_noise() evaluation and one shore frame: they need no per-arc
-	 * noise decorrelation because each samples the breakup field at its own distance offshore, so
-	 * the along-shore correlation between their foam profiles is already near zero (measured,
-	 * WATER.md WP-9b). Combined by max(), so the composite is foam = max(band, whitecap) with band
-	 * already the max of three arcs.
+	 * The three arcs share one shore frame but take one breakup tap each, displaced along the
+	 * tangent by kFoamStagger* -- at WP-9c's spacing (0.25-0.3 field widths, inside one noise
+	 * wavelength) they would otherwise break at the same places and read as a stencil, which
+	 * WP-9b's wider spacing had made a non-issue for free. Combined by max(), so the composite is
+	 * foam = max(band, whitecap) with band already the max of three arcs.
 	 *
 	 * Self-limiting per arc: thresh >= kFoamDissolve by construction (hence the clamp on u -- the
 	 * two-octave blend's max |value| exceeds 1), so each arc is exactly 0 outside its own
 	 * half-width (modelled max foam outside all three arcs 0.0000). That keeps kFoamReach a tight
 	 * bound and foam off the land side. The pixel floor (kFoamMinWidthPixels * fwidth(shore), the
-	 * kDitherMinWidth idiom) does bind for arc C at maximum zoom-out -- its 0.10 half-width is
-	 * 1.6 screen px there -- which is why kFoamReach is derived from the floor rather than from
-	 * the nominal half-width (terrain_noise_params.glsl).
+	 * kDitherMinWidth idiom) binds for every arc at maximum zoom-out now that they are 0.07-0.11
+	 * field widths, which is why kFoamReach is derived from the floor rather than from the nominal
+	 * half-width (terrain_noise_params.glsl). The arcs are tuned for zoom 1 and merge into one
+	 * band when fully zoomed out; that is accepted rather than fixed.
 	 *
 	 * Everything here -- the frame's four extra taps, the Jacobian's two snoise_grad() calls and
-	 * the four breakup taps -- runs once inside the kFoamReach gate, so open water pays nothing and
-	 * the three arcs do not multiply the cost. The gate is spatially coherent (whole screen regions
+	 * the three breakup taps -- runs only inside the kFoamReach gate, so open water pays nothing.
+	 * WP-9c cut a tap (four to three) and more than halved the gate (1.65 -> 0.80 field widths), so
+	 * both the per-fragment work and the number of fragments doing it went down. The gate is spatially coherent (whole screen regions
 	 * of water are either near-shore or not), so the Jacobian's duplicate lattice work over the
 	 * main path's snoise() calls is cheaper than upgrading every fragment's warp to snoise_grad()
 	 * (measured, WATER.md WP-9). WP-9b widens the gate 0.85 -> 1.53, so more near-shore fragments
@@ -548,14 +555,19 @@ void main() {
 	if (shore < kFoamReach) {
 		vec2 tangent;
 		water_shore_frame(var_texture_position, world, tangent);
-		float fn = foam_noise(var_texture_position, tangent);
-		float u = clamp(0.5 + 0.5 * fn, 0.0, 1.0);
+		// One tap per arc, each displaced along the shore by its own stagger -- see foam_noise().
+		float uA = clamp(
+		   0.5 + 0.5 * foam_noise(var_texture_position, tangent, kFoamStaggerA), 0.0, 1.0);
+		float uB = clamp(
+		   0.5 + 0.5 * foam_noise(var_texture_position, tangent, kFoamStaggerB), 0.0, 1.0);
+		float uC = clamp(
+		   0.5 + 0.5 * foam_noise(var_texture_position, tangent, kFoamStaggerC), 0.0, 1.0);
 		band = max(
-		   foam_arc(shore, u, shore_fwidth, kFoamArcCentreA, kFoamArcHalfWidthA,
+		   foam_arc(shore, uA, shore_fwidth, kFoamArcCentreA, kFoamArcHalfWidthA,
 		            kFoamArcOvershootA, kFoamArcStrengthA),
-		   max(foam_arc(shore, u, shore_fwidth, kFoamArcCentreB, kFoamArcHalfWidthB,
+		   max(foam_arc(shore, uB, shore_fwidth, kFoamArcCentreB, kFoamArcHalfWidthB,
 		                kFoamArcOvershootB, kFoamArcStrengthB),
-		       foam_arc(shore, u, shore_fwidth, kFoamArcCentreC, kFoamArcHalfWidthC,
+		       foam_arc(shore, uC, shore_fwidth, kFoamArcCentreC, kFoamArcHalfWidthC,
 		                kFoamArcOvershootC, kFoamArcStrengthC)));
 	}
 
