@@ -1,13 +1,14 @@
 #version 330
 
-/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7/WP-8/WP-8a/WP-9). Two visualisations of the same
- * signed distance-to-shore field, chosen by u_debug: the real wash (default) composites an animated
- * shallow-to-deep colour ramp over the seabed the terrain pass now draws for water triangles, with
- * its edge coming from the warped field below and a foam band running along the coast in the
- * shallowest zone (WP-9); --water-debug (u_debug > 0.5) instead draws the WP-3 false-colour view of
- * the field itself, unmixed with any seabed or wave motion, so the field can be seen and trusted
- * independently of how the wash reads it -- with the WP-9 shore frame tinted in where it is used,
- * as the instrument for judging frame stability.
+/* The water pass (Claude/WATER.md §4.2, WP-6/WP-7/WP-8/WP-8a/WP-9/WP-10). Two visualisations of the
+ * same signed distance-to-shore field, chosen by u_debug: the real wash (default) composites an
+ * animated shallow-to-deep colour ramp over the seabed the terrain pass now draws for water
+ * triangles, with its edge coming from the warped field below and a marching train of foam arcs
+ * running along the coast in the shallowest zone (WP-9/WP-10); --water-debug (u_debug > 0.5)
+ * instead draws the WP-3 false-colour view of the field itself, unmixed with any seabed or wave
+ * motion, so the field can be seen and trusted independently of how the wash reads it -- with the
+ * WP-9 shore frame (and WP-10's |grad shore| confidence in blue) tinted in where it is used, as
+ * the instrument for judging frame stability.
  */
 
 in vec2 var_texture_position;
@@ -170,12 +171,17 @@ mat2 water_shore_warp_jacobian(vec2 world_pos) {
  * dot(world, t) is numerically unusable here -- var_texture_position reaches ~150 on the
  * water_coast view and up to ~500 on a large map, so a frame rotation of order 1 rad/field turns
  * into hundreds of cycles of noise-argument change per field, i.e. white noise. The frame is
- * therefore used as a *direction*, not a coordinate: foam_noise() offsets a few taps along +/-t
- * by a local distance, with no dependence on |world|. WP-10 inherits this constraint: it must
- * advect the *sample position* along t by a bounded offset (flow-map style, with a cross-faded
- * wrap), not advance an unbounded along-shore coordinate.
+ * therefore used as a *direction*, not a coordinate: foam_noise() advects its sample position
+ * along +/-t by a bounded offset (WP-10, flow-map style with a cross-faded wrap), with no
+ * dependence on |world|.
+ *
+ * grad_len is |grad shore| in world space, ~1 for a well-formed distance field. WP-10 uses it as
+ * a free confidence measure: across the medial axis of a channel narrower than 2*kFoamReach the
+ * tangent's sign flips and the field's gradient magnitude collapses toward zero, so scaling the
+ * advection by smoothstep(kFoamDriftConfMin, kFoamDriftConfMax, grad_len) fades the drift out
+ * where the frame is ill-defined rather than letting it reverse across a seam.
  */
-vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent) {
+vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent, out float grad_len) {
 	/* Central difference over the full span 2*kFoamGradStep, so kFoamGradEpsilon below compares
 	 * against a true gradient magnitude whatever the step is. Before this fix the difference was
 	 * left unscaled, which happened to be correct only because the shipped step of 0.5 made the
@@ -187,6 +193,7 @@ vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent) {
 	   (2.0 * kFoamGradStep);
 	vec2 g_world = transpose(water_shore_warp_jacobian(world_pos)) * g_warped;
 	float len = length(g_world);
+	grad_len = len;
 	if (len < kFoamGradEpsilon) {
 		tangent = vec2(0.0, -1.0);
 		return vec2(1.0, 0.0);
@@ -196,52 +203,68 @@ vec2 water_shore_frame(vec2 world_pos, vec2 warped_pos, out vec2 tangent) {
 	return normal;
 }
 
-/* Foam breakup (WP-9, two octaves at WP-9a, one staggered tap per arc at WP-9c). A single simplex
- * sample, displaced along the along-shore tangent by a per-arc 'stagger' so each arc breaks in
- * different places along the coast. Sampled at var_texture_position, unwarped, the domain the wave
- * field uses.
+/* Foam breakup (WP-9 one octave, WP-9c one staggered tap per arc, WP-10 a drifting flow map).
+ * One snoise3 sample, its position advected along the along-shore tangent by a bounded sawtooth
+ * that resets every kFoamDriftPeriod. Two layers half a period out of phase, cross-faded so each
+ * layer's weight is zero at its own reset -- the wrap is then free (WATER.md §4.6: there is no
+ * along-shore coordinate to advance, so the sample position is advected instead). Both layers
+ * translate at the same rate at all times, so the apparent motion is uniform; only the identity of
+ * the dominant copy changes, and it changes where the outgoing copy has already faded to zero.
  *
- * WP-9c stripped this back from four taps to one, and both removals are consequences of the arcs
- * being tightened:
- *  - The fine octave is gone. It existed to break WP-9a's solid one-field ribbon into patches, and
- *    at ~0.38 field widths (24 screen px at zoom 1) it is exactly bubble scale -- with the arcs now
- *    9-14 px wide it made them read as foam bubbles rather than as lines. The coarse octave alone
- *    produces runs of mean 0.76 field widths (48 px at zoom 1; p10 20 px, p90 88 px, measured with
- *    the numpy Ashima port), which is the long-dash look the reference has.
- *  - The three-tap tangent box is gone. It elongated the breakup along the coast, which mattered
- *    for a band a whole field wide; an arc 0.14 field widths across is far thinner than one noise
- *    feature in any direction, so averaging along the tangent had nothing left to suppress.
+ * The third noise axis carries the arc slot (centre / kFoamTrainSpacing). It does the job WP-9c's
+ * per-arc tangent stagger did -- decorrelate neighbouring arcs so they do not break in the same
+ * places and read as a stencil -- but as a pure function of centre it is wrap-safe (a stagger tied
+ * to the arc index jumps at the wrap; one tied to the centre slides the dashes along the shore as
+ * the arc marches, fighting the drift). As a side effect each arc's dash pattern re-forms slowly
+ * as it travels in, which is the right behaviour for a wave approaching the beach. Separation
+ * kFoamArcAxisStep ~= 0.45 noise units is what WP-9c measured as sufficient.
  *
- * The stagger replaces what those taps were incidentally providing. WP-9b's arcs sat 0.6 field
- * widths apart and decorrelated for free by sampling at their own distance offshore; WP-9c's sit
- * 0.25-0.3 apart, well inside one wavelength, so without a stagger they would break at the same
- * places and read as a stencil. Measured correlation between two taps displaced along the tangent
- * at kFoamFrequency: 0.3 -> +0.36, 0.5 -> -0.08, 0.7 -> -0.11. kFoamStagger* are 0.0/0.5/1.0, so
- * the arcs are uncorrelated to slightly anticorrelated -- dashes offset between arcs, which is
- * what referenceImages/SebastianLague00.jpg shows.
+ * drift_conf in [0, 1] scales the advection distance: 1 where the shore frame is well-formed, 0 on
+ * a narrow channel's medial axis where |grad shore| collapses and the tangent would otherwise
+ * reverse across a seam (see water_shore_frame()). Contrast normalisation: the mid-cycle 50/50
+ * blend of two partly-decorrelated layers has lower variance than a single tap, which would make
+ * the breakup's raggedness pulse at kFoamDriftPeriod; dividing by the analytic blend RMS with the
+ * measured layer correlation kFoamDriftLayerRho holds the variance constant, and the factor is
+ * exactly 1 at the resets so it is continuous through the wrap. Note the two layers are always
+ * exactly D/2 apart, never D: |f0 - f1| is identically 0.5 by construction, which is what makes a
+ * single constant rho the right model and is the separation rho must be measured at (see
+ * terrain_noise_params.glsl -- measuring at D makes the correction overshoot and pulse the other
+ * way). kFoamNoiseScale maps one tap's p95 to +/-1.
  */
-float foam_noise(vec2 world_pos, vec2 tangent, float stagger) {
-	return kFoamNoiseScale * snoise((world_pos + tangent * stagger) * kFoamFrequency + kFoamOffset);
+float foam_noise(vec2 world_pos, vec2 tangent, float foam_time, float arc_slot, float drift_conf) {
+	float drift = kFoamDriftSpeed * kFoamDriftPeriod * drift_conf;
+	float f0 = fract(foam_time / kFoamDriftPeriod);
+	float f1 = fract(f0 + 0.5);
+	float w0 = 1.0 - abs(2.0 * f0 - 1.0);
+	float w1 = 1.0 - w0;
+	vec2 base = world_pos * kFoamFrequency + kFoamOffset;
+	vec2 step_dir = tangent * (drift * kFoamFrequency);
+	float z = arc_slot * kFoamArcAxisStep;
+	float n = w0 * snoise3(vec3(base + step_dir * f0, z)) +
+	          w1 * snoise3(vec3(base + step_dir * f1, z));
+	n *= inversesqrt(w0 * w0 + w1 * w1 + 2.0 * kFoamDriftLayerRho * w0 * w1);
+	return kFoamNoiseScale * n;
 }
 
-/* One foam arc (WP-9b): the WP-9a band body, parameterised per arc so it runs three times for
- * three stylised shore-parallel lines that thin and fade offshore
- * (referenceImages/SebastianLague00.jpg). 'u' is the single foam_noise() evaluation remapped to
- * [0, 1] -- computed once by the caller, because the arcs need no per-arc noise decorrelation:
- * each one samples the breakup field at its own distance offshore and the measured along-shore
- * correlation between arc profiles is already near zero (Claude/WATER.md WP-9b). Continuity is set
- * per arc by 'overshoot', not by the dissolve -- a lower overshoot on the outer arcs gives the
- * clean lines the reference has, while arc A keeps WP-9a's ragged contact zone.
+/* One foam arc (WP-9b): the WP-9a band body -- a coverage field falling smoothly from 1 at the arc
+ * centre to 0 at its half-width, with foam appearing wherever it exceeds a one-sided noise
+ * threshold. 'u' is the foam_noise() evaluation remapped to [0, 1] by the caller. Continuity is
+ * set by 'overshoot', not by the dissolve -- a lower overshoot gives the clean outer lines the
+ * reference has, a higher one keeps the ragged contact zone near the waterline.
  *
- * WP-9a's self-limiting invariant survives per arc: thresh >= kFoamDissolve by construction, so
- * the smoothstep is exactly 0 wherever cov == 0, i.e. outside this arc's own half-width. Modelled
- * max foam outside all three arcs: 0.0000 -- that is what keeps kFoamReach a tight bound and foam
- * off the land side. See terrain_noise_params.glsl for the per-arc constants and the geometric law
- * behind them.
+ * WP-9a's self-limiting invariant: thresh >= kFoamDissolve by construction, so the smoothstep is
+ * exactly 0 wherever cov == 0, i.e. outside this arc's own half-width. That keeps kFoamReach a
+ * tight bound and foam off the land side.
+ *
+ * WP-10 evaluates this once for the nearest arc of a marching train (see main()). The hard cap on
+ * hw guards the train's non-overlap invariant (max(half_width, pixel floor) < kFoamTrainSpacing/2,
+ * or the nearest-arc collapse shows a seam midway between arcs): the profile stays well under it,
+ * but the cap makes a later constant change or a larger kMaxZoom unable to violate it.
  */
 float foam_arc(float shore, float u, float shore_fwidth,
                float centre, float half_width, float overshoot, float strength) {
 	float hw = max(half_width, kFoamMinWidthPixels * shore_fwidth);
+	hw = min(hw, kFoamArcHalfWidthCap * kFoamTrainSpacing);
 	float d = clamp(abs(shore - centre) / hw, 0.0, 1.0);
 	float cov = 1.0 - smoothstep(0.0, 1.0, d);
 	float thresh = kFoamDissolve + (1.0 + overshoot - kFoamDissolve) * u;
@@ -400,16 +423,20 @@ void main() {
 		/* The WP-9 shore frame, tinted where the foam band will actually use it -- the wash's own
 		 * rendered band, i.e. inside the early-out's land-side edge (-kWaterEdgeWidth, kFoamReach);
 		 * shore < kFoamReach alone would cover every inland pixel, where the foam code never runs.
-		 * R carries the cross-shore normal's x, G its y. This is the instrument for the "no
-		 * flipping or singularities" criterion -- judged on the debug view rather than as an
-		 * eyeball judgement on the foam itself. The zero-crossing band below is applied after
-		 * this, so the waterline still reads on top of the frame.
+		 * R carries the cross-shore normal's x, G its y, B the frame's gradient magnitude
+		 * (WP-10's drift-confidence measure -- ~1 for a well-formed field, collapsing toward 0 on
+		 * a channel's medial axis where the tangent flips). This is the instrument for the "no
+		 * flipping or singularities" criterion, and for judging kFoamDriftConfMin/Max -- on the
+		 * debug view rather than as an eyeball judgement on the foam itself. The zero-crossing band
+		 * below is applied after this, so the waterline still reads on top of the frame.
 		 */
 		if (shore > -kWaterEdgeWidth && shore < kFoamReach) {
 			vec2 tangent;
-			vec2 normal = water_shore_frame(var_texture_position, world, tangent);
+			float grad_len;
+			vec2 normal = water_shore_frame(var_texture_position, world, tangent, grad_len);
 			color.r = 0.5 + 0.5 * normal.x;
 			color.g = 0.5 + 0.5 * normal.y;
+			color.b = clamp(grad_len, 0.0, 1.0);
 		}
 
 		if (magnitude < u_zero_band) {
@@ -514,61 +541,62 @@ void main() {
 	                 smoothstep(kWhitecapDepthMin, kWhitecapDepthMax, depth_t) *
 	                 crest_fade * kWhitecapStrength;
 
-	/* Foam band (WP-9, reworked at WP-9a, three arcs at WP-9b, Claude/WATER.md §4.6): three bands
-	 * in the shallowest water zone, running parallel to the coast and getting thinner and fainter
-	 * offshore (referenceImages/SebastianLague00.jpg). Each arc is foam_arc() -- the WP-9a band
-	 * body: a coverage field falling smoothly from 1 at the arc centre to 0 at its half-width, with
-	 * foam appearing wherever it exceeds the one-sided noise threshold. Centres are at kFoamArcCentre*
-	 * rather than falling off from zero, so arc A's peak sits where the coastline coverage is ~0.72
-	 * rather than the ~0.5 it is at the waterline (kWaterEdgeWidth = 0.5 field widths is a genuinely
-	 * soft transition -- foam peaking at shore = 0 would read as pale beach, not white foam).
+	/* Foam band (WP-9, reworked at WP-9a, three arcs at WP-9b/WP-9c, animated at WP-10,
+	 * Claude/WATER.md §4.6): stylised shore-parallel foam lines that thin and fade offshore
+	 * (referenceImages/SebastianLague00.jpg), now a marching train rather than three fixed arcs.
 	 *
-	 * The arcs must be separated by clear water to read as three lines rather than as one wider
-	 * band -- the constraint the first WP-9b constants missed, see the separation paragraph in
-	 * terrain_noise_params.glsl.
+	 * The train is exactly periodic in shore: arc centres are kFoamTrainBase - march + k*spacing
+	 * for integer k, with march sweeping one spacing shoreward every kFoamMarchPeriod on a wrapped
+	 * clock. Every arc property -- profile (half width / overshoot / strength, interpolated by
+	 * centre / kFoamProfileSpan) and life envelope -- is a pure function of the arc's *current
+	 * centre*, never its index, so when march wraps 1->0 arc k takes over exactly the centre arc
+	 * k-1 just had, with the same width and strength, and the image is continuous with no cross-fade
+	 * and no birth/death pop. The near/far profile endpoints are WP-9c's own three arcs fitted by a
+	 * line and extended to centre 0, so at march = 0 the train reproduces the committed WP-9c look.
 	 *
-	 * The three arcs share one shore frame but take one breakup tap each, displaced along the
-	 * tangent by kFoamStagger* -- at WP-9c's spacing (0.25-0.3 field widths, inside one noise
-	 * wavelength) they would otherwise break at the same places and read as a stencil, which
-	 * WP-9b's wider spacing had made a non-issue for free. Combined by max(), so the composite is
-	 * foam = max(band, whitecap) with band already the max of three arcs.
+	 * Nearest-arc evaluation: the train is periodic and the arcs never overlap (kFoamArcHalfWidthCap
+	 * guards max(half_width, pixel floor) < spacing/2), so a fragment is inside at most one arc's
+	 * half width and floor((shore - base) / spacing + 0.5) picks it -- one foam_arc() call, exactly
+	 * equal to WP-9c's max() over three because foam_arc() is identically zero outside its own arc.
 	 *
-	 * Self-limiting per arc: thresh >= kFoamDissolve by construction (hence the clamp on u -- the
-	 * two-octave blend's max |value| exceeds 1), so each arc is exactly 0 outside its own
-	 * half-width (modelled max foam outside all three arcs 0.0000). That keeps kFoamReach a tight
-	 * bound and foam off the land side. The pixel floor (kFoamMinWidthPixels * fwidth(shore), the
-	 * kDitherMinWidth idiom) binds for every arc at maximum zoom-out now that they are 0.07-0.11
-	 * field widths, which is why kFoamReach is derived from the floor rather than from the nominal
-	 * half-width (terrain_noise_params.glsl). The arcs are tuned for zoom 1 and merge into one
-	 * band when fully zoomed out; that is accepted rather than fixed.
+	 * The life envelope fades the arc out as it crosses the waterline (swash sinking into the sand)
+	 * and in as it is born offshore; the birth fade keeps it clear of the reach gate's hard edge.
 	 *
-	 * Everything here -- the frame's four extra taps, the Jacobian's two snoise_grad() calls and
-	 * the three breakup taps -- runs only inside the kFoamReach gate, so open water pays nothing.
-	 * WP-9c cut a tap (four to three) and more than halved the gate (1.65 -> 0.80 field widths), so
-	 * both the per-fragment work and the number of fragments doing it went down. The gate is spatially coherent (whole screen regions
-	 * of water are either near-shore or not), so the Jacobian's duplicate lattice work over the
-	 * main path's snoise() calls is cheaper than upgrading every fragment's warp to snoise_grad()
-	 * (measured, WATER.md WP-9). WP-9b widens the gate 0.85 -> 1.53, so more near-shore fragments
-	 * pay for the frame and breakup work (WATER.md WP-9b re-measures the cost).
+	 * Along-shore motion is in foam_noise(): the breakup sample position is advected along the
+	 * frame tangent by a bounded, cross-faded drift, and the arc slot rides the third noise axis.
+	 * drift_conf fades the advection where the frame is ill-defined (medial axis of a narrow
+	 * channel). Everything here runs only inside the kFoamReach gate, so open water pays nothing;
+	 * against WP-9c this is one foam_arc() and two snoise3 taps where WP-9c had three and three,
+	 * partly given back by the wider gate (0.80 -> 0.97, the extra span is the birth fade).
 	 */
 	float band = 0.0;
 	if (shore < kFoamReach) {
 		vec2 tangent;
-		water_shore_frame(var_texture_position, world, tangent);
-		// One tap per arc, each displaced along the shore by its own stagger -- see foam_noise().
-		float uA = clamp(
-		   0.5 + 0.5 * foam_noise(var_texture_position, tangent, kFoamStaggerA), 0.0, 1.0);
-		float uB = clamp(
-		   0.5 + 0.5 * foam_noise(var_texture_position, tangent, kFoamStaggerB), 0.0, 1.0);
-		float uC = clamp(
-		   0.5 + 0.5 * foam_noise(var_texture_position, tangent, kFoamStaggerC), 0.0, 1.0);
-		band = max(
-		   foam_arc(shore, uA, shore_fwidth, kFoamArcCentreA, kFoamArcHalfWidthA,
-		            kFoamArcOvershootA, kFoamArcStrengthA),
-		   max(foam_arc(shore, uB, shore_fwidth, kFoamArcCentreB, kFoamArcHalfWidthB,
-		                kFoamArcOvershootB, kFoamArcStrengthB),
-		       foam_arc(shore, uC, shore_fwidth, kFoamArcCentreC, kFoamArcHalfWidthC,
-		                kFoamArcOvershootC, kFoamArcStrengthC)));
+		float grad_len;
+		water_shore_frame(var_texture_position, world, tangent, grad_len);
+		float drift_conf = smoothstep(kFoamDriftConfMin, kFoamDriftConfMax, grad_len);
+
+		/* Wrap the foam clock the same way water_wave_field() wraps wave_time, and for the same
+		 * float-precision reason -- fract()'s argument must not grow with u_time. Both foam periods
+		 * divide kWaveTimeWrapPeriod exactly (10000 / 5 and 10000 / 3.125 are integers), so this
+		 * wrap adds no discontinuity of its own.
+		 */
+		float foam_time = mod(u_time, kWaveTimeWrapPeriod);
+		float base = kFoamTrainBase - kFoamTrainSpacing * fract(foam_time / kFoamMarchPeriod);
+		float centre =
+		   base + kFoamTrainSpacing * floor((shore - base) / kFoamTrainSpacing + 0.5);
+
+		float c_t = clamp(centre / kFoamProfileSpan, 0.0, 1.0);
+		float half_width = mix(kFoamHalfWidthNear, kFoamHalfWidthFar, c_t);
+		float overshoot = mix(kFoamOvershootNear, kFoamOvershootFar, c_t);
+		float strength = mix(kFoamStrengthNear, kFoamStrengthFar, c_t);
+		float life = smoothstep(kFoamDeathStart, kFoamDeathEnd, centre) *
+		             (1.0 - smoothstep(kFoamBirthStart, kFoamBirthEnd, centre));
+
+		float u = clamp(0.5 + 0.5 * foam_noise(var_texture_position, tangent, foam_time,
+		                                       centre / kFoamTrainSpacing, drift_conf),
+		                0.0, 1.0);
+		band = foam_arc(shore, u, shore_fwidth, centre, half_width, overshoot, strength * life);
 	}
 
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
@@ -579,8 +607,12 @@ void main() {
 	 * the cloud-shadow multiply, and into opacity independently of the shadow -- Claude/WATER.md
 	 * §4.8's cancellation identity is what breaks if foam went in additively. kFoamOpacity near 1
 	 * hides the seabed under the band and makes it read white rather than sand-tinted.
+	 *
+	 * Clamped because kFoamStrengthNear = 1.10 (WP-10, the profile line extended to centre 0) lets
+	 * band exceed 1 at an arc's core, and mix() past 1 extrapolates past kFoamColor rather than
+	 * interpolating. WP-9c did not need this -- its arc strengths were all <= 1.
 	 */
-	float foam = max(band, whitecap);
+	float foam = clamp(max(band, whitecap), 0.0, 1.0);
 	color = mix(color, kFoamColor, foam);
 	opacity = mix(opacity, kFoamOpacity, foam);
 	frag_color = vec4(color * var_brightness * var_cloud_shadow, opacity * coverage);
