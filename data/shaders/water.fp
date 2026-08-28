@@ -219,6 +219,30 @@ float foam_noise(vec2 world_pos, vec2 tangent) {
 	return kFoamNoiseScale * (kFoamCoarseWeight * coarse + kFoamFineWeight * fine);
 }
 
+/* One foam arc (WP-9b): the WP-9a band body, parameterised per arc so it runs three times for
+ * three stylised shore-parallel lines that thin and fade offshore
+ * (referenceImages/SebastianLague00.jpg). 'u' is the single foam_noise() evaluation remapped to
+ * [0, 1] -- computed once by the caller, because the arcs need no per-arc noise decorrelation:
+ * each one samples the breakup field at its own distance offshore and the measured along-shore
+ * correlation between arc profiles is already near zero (Claude/WATER.md WP-9b). Continuity is set
+ * per arc by 'overshoot', not by the dissolve -- a lower overshoot on the outer arcs gives the
+ * clean lines the reference has, while arc A keeps WP-9a's ragged contact zone.
+ *
+ * WP-9a's self-limiting invariant survives per arc: thresh >= kFoamDissolve by construction, so
+ * the smoothstep is exactly 0 wherever cov == 0, i.e. outside this arc's own half-width. Modelled
+ * max foam outside all three arcs: 0.0000 -- that is what keeps kFoamReach a tight bound and foam
+ * off the land side. See terrain_noise_params.glsl for the per-arc constants and the geometric law
+ * behind them.
+ */
+float foam_arc(float shore, float u, float shore_fwidth,
+               float centre, float half_width, float overshoot, float strength) {
+	float hw = max(half_width, kFoamMinWidthPixels * shore_fwidth);
+	float d = clamp(abs(shore - centre) / hw, 0.0, 1.0);
+	float cov = 1.0 - smoothstep(0.0, 1.0, d);
+	float thresh = kFoamDissolve + (1.0 + overshoot - kFoamDissolve) * u;
+	return smoothstep(thresh - kFoamDissolve, thresh + kFoamDissolve, cov) * strength;
+}
+
 // The depth ramp (Claude/WATER.md WP-7): two linear segments through the shallow/mid/deep stops,
 // keyed on 't' in [0, 1] -- callers pass depth_t = clamp(shore / u_max_distance, 0, 1), the same
 // normalisation the debug view above already applies to |shore| for its own ramp.
@@ -485,47 +509,49 @@ void main() {
 	                 smoothstep(kWhitecapDepthMin, kWhitecapDepthMax, depth_t) *
 	                 crest_fade * kWhitecapStrength;
 
-	/* Foam band (WP-9, reworked at WP-9a, Claude/WATER.md §4.6): a band in the shallowest water
-	 * zone, centred at kFoamCenter -- not falling off from zero. With kWaterEdgeWidth = 0.5 field
-	 * widths the coverage transition is genuinely soft (coverage is only ~0.5 at shore = 0), so
-	 * foam peaking at the waterline would be half transparent over sand and read as pale beach
-	 * rather than white foam; kFoamCenter = 0.35 puts the peak where coverage is ~0.85, still
-	 * visually at the contact.
+	/* Foam band (WP-9, reworked at WP-9a, three arcs at WP-9b, Claude/WATER.md §4.6): three bands
+	 * in the shallowest water zone, running parallel to the coast and getting thinner and fainter
+	 * offshore (referenceImages/SebastianLague00.jpg). Each arc is foam_arc() -- the WP-9a band
+	 * body: a coverage field falling smoothly from 1 at the arc centre to 0 at its half-width, with
+	 * foam appearing wherever it exceeds the one-sided noise threshold. Centres are at kFoamArcCentre*
+	 * rather than falling off from zero, so arc A's peak sits where the coastline coverage is ~0.85
+	 * rather than the ~0.5 it is at the waterline (kWaterEdgeWidth = 0.5 field widths is a genuinely
+	 * soft transition -- foam peaking at shore = 0 would read as pale beach, not white foam).
 	 *
-	 * The band is dissolved against a coverage field rather than drawn as a solid ribbon (the
-	 * idiom dither.fp establishes at its grain threshold): cov falls smoothly from 1 at the band
-	 * centre to 0 at its edge with no plateau -- kFoamCore is gone -- and foam appears wherever cov
-	 * exceeds a noise-driven threshold. The remap is one-sided, into [kFoamDissolve,
-	 * 1 + kFoamOvershoot]: thresh >= kFoamDissolve by construction (hence the clamp on u -- the
-	 * two-octave blend's max |value| exceeds 1), so smoothstep(thresh - kFoamDissolve, ..., 0) == 0
-	 * exactly outside the band. That keeps the foam self-limiting (modelled max foam outside the
-	 * band 0.0000), restores kFoamReach as a tight bound and keeps foam off the land side.
-	 * kFoamOvershoot lets the band core break into holes -- the symmetric remap into
-	 * [kFoamDissolve, 1 - kFoamDissolve] would instead force foam == 1 wherever cov == 1 and remove
-	 * them. This replaces WP-9's kFoamWobble edge displacement: the boundary irregularity now comes
-	 * from the breakup field itself, at its own wavelength.
+	 * The three arcs share one foam_noise() evaluation and one shore frame: they need no per-arc
+	 * noise decorrelation because each samples the breakup field at its own distance offshore, so
+	 * the along-shore correlation between their foam profiles is already near zero (measured,
+	 * WATER.md WP-9b). Combined by max(), so the composite is foam = max(band, whitecap) with band
+	 * already the max of three arcs.
 	 *
-	 * The pixel floor (kFoamMinWidthPixels * fwidth(shore), the kDitherMinWidth idiom) is a guard
-	 * -- kFoamHalfWidth binds at every zoom the game offers (measured at water_coast_zoom4, see
-	 * WATER.md WP-9).
+	 * Self-limiting per arc: thresh >= kFoamDissolve by construction (hence the clamp on u -- the
+	 * two-octave blend's max |value| exceeds 1), so each arc is exactly 0 outside its own
+	 * half-width (modelled max foam outside all three arcs 0.0000). That keeps kFoamReach a tight
+	 * bound and foam off the land side. The pixel floor (kFoamMinWidthPixels * fwidth(shore), the
+	 * kDitherMinWidth idiom) is a guard; arc C's 0.18 half-width is the narrowest and the first at
+	 * risk of the floor binding at maximum zoom-out (WATER.md WP-9b).
 	 *
 	 * Everything here -- the frame's four extra taps, the Jacobian's two snoise_grad() calls and
-	 * the four breakup taps -- runs only inside the kFoamReach gate, so open water pays nothing.
-	 * The gate is spatially coherent (whole screen regions of water are either near-shore or
-	 * not), so the Jacobian's duplicate lattice work over the main path's snoise() calls is
-	 * cheaper than upgrading every fragment's warp to snoise_grad() (measured, WATER.md WP-9).
+	 * the four breakup taps -- runs once inside the kFoamReach gate, so open water pays nothing and
+	 * the three arcs do not multiply the cost. The gate is spatially coherent (whole screen regions
+	 * of water are either near-shore or not), so the Jacobian's duplicate lattice work over the
+	 * main path's snoise() calls is cheaper than upgrading every fragment's warp to snoise_grad()
+	 * (measured, WATER.md WP-9). WP-9b widens the gate 0.85 -> 1.53, so more near-shore fragments
+	 * pay for the frame and breakup work (WATER.md WP-9b re-measures the cost).
 	 */
 	float band = 0.0;
 	if (shore < kFoamReach) {
 		vec2 tangent;
 		water_shore_frame(var_texture_position, world, tangent);
 		float fn = foam_noise(var_texture_position, tangent);
-		float half_width = max(kFoamHalfWidth, kFoamMinWidthPixels * shore_fwidth);
-		float d = clamp(abs(shore - kFoamCenter) / half_width, 0.0, 1.0);
-		float cov = 1.0 - smoothstep(0.0, 1.0, d);
 		float u = clamp(0.5 + 0.5 * fn, 0.0, 1.0);
-		float thresh = kFoamDissolve + (1.0 + kFoamOvershoot - kFoamDissolve) * u;
-		band = smoothstep(thresh - kFoamDissolve, thresh + kFoamDissolve, cov) * kFoamStrength;
+		band = max(
+		   foam_arc(shore, u, shore_fwidth, kFoamArcCentreA, kFoamArcHalfWidthA,
+		            kFoamArcOvershootA, kFoamArcStrengthA),
+		   max(foam_arc(shore, u, shore_fwidth, kFoamArcCentreB, kFoamArcHalfWidthB,
+		                kFoamArcOvershootB, kFoamArcStrengthB),
+		       foam_arc(shore, u, shore_fwidth, kFoamArcCentreC, kFoamArcHalfWidthC,
+		                kFoamArcOvershootC, kFoamArcStrengthC)));
 	}
 
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);

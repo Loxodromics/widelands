@@ -438,60 +438,65 @@ const float kWaveTimeWrapPeriod = 10000.0;
 const vec2 kWanderOffset = vec2(-183.5, 29.7);
 const vec2 kDetailOffset = vec2(112.9, -203.4);
 
-// Foam band (water.fp, WP-9; reworked at WP-9a; Claude/WATER.md §4.6): a band of pale foam in the
-// shallowest water zone, its breakup elongated along the coast by the shore frame. All distances
-// are in field widths -- the unit |shore| is stored in.
+// Foam band (water.fp, WP-9; reworked at WP-9a; three arcs at WP-9b; Claude/WATER.md §4.6): pale
+// foam in the shallowest water zone, its breakup elongated along the coast by the shore frame. All
+// distances are in field widths -- the unit |shore| is stored in.
 //
-// WP-9 drew the band as a near-opaque plateau (kFoamCore = 0.75 made |d| <= ~0.375 exactly full
-// strength -- a 48 px flat top inside a 64 px band at zoom 1, at kFoamOpacity = 0.95), with a
-// single-octave breakup that only displaced the band's hard edge, and by only ~4 px RMS. Against
-// referenceImages/AoE2_1.png -- a thin fringe at the bank plus turbulent streaky structure -- ours
-// was the inverse. WP-9a breaks it up two ways:
+// WP-9 drew one near-opaque plateau; WP-9a dissolved it against a coverage field with a one-sided
+// threshold remap so it holes and streaks at the core and fades at its margins. WP-9b segments the
+// result into three arcs running parallel to the coast, getting thinner and fainter offshore, as
+// in referenceImages/SebastianLague00.jpg -- a bright solid line at the waterline, then two
+// progressively thinner arcs stepping out to sea. This is the WP-9a band body (foam_arc(),
+// water.fp) evaluated three times against the same single foam_noise() call; the expensive taps
+// (four shore_at(), two snoise_grad(), four breakup taps) do not repeat.
 //
-//  - A second, higher-frequency octave (kFoamFineFrequency). Modelled on a straight coast with a
-//    numpy Ashima port: raising the single field's amplitude only deepens the edge indentations,
-//    the ribbon stays continuous. A fine octave is what produces detached patches and holes. It is
-//    a single tap, deliberately not elongated -- fine-scale foam texture is not strongly
-//    directional, and one tap keeps the total at four (from three) while carrying more amplitude
-//    for the same weight (the three-tap box costs half the RMS: raw snoise RMS 0.47, three-tap
-//    0.25).
-//  - A one-sided threshold remap (kFoamOvershoot) inside the band, the idiom dither.fp establishes
-//    at its grain threshold: a continuous coverage field (falling smoothly from 1 at the band
-//    centre to 0 at its edge, no plateau) compared against a noise-driven threshold, where the
-//    coverage decides how much foam and the noise decides where. thresh = kFoamDissolve + (1 +
-//    kFoamOvershoot - kFoamDissolve) * u, u = clamp(0.5 + 0.5 * blend, 0, 1). The clamp matters --
-//    the coarse/fine blend's max |value| exceeds 1. thresh >= kFoamDissolve by construction, so
-//    smoothstep(thresh - kFoamDissolve, ..., 0) == 0 exactly outside the band: foam is
-//    self-limiting, kFoamReach is a tight bound again, and the land side stays clear (WP-9's
-//    decision). Modelled max foam outside the band: 0.0000.
+// The dissolve, per arc: cov falls smoothly from 1 at the arc centre to 0 at its half-width with
+// no plateau, and foam appears wherever cov exceeds a noise-driven threshold
+//   thresh = kFoamDissolve + (1 + overshoot - kFoamDissolve) * u,  u = clamp(0.5 + 0.5*blend, 0, 1)
+// where the coverage decides how much foam and the noise decides where. The clamp matters -- the
+// coarse/fine blend's max |value| exceeds 1. thresh >= kFoamDissolve by construction, so
+// smoothstep(thresh - kFoamDissolve, ..., cov) == 0 exactly wherever cov == 0, i.e. outside each
+// arc's own half-width: the foam stays self-limiting per arc (modelled max foam outside all three
+// arcs 0.0000), which is what keeps kFoamReach a tight bound and the land side clear.
 //
-// The remap is one-sided on purpose. Mapping u into [kFoamDissolve, 1 - kFoamDissolve] (the
-// symmetric form) forces foam == 1 wherever coverage == 1, i.e. it removes the holes at the band
-// core by construction. Mapping into [kFoamDissolve, 1 + kFoamOvershoot] fixes the outside-band
-// leak *and* lets the core break. kFoamOvershoot is the knob for how broken the core is; modelled
-// core (d < 0.25) empty / partial / solid fractions at kFoamDissolve = 0.20: 0.00 -> 0 / 27 / 73 %;
-// 0.25 -> 7 / 41 / 52 %; 0.35 -> 13 / 41 / 46 %; 0.45 -> 19 / 41 / 41 %; 0.70 -> 33 / 36 / 31 %
-// (numpy port, this machine). 0.35 is the shipped value: most of the core no longer flat, real
-// holes beginning.
+// Two design questions were settled by modelling on a straight coast (numpy Ashima port), not
+// guessed (WATER.md WP-9b):
+//  - The arcs need no per-arc noise decorrelation. Each one samples the breakup field at its own
+//    distance offshore, so the measured along-shore correlation between arc foam profiles is
+//    already near zero (A-B -0.12, B-C -0.04, A-C -0.02, this machine). Per-arc coarse/fine blends
+//    and per-arc threshold bias were both planned and both dropped as unnecessary.
+//  - Continuity is controlled per arc by 'overshoot', not by the dissolve. A lower overshoot on
+//    the outer arcs gives the clean stylised lines the reference has, while arc A keeps WP-9a's
+//    ragged contact zone. Modelled core (d < 0.25) empty/partial/solid at kFoamDissolve = 0.20:
+//    A 16 / 31 / 53 %, B 6 / 29 / 65 %, C 2 / 25 / 73 % (this machine). Higher overshoot = more
+//    holes: for arc A's geometry, 0.00 -> 0/19/81, 0.18 -> 6/29/65, 0.35 -> 16/31/53,
+//    0.70 -> 38/27/36.
 //
-// kFoamDissolve was 0.30 in the plan's constants table but its own modelled fractions match at
-// 0.20, and 0.30 read as a soft grey haze on the capture rather than as foam with structure, so
-// the tuned value is 0.20 (WATER.md WP-9a).
+// The three centres step by roughly 0.6 and 0.4 field widths, and half widths and strengths fall
+// by ~0.6x per arc -- a geometric law, so the set reads as deliberate rather than as three
+// independent guesses. If a capture reads faint, the levers are kFoamArcStrength* / kFoamOpacity
+// or a lower kFoamArcOvershoot*, in that order, tuned on the capture.
 //
-// WP-9's kFoamWobble (cross-shore displacement of the hard edge) and kFoamCore (the plateau
-// width) are both gone -- subsumed. The band reads lighter than WP-9's near-plateau (modelled
-// mean foam over the band ~0.29); if a capture reads faint, the compensating levers are
-// kFoamStrength / kFoamOpacity or a lower kFoamOvershoot, in that order, tuned on the capture.
-//
-// kFoamCenter is a centre, not a falloff-from-zero: kWaterEdgeWidth = 0.5 field widths is a
+// kFoamArcCentreA is a centre, not a falloff-from-zero: kWaterEdgeWidth = 0.5 field widths is a
 // genuinely soft transition (coverage is ~0.5 at shore = 0), so foam peaking at the waterline
 // would be half transparent over sand and read as pale beach rather than white foam. 0.35 puts
 // the peak where coverage is ~0.85, still visually at the contact.
 //
-// The pixel floor under the half-width is the kDitherMinWidth idiom: at maximum zoom-out
-// fwidth(shore) reaches ~0.08 field widths, so kFoamMinWidthPixels * fwidth(shore) only binds
-// below a half-width of ~0.12 field widths -- kFoamHalfWidth binds at every zoom the game offers
-// (measured at water_coast_zoom4, WATER.md WP-9). Kept as the guard the "Done when" asks for.
+// WP-9a's second higher-frequency octave (kFoamFineFrequency) stays: on a straight coast raising
+// the coarse octave's amplitude only deepens the edge indentations while the ribbon stays
+// continuous; the fine octave is what detaches patches and opens holes. It is a single tap,
+// deliberately not elongated -- fine-scale foam texture is not strongly directional, and one tap
+// keeps the total at four while carrying more amplitude for the same weight (the three-tap tangent
+// box costs half the RMS: raw snoise RMS 0.47, three-tap 0.25).
+//
+// The pixel floor under each half-width is the kDitherMinWidth idiom: at maximum zoom-out
+// fwidth(shore) reaches ~0.08 field widths (WP-9, measured at _zoom4), so
+// kFoamMinWidthPixels * fwidth(shore) ~= 0.12 -- it does not bind for any arc, but arc C's 0.18 is
+// the narrowest the series has had, so the margin is thinner than WP-9a's 0.5 gave.
+//
+// The arcs are static. Advancing their centres shoreward over time is WP-10 (Animate the foam),
+// which must advect the sample position along the frame tangent by a bounded offset rather than
+// advance an unbounded along-shore coordinate (§4.6); it is deliberately not pre-empted here.
 const float kFoamFrequency = 0.9;       // coarse octave, cycles per field: ~1.1-field wavelength,
                                         // sets the band's large-scale shape
 const float kFoamStretch = 0.55;        // field widths along the shore tangent; the three coarse
@@ -499,24 +504,38 @@ const float kFoamStretch = 0.55;        // field widths along the shore tangent;
 const float kFoamFineFrequency = 2.6;   // fine octave, ~0.38-field: the octave that breaks the ribbon
 const float kFoamCoarseWeight = 0.62;   // coarse : fine, sum to 1 (so no separate weight-sum constant)
 const float kFoamFineWeight = 0.38;
-const float kFoamCenter = 0.35;         // field widths, band centre
-const float kFoamHalfWidth = 0.5;       // field widths
 const float kFoamMinWidthPixels = 1.5;
 // 1 / p95(|blend|), measured with the numpy Ashima port: raw weighted coarse+fine blend RMS
 // 0.236, p95 0.449, max 0.847. Coupled to the two frequencies, the stretch and the two weights --
-// re-measure with the port if any of them move.
+// re-measure with the port if any of them move. Unchanged at WP-9b: none of them moved.
 const float kFoamNoiseScale = 2.23;
 const float kFoamDissolve = 0.20;   // threshold softness, in coverage units; raises the partial fraction
-const float kFoamOvershoot = 0.35;  // how broken the band core is; higher = more holes (table above)
-const float kFoamStrength = 1.0;
 const float kFoamOpacity = 0.95;  // near 1: the band hides the seabed and reads white, not sand
 const float kFoamGradStep = 0.5;  // shore-frame finite-difference step: one grid cell
 const float kFoamGradEpsilon = 0.05;  // plateau guard, on the frame's gradient magnitude
-// kFoamCenter + kFoamHalfWidth: the inner gate. With the one-sided remap the band is exactly zero
-// beyond it (max foam outside == 0, modelled), so this is a tight bound -- but only while
-// kFoamHalfWidth binds over the pixel floor above. If the floor ever binds, the band extends past
+
+// The three arcs (WP-9b). Naming follows kWaveDirA/B/C (WP-8a) rather than numeric suffixes.
+// A is WP-9a's band unchanged (the turbulent contact zone); B is a thinner, more continuous line;
+// C is a thin, nearly unbroken outer line. Geometric law: centres +~0.6/+~0.4 field widths, half
+// widths and strengths x~0.6 per step.
+const float kFoamArcCentreA = 0.35;
+const float kFoamArcHalfWidthA = 0.50;
+const float kFoamArcOvershootA = 0.35;
+const float kFoamArcStrengthA = 1.00;
+const float kFoamArcCentreB = 0.95;
+const float kFoamArcHalfWidthB = 0.30;
+const float kFoamArcOvershootB = 0.18;
+const float kFoamArcStrengthB = 0.65;
+const float kFoamArcCentreC = 1.35;
+const float kFoamArcHalfWidthC = 0.18;
+const float kFoamArcOvershootC = 0.10;
+const float kFoamArcStrengthC = 0.40;
+// kFoamArcCentreC + kFoamArcHalfWidthC: the inner gate. With the one-sided remap every arc is
+// exactly zero beyond its own half-width (max foam outside all arcs == 0, modelled), so this is a
+// tight bound -- but only while each arc's half-width binds over the pixel floor above. Arc C's
+// 0.18 is the narrowest and the first at risk if the floor ever binds; then that arc extends past
 // this gate and gets a hard contour edge in open water instead of dissolving.
-const float kFoamReach = 0.85;
+const float kFoamReach = 1.53;
 // Measured from referenceImages/AoE2_1.png (the bright foam at the land contact), 9x9 patch
 // averages as the Appendix measures: 24 patches, mean (189, 217, 228), median (184, 214, 226).
 // The plan's fallback (230, 240, 245) is the same cool white but brighter than the reference's
