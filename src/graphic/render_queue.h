@@ -35,6 +35,7 @@
 
 class DitherProgram;
 class GridProgram;
+class ShoreDistanceField;
 class RoadProgram;
 class TerrainProgram;
 class WaterProgram;
@@ -138,6 +139,10 @@ public:
 		// window (its grid carries a margin), so it needs the map rather than
 		// just the FieldsToDraw.
 		const Widelands::Map* map = nullptr;
+		// The shore distance field, owned by MapView and rebuilt there each frame
+		// (WATER.md WP-11). Read by the terrain, dither and water passes; on the
+		// same one-frame-lifetime promise as fields_to_draw.
+		const ShoreDistanceField* shore_distance_field = nullptr;
 	};
 
 	// The union of all possible program arguments represents an Item that is

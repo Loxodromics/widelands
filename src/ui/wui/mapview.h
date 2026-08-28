@@ -22,6 +22,7 @@
 #include "base/rect.h"
 #include "base/vector.h"
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/shore_distance_field.h"
 #include "logic/map.h"
 #include "logic/widelands_geometry.h"
 #include "ui/basic/panel.h"
@@ -232,6 +233,12 @@ private:
 	// This is owned and handled by us, but handed to the RenderQueue, so we
 	// basically promise that this stays valid for one frame.
 	FieldsToDraw fields_to_draw_;
+
+	// The shore distance field (WATER.md WP-11), on the same one-frame-lifetime
+	// promise as fields_to_draw_. Rebuilt in draw_terrain() right after
+	// fields_to_draw_ and read by the terrain, dither and water passes; kept
+	// per-MapView so a WatchWindow's second view does not share it.
+	ShoreDistanceField shore_distance_field_;
 
 	View view_;
 	Vector2i last_mouse_pos_;

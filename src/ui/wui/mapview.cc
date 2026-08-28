@@ -420,9 +420,15 @@ FieldsToDraw* MapView::draw_terrain(const Widelands::EditorGameBase& egbase,
 	} else {
 		fields_to_draw_.reset(egbase, view_.viewpoint, view_.zoom, dst);
 	}
+	// Rebuilt every frame on the same one-frame-lifetime promise as fields_to_draw_, and before
+	// ::draw_terrain() because the terrain and dither passes run before the water pass and read it
+	// too (WATER.md WP-11).
+	shore_distance_field_.rebuild(
+	   fields_to_draw_, egbase.map(), egbase.descriptions().terrains(), player);
+
 	const float scale = 1.f / view_.zoom;
 	::draw_terrain(egbase.get_gametime().get(), egbase.descriptions(), egbase.map(), fields_to_draw_,
-	               scale, workarea, height_heat_map, grid, player, dst);
+	               shore_distance_field_, scale, workarea, height_heat_map, grid, player, dst);
 	return &fields_to_draw_;
 }
 

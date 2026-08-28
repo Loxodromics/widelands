@@ -43,19 +43,17 @@ class Player;
  * gate: the pass runs unconditionally, since water is an ordinary terrain layer with no on/off
  * switch (D2, Claude/WATER.md).
  *
- * It owns the distance field. TerrainArguments already carries everything the
- * rebuild needs, so program ownership needs no plumbing and costs nothing while
- * the debug flag is off. (WATER.md's WP-3 text put the field on MapView; that
- * moves back at WP-11, when the terrain pass wants the seed payload too.)
+ * The distance field is owned by MapView (mapview.h), on the same one-frame-lifetime promise as
+ * FieldsToDraw, and handed to the queue through TerrainArguments. WP-11 moved it there: the
+ * terrain and dither passes run before the water pass and need the seed payload too, so it can no
+ * longer be built at the top of this pass's draw().
  */
 class WaterProgram {
 public:
 	WaterProgram();
 
-	void draw(const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
-	          const FieldsToDraw& fields_to_draw,
-	          const Widelands::Map& map,
-	          const Widelands::Player* player,
+	void draw(const FieldsToDraw& fields_to_draw,
+	          const ShoreDistanceField& shore_distance_field,
 	          float z_value,
 	          uint32_t gametime,
 	          bool debug);
@@ -111,19 +109,17 @@ private:
 	 * resized by uploading to it. The dimensions only change on zoom or window
 	 * resize, never on panning.
 	 */
-	void upload_distance_texture();
+	void upload_distance_texture(const ShoreDistanceField& field);
 
 	/// Logs the chamfer's own cost, averaged over a window of rebuilds. A no-op unless 'debug'
 	/// (--water-debug): shipping gameplay must not carry this instrument's logging cost.
-	void report_rebuild_cost(bool debug);
+	void report_rebuild_cost(const ShoreDistanceField& field, bool debug);
 
 	std::unique_ptr<Rhi::Pipeline> pipeline_;
 	std::unique_ptr<Rhi::DescriptorSet> descriptor_set_;
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
 	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
 	std::unique_ptr<Rhi::Texture> distance_texture_;
-
-	ShoreDistanceField field_;
 
 	// The cloud-shadow amplitude multiplier, see set_cloud_amplitude().
 	float cloud_amplitude_ = kCloudShadowAmplitude;

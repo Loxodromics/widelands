@@ -93,6 +93,7 @@ wl_library(wui_main_ui
     logic_widelands_geometry
     widelands_ball_of_mud
     graphic_game_renderer
+    graphic_terrain_programs
     logic
     graphic_fields_to_draw
     commands

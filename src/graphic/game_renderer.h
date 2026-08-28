@@ -20,14 +20,18 @@
 #define WL_GRAPHIC_GAME_RENDERER_H
 
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/shore_distance_field.h"
 #include "logic/map_objects/descriptions.h"
 
 // Draw the terrain only. 'map' is needed by the water pass, whose distance
 // field is seeded from terrain outside the drawn window (WATER.md WP-3).
+// 'shore_distance_field' is owned and rebuilt by the caller (MapView) and read
+// by the terrain, dither and water passes (WATER.md WP-11).
 void draw_terrain(uint32_t gametime,
                   const Widelands::Descriptions& descriptions,
                   const Widelands::Map& map,
                   const FieldsToDraw& fields_to_draw,
+                  const ShoreDistanceField& shore_distance_field,
                   float scale,
                   const Workareas& workarea,
                   bool height_heat_map,

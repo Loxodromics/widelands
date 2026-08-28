@@ -278,9 +278,8 @@ void RenderQueue::draw_items(const std::vector<Item>& items) {
 
 		case Program::kTerrainWater: {
 			ScopedScissor scoped_scissor(item.terrain_arguments.destination_rect);
-			water_program_->draw(*item.terrain_arguments.terrains,
-			                     *item.terrain_arguments.fields_to_draw, *item.terrain_arguments.map,
-			                     item.terrain_arguments.player, item.z_value,
+			water_program_->draw(*item.terrain_arguments.fields_to_draw,
+			                     *item.terrain_arguments.shore_distance_field, item.z_value,
 			                     item.terrain_arguments.gametime, water_debug_);
 			++i;
 		} break;

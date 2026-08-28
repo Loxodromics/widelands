@@ -59,6 +59,7 @@ void draw_terrain(uint32_t gametime,
                   const Widelands::Descriptions& descriptions,
                   const Widelands::Map& map,
                   const FieldsToDraw& fields_to_draw,
+                  const ShoreDistanceField& shore_distance_field,
                   const float scale,
                   const Workareas& workarea,
                   bool height_heat_map,
@@ -86,6 +87,7 @@ void draw_terrain(uint32_t gametime,
 	i.terrain_arguments.player = player;
 	i.terrain_arguments.height_heat_map = height_heat_map;
 	i.terrain_arguments.map = &map;
+	i.terrain_arguments.shore_distance_field = &shore_distance_field;
 	RenderQueue::instance().enqueue(i);
 
 	/* The water pass (WATER.md WP-6): a flat colour wash over the seabed the terrain pass just

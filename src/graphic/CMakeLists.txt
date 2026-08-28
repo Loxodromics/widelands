@@ -234,6 +234,7 @@ wl_library(graphic_game_renderer
     graphic_fields_to_draw
     graphic_render_queue
     graphic_surface
+    graphic_terrain_programs
     logic
     logic_map_objects
 )

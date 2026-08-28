@@ -75,7 +75,7 @@ void WaterProgram::add_vertex(const FieldsToDraw::Field& field) {
 	back.brightness = field.brightness;
 }
 
-void WaterProgram::report_rebuild_cost(const bool debug) {
+void WaterProgram::report_rebuild_cost(const ShoreDistanceField& field, const bool debug) {
 	/* Only reachable at all under --water-debug: the pass itself runs
 	 * unconditionally since WP-6, but this instrument is a one-off measurement
 	 * against WP-3's baseline (WATER.md WP-11), not shipping telemetry -- left
@@ -91,17 +91,17 @@ void WaterProgram::report_rebuild_cost(const bool debug) {
 	 * capture that renders fewer frames than one window says nothing about the
 	 * view it was actually asked for.
 	 */
-	if (field_.width() != timing_width_ || field_.height() != timing_height_) {
-		timing_width_ = field_.width();
-		timing_height_ = field_.height();
+	if (field.width() != timing_width_ || field.height() != timing_height_) {
+		timing_width_ = field.width();
+		timing_height_ = field.height();
 		timing_sum_us_ = 0;
 		timing_max_us_ = 0;
 		timing_count_ = 0;
 		timing_window_ = 1;
 	}
 
-	timing_sum_us_ += field_.last_rebuild_us();
-	timing_max_us_ = std::max(timing_max_us_, field_.last_rebuild_us());
+	timing_sum_us_ += field.last_rebuild_us();
+	timing_max_us_ = std::max(timing_max_us_, field.last_rebuild_us());
 	++timing_count_;
 	if (timing_count_ >= timing_window_) {
 		log_info("shore distance field: %dx%d cells, %d rebuild(s), mean %lld us, max %lld us\n",
@@ -115,9 +115,9 @@ void WaterProgram::report_rebuild_cost(const bool debug) {
 	}
 }
 
-void WaterProgram::upload_distance_texture() {
-	const uint32_t width = static_cast<uint32_t>(field_.width());
-	const uint32_t height = static_cast<uint32_t>(field_.height());
+void WaterProgram::upload_distance_texture(const ShoreDistanceField& field) {
+	const uint32_t width = static_cast<uint32_t>(field.width());
+	const uint32_t height = static_cast<uint32_t>(field.height());
 	if (distance_texture_ == nullptr || distance_texture_->width() != width ||
 	    distance_texture_->height() != height) {
 		Rhi::TextureDescriptor desc;
@@ -130,20 +130,16 @@ void WaterProgram::upload_distance_texture() {
 	}
 	// Plain floats: the backend hands GL_FLOAT to a GL_R16F texture, so the
 	// driver does the half conversion and we never pack halves ourselves.
-	distance_texture_->upload(field_.values().data());
+	distance_texture_->upload(field.values().data());
 }
 
-void WaterProgram::draw(
-   const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
-   const FieldsToDraw& fields_to_draw,
-   const Widelands::Map& map,
-   const Widelands::Player* player,
-   const float z_value,
-   const uint32_t gametime,
-   const bool debug) {
-	field_.rebuild(fields_to_draw, map, terrains, player);
-	report_rebuild_cost(debug);
-	upload_distance_texture();
+void WaterProgram::draw(const FieldsToDraw& fields_to_draw,
+                        const ShoreDistanceField& shore_distance_field,
+                        const float z_value,
+                        const uint32_t gametime,
+                        const bool debug) {
+	report_rebuild_cost(shore_distance_field, debug);
+	upload_distance_texture(shore_distance_field);
 
 	/* The same triangle stream and winding as TerrainProgram::draw. Both signs
 	 * of the field are drawn, water and land alike, which is the whole point of
@@ -182,10 +178,10 @@ void WaterProgram::draw(
 	state.time = time;
 	state.cloud_amplitude = cloud_amplitude_;
 	state.debug = debug ? 1.f : 0.f;
-	state.grid_x = static_cast<float>(field_.cx0());
-	state.grid_y = static_cast<float>(field_.cy0());
-	state.inv_grid_width = 1.f / static_cast<float>(field_.width());
-	state.inv_grid_height = 1.f / static_cast<float>(field_.height());
+	state.grid_x = static_cast<float>(shore_distance_field.cx0());
+	state.grid_y = static_cast<float>(shore_distance_field.cy0());
+	state.inv_grid_width = 1.f / static_cast<float>(shore_distance_field.width());
+	state.inv_grid_height = 1.f / static_cast<float>(shore_distance_field.height());
 	uniform_rhi_buffer_->update(&state, sizeof(state));
 
 	descriptor_set_->set_texture(0, distance_texture_.get());
