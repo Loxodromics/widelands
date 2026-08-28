@@ -96,6 +96,7 @@ void DitherProgram::add_vertex(const FieldsToDraw::Field& field,
 }
 
 void DitherProgram::collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
+                                            const ShoreDistanceField* shore_distance_field,
                                             const Widelands::Map* map,
                                             const Widelands::Player* player) {
 	vertex_terrains_.assign(fields_to_draw.size(), TerrainSet());
@@ -106,8 +107,8 @@ void DitherProgram::collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
 
 		if (field.bln_index != FieldsToDraw::kInvalidIndex &&
 		    field.brn_index != FieldsToDraw::kInvalidIndex) {
-			const Widelands::DescriptionIndex terrain_d =
-			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, true)];
+			const Widelands::DescriptionIndex terrain_d = draw_terrain_for_triangle(
+			   fields_to_draw, seabed_tables_, shore_distance_field, map, player, index, true);
 			vertex_terrains_[i].add(terrain_d);
 			vertex_terrains_[field.bln_index].add(terrain_d);
 			vertex_terrains_[field.brn_index].add(terrain_d);
@@ -115,8 +116,8 @@ void DitherProgram::collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
 
 		if (field.rn_index != FieldsToDraw::kInvalidIndex &&
 		    field.brn_index != FieldsToDraw::kInvalidIndex) {
-			const Widelands::DescriptionIndex terrain_r =
-			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, false)];
+			const Widelands::DescriptionIndex terrain_r = draw_terrain_for_triangle(
+			   fields_to_draw, seabed_tables_, shore_distance_field, map, player, index, false);
 			vertex_terrains_[i].add(terrain_r);
 			vertex_terrains_[field.rn_index].add(terrain_r);
 			vertex_terrains_[field.brn_index].add(terrain_r);
@@ -220,6 +221,7 @@ void DitherProgram::draw(
    const uint32_t gametime,
    const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
    const FieldsToDraw& fields_to_draw,
+   const ShoreDistanceField* shore_distance_field,
    const float z_value,
    const Widelands::Player* player) {
 	// This method expects that all terrains have the same dimensions and that
@@ -229,12 +231,12 @@ void DitherProgram::draw(
 	vertices_.clear();
 	vertices_.reserve(fields_to_draw.size() * 3);
 
-	resolve_seabed_terrains(terrains, &seabed_terrains_);
+	resolve_seabed_terrains(terrains, &seabed_tables_);
 
 	const Widelands::Map* map =
 	   (player != nullptr) && !player->see_all() ? &player->egbase().map() : nullptr;
 
-	collect_vertex_terrains(fields_to_draw, map, player);
+	collect_vertex_terrains(fields_to_draw, shore_distance_field, map, player);
 
 	for (size_t current_index = 0; current_index < fields_to_draw.size(); ++current_index) {
 		const FieldsToDraw::Field& field = fields_to_draw.at(current_index);
@@ -249,19 +251,19 @@ void DitherProgram::draw(
 		// Vertex order matches what the edge-only emission used, so the winding
 		// of the emitted triangles is unchanged.
 		if (field.bln_index != FieldsToDraw::kInvalidIndex) {
-			add_dithering_triangles(
-			   gametime, terrains, fields_to_draw,
-			   BaseTriangle{
-			      {field.brn_index, index, field.bln_index},
-			      seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, true)]});
+			add_dithering_triangles(gametime, terrains, fields_to_draw,
+			                        BaseTriangle{{field.brn_index, index, field.bln_index},
+			                                     draw_terrain_for_triangle(fields_to_draw, seabed_tables_,
+			                                                               shore_distance_field, map,
+			                                                               player, index, true)});
 		}
 
 		if (field.rn_index != FieldsToDraw::kInvalidIndex) {
-			add_dithering_triangles(
-			   gametime, terrains, fields_to_draw,
-			   BaseTriangle{
-			      {index, field.brn_index, field.rn_index},
-			      seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, false)]});
+			add_dithering_triangles(gametime, terrains, fields_to_draw,
+			                        BaseTriangle{{index, field.brn_index, field.rn_index},
+			                                     draw_terrain_for_triangle(fields_to_draw, seabed_tables_,
+			                                                               shore_distance_field, map,
+			                                                               player, index, false)});
 		}
 	}
 

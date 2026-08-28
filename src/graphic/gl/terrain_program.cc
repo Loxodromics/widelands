@@ -114,13 +114,14 @@ void TerrainProgram::draw(
    uint32_t gametime,
    const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
    const FieldsToDraw& fields_to_draw,
+   const ShoreDistanceField* shore_distance_field,
    float z_value,
    const Widelands::Player* player) {
 	// This method expects that all terrains have the same dimensions and that
 	// all are packed into the same texture atlas, i.e. all are in the same GL
 	// texture. It does not check for this invariance for speeds sake.
 
-	resolve_seabed_terrains(terrains, &seabed_terrains_);
+	resolve_seabed_terrains(terrains, &seabed_tables_);
 
 	// Fog-of-war applies through the player's remembered terrain, not the map's actual one; null
 	// means "draw the true terrain" (no player, or seeing all) -- see triangle_terrain() (seabed.h).
@@ -143,8 +144,8 @@ void TerrainProgram::draw(
 
 		// Right triangle.
 		if (field.rn_index != FieldsToDraw::kInvalidIndex) {
-			const Widelands::DescriptionIndex terrain =
-			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, false)];
+			const Widelands::DescriptionIndex terrain = draw_terrain_for_triangle(
+			   fields_to_draw, seabed_tables_, shore_distance_field, map, player, index, false);
 			const Vector2f texture_offset =
 			   to_gl_texture(terrains.get(terrain).get_texture(gametime).blit_data()).origin();
 			add_vertex(fields_to_draw.at(current_index), texture_offset);
@@ -154,8 +155,8 @@ void TerrainProgram::draw(
 
 		// Down triangle.
 		if (field.bln_index != FieldsToDraw::kInvalidIndex) {
-			const Widelands::DescriptionIndex terrain =
-			   seabed_terrains_[triangle_terrain(fields_to_draw, map, player, index, true)];
+			const Widelands::DescriptionIndex terrain = draw_terrain_for_triangle(
+			   fields_to_draw, seabed_tables_, shore_distance_field, map, player, index, true);
 			const Vector2f texture_offset =
 			   to_gl_texture(terrains.get(terrain).get_texture(gametime).blit_data()).origin();
 			add_vertex(fields_to_draw.at(current_index), texture_offset);

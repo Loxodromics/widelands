@@ -35,21 +35,60 @@ Widelands::DescriptionIndex triangle_terrain(const FieldsToDraw& fields_to_draw,
 
 void resolve_seabed_terrains(
    const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
-   std::vector<Widelands::DescriptionIndex>* out) {
+   SeabedTables* out) {
 	const Widelands::DescriptionIndex size = terrains.size();
-	out->resize(size);
+	out->submerged.resize(size);
+	out->is_water.resize(size);
 	for (Widelands::DescriptionIndex i = 0; i < size; ++i) {
 		const Widelands::TerrainDescription& terrain = terrains.get(i);
+		out->is_water[i] =
+		   (terrain.get_is() & Widelands::TerrainDescription::Is::kWater) != 0 ? 1 : 0;
+
+		// Resolve a seabed key on any terrain that declares one, not only water terrains (WP-11):
+		// a land terrain names what its own submerged texture should be, drawn only when it is
+		// the nearest land to a water triangle.
 		Widelands::DescriptionIndex resolved = i;
-		if ((terrain.get_is() & Widelands::TerrainDescription::Is::kWater) != 0) {
-			const std::string& seabed_name = terrain.seabed();
-			if (!seabed_name.empty()) {
-				const Widelands::DescriptionIndex seabed_index = terrains.get_index(seabed_name);
-				if (seabed_index != Widelands::INVALID_INDEX) {
-					resolved = seabed_index;
-				}
+		const std::string& seabed_name = terrain.seabed();
+		if (!seabed_name.empty()) {
+			const Widelands::DescriptionIndex seabed_index = terrains.get_index(seabed_name);
+			if (seabed_index != Widelands::INVALID_INDEX) {
+				resolved = seabed_index;
 			}
 		}
-		(*out)[i] = resolved;
+		out->submerged[i] = resolved;
 	}
+}
+
+Widelands::DescriptionIndex draw_terrain_for_triangle(
+   const FieldsToDraw& fields_to_draw,
+   const SeabedTables& tables,
+   const ShoreDistanceField* shore_distance_field,
+   const Widelands::Map* map,
+   const Widelands::Player* player,
+   const int index,
+   const bool down_triangle) {
+	const Widelands::DescriptionIndex terrain =
+	   triangle_terrain(fields_to_draw, map, player, index, down_triangle);
+
+	// Land triangle: its own terrain, untouched. The substitution is underwater-only.
+	if (terrain >= tables.is_water.size() || tables.is_water[terrain] == 0) {
+		return terrain;
+	}
+
+	// Water triangle: the seabed of the nearest land, from the payload of the cell this triangle
+	// seeded (its own 'd' or 'r' cell -- to_water_ there is 0, to_land_ is the offshore distance).
+	if (shore_distance_field != nullptr) {
+		int cx = 0;
+		int cy = 0;
+		ShoreDistanceField::triangle_cell(
+		   fields_to_draw.at(index).geometric_coords, down_triangle, &cx, &cy);
+		ShoreDistanceField::LandSeed seed;
+		if (shore_distance_field->land_seed_at(cx, cy, &seed) &&
+		    seed.terrain < tables.submerged.size()) {
+			return tables.submerged[seed.terrain];
+		}
+	}
+
+	// No trustworthy land seed: WP-6's per-world beach, the water terrain's own seabed key.
+	return tables.submerged[terrain];
 }

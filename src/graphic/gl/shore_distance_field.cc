@@ -70,11 +70,12 @@ void ShoreDistanceField::rebuild(
 	const size_t cells = static_cast<size_t>(width_) * static_cast<size_t>(height_);
 	to_land_.assign(cells, kMaxShoreDistance);
 	to_water_.assign(cells, kMaxShoreDistance);
+	land_seed_.assign(cells, kNoLandSeed);
 	values_.resize(cells);
 
 	seed(map, terrains, player);
-	chamfer(&to_land_, width_, height_);
-	chamfer(&to_water_, width_, height_);
+	chamfer(&to_land_, &land_seed_, width_, height_);
+	chamfer(&to_water_, nullptr, width_, height_);
 
 	for (size_t i = 0; i < cells; ++i) {
 		/* Sign by whichever seed is nearer, rather than by the cell's own
@@ -120,8 +121,9 @@ void ShoreDistanceField::seed(
 		const size_t row_start = static_cast<size_t>(cy - cy0_) * width_;
 		float* row_to_land = &to_land_[row_start];
 		float* row_to_water = &to_water_[row_start];
+		uint32_t* row_land_seed = &land_seed_[row_start];
 
-		const auto seed_cell = [&](const int cx, const CellKind kind) {
+		const auto seed_cell = [&](const int cx, const CellKind kind, const uint32_t payload) {
 			const int x = cx - cx0_;
 			if (x < 0 || x >= width_) {
 				return;
@@ -132,6 +134,7 @@ void ShoreDistanceField::seed(
 				break;
 			case CellKind::kLand:
 				row_to_land[x] = 0.f;
+				row_land_seed[x] = payload;
 				break;
 			case CellKind::kUnknown:
 				// Seeds neither side; see CellKind.
@@ -150,70 +153,152 @@ void ShoreDistanceField::seed(
 
 			CellKind kind_d = CellKind::kUnknown;
 			CellKind kind_r = CellKind::kUnknown;
+			Widelands::DescriptionIndex terrain_d = 0;
+			Widelands::DescriptionIndex terrain_r = 0;
 			if (from_player_view) {
 				const Widelands::Player::Field& pf = player->fields()[map.get_index(fcoords)];
 				if (pf.vision.state() != Widelands::VisibleState::kUnexplored) {
 					const Widelands::Field::Terrains remembered = pf.terrains.load();
-					kind_d = is_water(remembered.d) ? CellKind::kWater : CellKind::kLand;
-					kind_r = is_water(remembered.r) ? CellKind::kWater : CellKind::kLand;
+					terrain_d = remembered.d;
+					terrain_r = remembered.r;
+					kind_d = is_water(terrain_d) ? CellKind::kWater : CellKind::kLand;
+					kind_r = is_water(terrain_r) ? CellKind::kWater : CellKind::kLand;
 				}
 			} else {
-				kind_d = is_water(fcoords.field->terrain_d()) ? CellKind::kWater : CellKind::kLand;
-				kind_r = is_water(fcoords.field->terrain_r()) ? CellKind::kWater : CellKind::kLand;
+				terrain_d = fcoords.field->terrain_d();
+				terrain_r = fcoords.field->terrain_r();
+				kind_d = is_water(terrain_d) ? CellKind::kWater : CellKind::kLand;
+				kind_r = is_water(terrain_r) ? CellKind::kWater : CellKind::kLand;
 			}
 
+			/* The payload carries the seeding triangle's own terrain and the field's true height
+			 * (WATER.md WP-11). Height is packed in the low byte, terrain above it -- see
+			 * land_seed_at() for the inverse. Only the kLand branch of seed_cell() reads it.
+			 */
+			const uint32_t height_bits = fcoords.field->get_height();
 			const int cx_d = 2 * fx + parity;
-			seed_cell(cx_d, kind_d);
-			seed_cell(cx_d + 1, kind_r);
+			seed_cell(cx_d, kind_d, (static_cast<uint32_t>(terrain_d) << 8) | height_bits);
+			seed_cell(cx_d + 1, kind_r, (static_cast<uint32_t>(terrain_r) << 8) | height_bits);
 		}
 	}
 }
 
 // static
-void ShoreDistanceField::chamfer(std::vector<float>* distance, const int width, const int height) {
+void ShoreDistanceField::chamfer(std::vector<float>* distance,
+                                 std::vector<uint32_t>* payload,
+                                 const int width,
+                                 const int height) {
 	float* d = distance->data();
+	uint32_t* p = payload != nullptr ? payload->data() : nullptr;
 
 	// Forward pass: row-major, over the four already-visited neighbours.
 	for (int y = 0; y < height; ++y) {
-		float* row = d + static_cast<size_t>(y) * width;
-		const float* above = y > 0 ? row - width : nullptr;
+		const size_t row = static_cast<size_t>(y) * width;
 		for (int x = 0; x < width; ++x) {
-			float best = row[x];
-			if (above != nullptr) {
-				if (x > 0) {
-					best = std::min(best, above[x - 1] + kDiagonalStep);
+			const size_t i = row + x;
+			float best = d[i];
+			size_t best_src = i;
+			/* Compare-and-assign rather than a std::min chain so the winning
+			 * neighbour is known and its payload can follow. std::min(best, cand)
+			 * is exactly (cand < best ? cand : best), so the distances stay
+			 * byte-for-byte what WP-3 produced; a tie keeps the earlier
+			 * candidate in this fixed neighbour order.
+			 */
+			const auto consider = [&](const size_t src, const float step) {
+				const float cand = d[src] + step;
+				if (cand < best) {
+					best = cand;
+					best_src = src;
 				}
-				best = std::min(best, above[x] + kOrthoStep);
+			};
+			if (y > 0) {
+				if (x > 0) {
+					consider(i - width - 1, kDiagonalStep);
+				}
+				consider(i - width, kOrthoStep);
 				if (x + 1 < width) {
-					best = std::min(best, above[x + 1] + kDiagonalStep);
+					consider(i - width + 1, kDiagonalStep);
 				}
 			}
 			if (x > 0) {
-				best = std::min(best, row[x - 1] + kOrthoStep);
+				consider(i - 1, kOrthoStep);
 			}
-			row[x] = std::min(best, kMaxShoreDistance);
+			if (best > kMaxShoreDistance) {
+				best = kMaxShoreDistance;
+			}
+			d[i] = best;
+			if (p != nullptr && best_src != i) {
+				p[i] = p[best_src];
+			}
 		}
 	}
 
 	// Backward pass: over the other four.
 	for (int y = height - 1; y >= 0; --y) {
-		float* row = d + static_cast<size_t>(y) * width;
-		const float* below = y + 1 < height ? row + width : nullptr;
+		const size_t row = static_cast<size_t>(y) * width;
 		for (int x = width - 1; x >= 0; --x) {
-			float best = row[x];
-			if (below != nullptr) {
-				if (x > 0) {
-					best = std::min(best, below[x - 1] + kDiagonalStep);
+			const size_t i = row + x;
+			float best = d[i];
+			size_t best_src = i;
+			const auto consider = [&](const size_t src, const float step) {
+				const float cand = d[src] + step;
+				if (cand < best) {
+					best = cand;
+					best_src = src;
 				}
-				best = std::min(best, below[x] + kOrthoStep);
+			};
+			if (y + 1 < height) {
+				if (x > 0) {
+					consider(i + width - 1, kDiagonalStep);
+				}
+				consider(i + width, kOrthoStep);
 				if (x + 1 < width) {
-					best = std::min(best, below[x + 1] + kDiagonalStep);
+					consider(i + width + 1, kDiagonalStep);
 				}
 			}
 			if (x + 1 < width) {
-				best = std::min(best, row[x + 1] + kOrthoStep);
+				consider(i + 1, kOrthoStep);
 			}
-			row[x] = std::min(best, kMaxShoreDistance);
+			if (best > kMaxShoreDistance) {
+				best = kMaxShoreDistance;
+			}
+			d[i] = best;
+			if (p != nullptr && best_src != i) {
+				p[i] = p[best_src];
+			}
 		}
 	}
+}
+
+// static
+void ShoreDistanceField::triangle_cell(const Widelands::Coords& geometric,
+                                       const bool down_triangle,
+                                       int* cx,
+                                       int* cy) {
+	// The inverse of seed()'s node-to-cell mapping: node (fx, fy) owns cell
+	// 2*fx + (fy&1) (its 'd' triangle) and the one to the right of it ('r').
+	const int parity = geometric.y & 1;
+	*cx = 2 * geometric.x + parity + (down_triangle ? 0 : 1);
+	*cy = geometric.y;
+}
+
+bool ShoreDistanceField::land_seed_at(const int cx, const int cy, LandSeed* out) const {
+	const int x = cx - cx0_;
+	const int y = cy - cy0_;
+	if (x < 0 || x >= width_ || y < 0 || y >= height_) {
+		return false;
+	}
+	const size_t i = static_cast<size_t>(y) * width_ + x;
+	// The trust gate: a cell still at (or above) the clamp had no seed inside
+	// the grid, so neither its distance nor its winning seed is view-independent.
+	if (to_land_[i] >= kMaxShoreDistance) {
+		return false;
+	}
+	const uint32_t word = land_seed_[i];
+	if (word == kNoLandSeed) {
+		return false;
+	}
+	out->terrain = static_cast<Widelands::DescriptionIndex>(word >> 8);
+	out->height = static_cast<uint8_t>(word & 0xFFu);
+	return true;
 }

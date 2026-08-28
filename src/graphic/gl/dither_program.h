@@ -39,6 +39,7 @@ public:
 	void draw(uint32_t gametime,
 	          const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
 	          const FieldsToDraw& fields_to_draw,
+	          const ShoreDistanceField* shore_distance_field,
 	          float z_value,
 	          const Widelands::Player*);
 
@@ -85,6 +86,7 @@ private:
 	 * top-left neighbour index is needed.
 	 */
 	void collect_vertex_terrains(const FieldsToDraw& fields_to_draw,
+	                             const ShoreDistanceField* shore_distance_field,
 	                             const Widelands::Map* map,
 	                             const Widelands::Player* player);
 
@@ -150,9 +152,9 @@ private:
 	// rebuilt once per draw by collect_vertex_terrains().
 	std::vector<TerrainSet> vertex_terrains_;
 
-	// The seabed substitution table (Claude/WATER.md WP-6), rebuilt once per draw() by
+	// The seabed lookup tables (Claude/WATER.md WP-6/WP-11), rebuilt once per draw() by
 	// resolve_seabed_terrains() (graphic/gl/seabed.h).
-	std::vector<Widelands::DescriptionIndex> seabed_terrains_;
+	SeabedTables seabed_tables_;
 };
 
 #endif  // end of include guard: WL_GRAPHIC_GL_DITHER_PROGRAM_H

@@ -40,6 +40,7 @@ public:
 	void draw(uint32_t gametime,
 	          const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
 	          const FieldsToDraw& fields_to_draw,
+	          const ShoreDistanceField* shore_distance_field,
 	          float z_value,
 	          const Widelands::Player*);
 
@@ -93,9 +94,9 @@ private:
 	// They could theoretically also be recreated.
 	std::vector<PerVertexData> vertices_;
 
-	// The seabed substitution table (Claude/WATER.md WP-6), rebuilt once per draw() by
+	// The seabed lookup tables (Claude/WATER.md WP-6/WP-11), rebuilt once per draw() by
 	// resolve_seabed_terrains() (graphic/gl/seabed.h).
-	std::vector<Widelands::DescriptionIndex> seabed_terrains_;
+	SeabedTables seabed_tables_;
 
 	DISALLOW_COPY_AND_ASSIGN(TerrainProgram);
 };

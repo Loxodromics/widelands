@@ -25,6 +25,8 @@
 #include "graphic/gl/fields_to_draw.h"
 #include "logic/map_objects/description_maintainer.h"
 #include "logic/map_objects/world/terrain_description.h"
+#include "logic/widelands.h"
+#include "logic/widelands_geometry.h"
 
 namespace Widelands {
 class Map;
@@ -129,6 +131,35 @@ public:
 		return last_rebuild_us_;
 	}
 
+	/* The nearest-land payload (WATER.md WP-11 / §4.4): the terrain and true map height of the
+	 * land seed the chamfer says is closest to a cell -- a cheap approximate Voronoi of "nearest
+	 * land". The terrain selects the seabed drawn under the wash; the height is for WP-13's cliff
+	 * shadows. Height is the real Field height even under fog: seed() plants nothing on an
+	 * unexplored field, so a payload only ever travels with land the player remembers.
+	 */
+	struct LandSeed {
+		Widelands::DescriptionIndex terrain;
+		uint8_t height;
+	};
+
+	/* Cell of a field's 'd' (down_triangle) or 'r' triangle -- the inverse of seed()'s own
+	 * node-to-cell mapping, kept here so the two cannot drift. 'geometric' is the field's
+	 * geometric (possibly out-of-bounds) coordinate, as FieldsToDraw::Field carries it.
+	 */
+	static void triangle_cell(const Widelands::Coords& geometric, bool down_triangle, int* cx,
+	                          int* cy);
+
+	/* The land seed for cell (cx, cy) in global cell coordinates. Returns false -- and leaves
+	 * '*out' untouched -- where no land seed is within kMaxShoreDistance of the cell, so no answer
+	 * can be trusted: that is WP-3's clamp/margin argument (shore_distance_field.h above) applied
+	 * to the payload. kGridMarginCells exceeds 2 * kMaxShoreDistance, so a cell reading under the
+	 * clamp had its whole winning path inside the grid, which makes both the distance and the
+	 * identity of the winning seed functions of the in-grid seeds alone -- translation-invariant,
+	 * the property the panning gate checks. to_land_ starts pre-assigned to the clamp, so an
+	 * unimproved cell fails the gate by construction.
+	 */
+	[[nodiscard]] bool land_seed_at(int cx, int cy, LandSeed* out) const;
+
 private:
 	/* What a cell's triangle is made of. kUnknown is the fog-of-war case and
 	 * seeds neither distance buffer, so an unexplored coastline produces no
@@ -148,13 +179,27 @@ private:
 	          const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
 	          const Widelands::Player* player);
 
+	/* Sentinel for a cell no land seed has reached. terrain_index tops out at
+	 * 16 bits, so a packed word (terrain_index << 8 | height) can never be
+	 * 0xFFFFFFFF.
+	 */
+	static constexpr uint32_t kNoLandSeed = 0xFFFFFFFFu;
+
 	/* Two-pass sequential chamfer with weights (1, sqrt(2)) scaled to field
 	 * widths, clamped to kMaxShoreDistance. Clamping cannot corrupt a value
 	 * below the clamp: chamfer distances increase monotonically along a
 	 * shortest path, so every intermediate value on the path to a cell is at
 	 * most that cell's own final value.
+	 *
+	 * 'payload' is null for the to_water_ pass. When set, each cell copies the
+	 * packed word of whichever neighbour won its distance -- an approximate
+	 * Voronoi carried along the same sweep. The min-chains are written as
+	 * explicit compare-and-assign so the winner is known; ties resolve
+	 * first-wins in the fixed neighbour order, which stays deterministic and
+	 * translation-invariant.
 	 */
-	static void chamfer(std::vector<float>* distance, int width, int height);
+	static void chamfer(std::vector<float>* distance, std::vector<uint32_t>* payload, int width,
+	                    int height);
 
 	int cx0_ = 0;
 	int cy0_ = 0;
@@ -167,6 +212,9 @@ private:
 	std::vector<float> to_land_;
 	std::vector<float> to_water_;
 	std::vector<float> values_;
+	// Parallel to to_land_: (terrain_index << 8) | height of the nearest land
+	// seed, kNoLandSeed where none is in range. See land_seed_at().
+	std::vector<uint32_t> land_seed_;
 };
 
 #endif  // end of include guard: WL_GRAPHIC_GL_SHORE_DISTANCE_FIELD_H

@@ -304,9 +304,11 @@ wl_library(graphic_terrain_programs
     graphic_rhi
     graphic_surface
     logic
+    logic_constants
     logic_map
     logic_map_objects
     logic_map_objects_description_maintainer
+    logic_widelands_geometry
     wui_mapviewpixelfunctions
 )
 

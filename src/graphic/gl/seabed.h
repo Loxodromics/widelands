@@ -19,9 +19,11 @@
 #ifndef WL_GRAPHIC_GL_SEABED_H
 #define WL_GRAPHIC_GL_SEABED_H
 
+#include <cstdint>
 #include <vector>
 
 #include "graphic/gl/fields_to_draw.h"
+#include "graphic/gl/shore_distance_field.h"
 #include "logic/map_objects/description_maintainer.h"
 #include "logic/map_objects/world/terrain_description.h"
 
@@ -44,24 +46,48 @@ Widelands::DescriptionIndex triangle_terrain(const FieldsToDraw& fields_to_draw,
                                              int index,
                                              bool down_triangle);
 
-/* For every terrain index, the index to actually draw in its place: the resolved seabed() for a
- * Is::kWater terrain, the terrain itself otherwise (also the fallback when the name is unset or
- * unresolvable -- an add-on water terrain with no seabed key, say -- so nothing breaks silently
- * in a hard way).
+/* The per-frame seabed lookup tables (Claude/WATER.md WP-6, extended by WP-11).
  *
- * Claude/WATER.md WP-6: substituting here, upstream of both the terrain and dither passes, is
- * what keeps a water/land pair out of the dither program without teaching it anything about
- * water -- no water terrain ever reaches collect_vertex_terrains() or add_dithering_triangles(),
- * so the water/land case the dither program would otherwise need special-cased for it simply
- * never arises. Where the seabed equals the neighbouring land, this also leaves that boundary
- * nothing to dither.
+ * 'submerged[t]' is the terrain index to draw in place of terrain 't' when 't' is underwater: its
+ * resolved seabed() if it declares one, 't' itself otherwise. WP-6 filled this only for
+ * Is::kWater terrains; WP-11 fills it for any terrain declaring a seabed key, so the nearest-land
+ * terrain the SDF payload names can be routed through its own optional seabed before it is drawn.
+ * 't' unchanged is also the fallback when the key is unset or unresolvable, so nothing breaks
+ * hard.
  *
- * Rebuilt every frame into '*out': one DescriptionMaintainer::get_index() lookup per *terrain*,
- * not per triangle -- on the order of 100 terrains against ~13k chamfer cells (WATER.md §4.2), so
- * cheap enough that a cache with its own invalidation rules is not worth the bug surface.
+ * 'is_water[t]' is 1 where terrain 't' is Is::kWater, filled in the same sweep so the per-triangle
+ * path (draw_terrain_for_triangle) needs no DescriptionMaintainer::get().
+ *
+ * One get_index() lookup per *terrain*, not per triangle -- ~100 terrains against ~13k triangles
+ * (WATER.md §4.2), so a cache with its own invalidation rules is not worth the bug surface.
  */
+struct SeabedTables {
+	std::vector<Widelands::DescriptionIndex> submerged;
+	std::vector<uint8_t> is_water;
+};
+
 void resolve_seabed_terrains(
    const Widelands::DescriptionMaintainer<Widelands::TerrainDescription>& terrains,
-   std::vector<Widelands::DescriptionIndex>* out);
+   SeabedTables* out);
+
+/* The terrain index to actually draw for one field triangle: fog-aware (through triangle_terrain)
+ * and, for water triangles, seabed-aware (Claude/WATER.md WP-11).
+ *
+ * A land triangle is returned unchanged -- the substitution only ever applies underwater, so a
+ * table carrying land-side seabed keys does not corrupt the land pass. A water triangle returns
+ * the seabed of the nearest land the shore distance field's payload names for that triangle's own
+ * cell; failing that (no land seed within kMaxShoreDistance, or no field at all) it returns the
+ * water terrain's own seabed -- WP-6's single per-world beach.
+ *
+ * 'map' is null exactly when the true terrain applies (no player, or seeing all), same contract
+ * as triangle_terrain().
+ */
+Widelands::DescriptionIndex draw_terrain_for_triangle(const FieldsToDraw& fields_to_draw,
+                                                      const SeabedTables& tables,
+                                                      const ShoreDistanceField* shore_distance_field,
+                                                      const Widelands::Map* map,
+                                                      const Widelands::Player* player,
+                                                      int index,
+                                                      bool down_triangle);
 
 #endif  // end of include guard: WL_GRAPHIC_GL_SEABED_H
