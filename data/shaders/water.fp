@@ -489,12 +489,48 @@ void main() {
 	 * does not skip water_shore_warp() above, whose two snoise calls every fragment still pays:
 	 * this test needs 'shore', and 'shore' needs the warp. Bit-exact, not an approximation: under
 	 * kBlendAlpha, mix(dst, src, 0) == dst regardless of src's colour, and w is computed early
-	 * purely so this check can use it -- it is the same value coverage uses further down.
+	 * purely so this check can use it -- it is the same value coverage (just above, moved there for
+	 * WP-12) is built from.
 	 */
 	float shore_fwidth = fwidth(shore);
 	float w = max(kWaterEdgeWidth, 0.5 * shore_fwidth);
+	/* coverage is 0 deep inland, 1 in open water, ramping smoothly through the coastline. Moved up
+	 * from the composite for WP-12 -- the wet-sand early exit below needs it -- and the move is
+	 * bit-exact: it depends only on shore and w, both already computed here. */
+	float coverage = smoothstep(-w, w, shore);
 	if (shore <= -w) {
 		frag_color = vec4(0.0);
+		return;
+	}
+
+	/* Wet sand (WP-12, Claude/WATER.md §4.4): a warm dark tint mixed into the land strip just
+	 * shoreward of the waterline, so a beach reads as damp where the water meets it. Two-sided
+	 * profile: peak kWetSandStrength exactly on the waterline (shore = 0), zero by shore = -wet_reach
+	 * inland and by shore = +w under the water. See terrain_noise_params.glsl for the operator
+	 * choice (a warm dark mix target, not neutral black) and the measured S/V numbers.
+	 *
+	 * The seaward factor is 1 - smoothstep(0, w, shore), not 1 - coverage: the composite below
+	 * already scales the wet layer by (1 - alpha_water), so reusing coverage here would halve the
+	 * tint exactly where the wet sand is most visible. It must still reach zero by shore = +w,
+	 * because alpha_water tops out at kWaterOpacityDeep = 0.9, not 1 -- a wet layer surviving into
+	 * open water would leak a tenth of its tint across the whole sea.
+	 *
+	 * kWetSandWidth == kWaterEdgeWidth and w == max(kWaterEdgeWidth, 0.5 * fwidth(shore)), so
+	 * wet_reach == w in practice, wet is exactly 0 at both ends of the -w < shore < +w strip, and
+	 * the early-out above already covers the whole band -- it needs no widening.
+	 */
+	float wet_reach = max(kWetSandWidth, w);
+	float wet = kWetSandStrength *
+	            (1.0 - smoothstep(0.0, wet_reach, -shore)) *
+	            (1.0 - smoothstep(0.0, w, shore));
+
+	/* Pure land side: no water to composite over, so emit the wet tint alone and skip the wave
+	 * field and the foam block. Unreachable at the shipped constants (the early-out already caught
+	 * shore <= -w, and kWetSandWidth == kWaterEdgeWidth), but kept so a later
+	 * kWetSandWidth > kWaterEdgeWidth does not silently make every dry-land fragment pay for three
+	 * wave trains and two snoise3 taps it can never show. */
+	if (coverage <= 0.0) {
+		frag_color = vec4(kWetSandTint * var_brightness * var_cloud_shadow, wet);
 		return;
 	}
 
@@ -603,7 +639,6 @@ void main() {
 	}
 
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
-	float coverage = smoothstep(-w, w, shore);
 
 	/* The shore band and the whitecaps are one foam layer, combined by max() so the composite
 	 * never stacks two mixes toward kFoamColor. Foam then folds into color as a linear mix *before*
@@ -637,5 +672,29 @@ void main() {
 	float foam = clamp(max(band, whitecap), 0.0, 1.0) * coverage;
 	color = mix(color, kFoamColor, foam);
 	opacity = mix(opacity, kFoamOpacity, foam);
-	frag_color = vec4(color * var_brightness * var_cloud_shadow, opacity * coverage);
+
+	vec3 lit_color = color * var_brightness * var_cloud_shadow;
+	float alpha_water = opacity * coverage;
+
+	/* No wet layer to composite (shore >= w -- all open water, and most of the band): the present
+	 * output, unchanged and bit-exact. wet is exactly 0 there, so this catches every fragment the
+	 * WP-12 change must not touch. */
+	if (wet <= 0.0) {
+		frag_color = vec4(lit_color, alpha_water);
+		return;
+	}
+
+	/* WP-12 composite (Claude/WATER.md §4.4): wet sand under the wash, two layers "over" the terrain
+	 * the earlier passes drew, collapsed to the one (rgb, a) pair kBlendAlpha can carry:
+	 *   A = wet + alpha_water - wet * alpha_water
+	 *   S = (W * wet * (1 - alpha_water) + C * alpha_water) / A
+	 * W carries var_brightness * var_cloud_shadow as well as C does, which is what keeps §4.8's
+	 * cancellation identity holding (mix(dst*c, W*c, a) == c * mix(dst, W, a)) -- the terrain pass
+	 * already multiplied the land by the same factor. Both boundaries are continuous: at shore = w,
+	 * wet -> 0 and S -> C (and the guard above takes it exactly); at shore = -w, alpha_water -> 0 and
+	 * S -> W. A > 0 here because wet > 0. */
+	vec3 wet_color = kWetSandTint * var_brightness * var_cloud_shadow;
+	float a_out = wet + alpha_water - wet * alpha_water;
+	vec3 s_out = (wet_color * wet * (1.0 - alpha_water) + lit_color * alpha_water) / a_out;
+	frag_color = vec4(s_out, a_out);
 }

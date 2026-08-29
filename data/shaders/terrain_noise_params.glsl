@@ -301,6 +301,36 @@ const float kWaterOpacityShallow = 0.5;  // STARTING POINT -- tuned against a ca
 const float kWaterOpacityDeep = 0.9;     // unchanged from WP-6's kWaterOpacity
 const float kWaterEdgeWidth = 0.5;  // one whole cell either side of the coastline, in field widths
 
+// Wet sand (water.fp main(), Claude/WATER.md §4.4, WP-12): the negative side of the signed shore
+// field darkens and warm-tints a narrow strip of land at the waterline, so a beach reads as damp
+// where the water meets it. Shader-only -- no new uniform, sampler or noise field (hence no row in
+// the offset budget above).
+//
+// kWetSandTint is a MIX TARGET, not the colour of wet sand. The water pass is kBlendAlpha, so it
+// cannot read the land colour back and cannot apply a true saturation boost; all it can do is mix
+// the destination toward a constant. The target is near-black so the operator is mostly a multiply
+// (a darkening), and warm so it is not ONLY a multiply: mixing toward a warm dark pulls blue down
+// harder than red, which buys a small genuine chroma rise on top of the darkening. On a sand tone
+// (0.75, 0.65, 0.48) at mix alpha ~0.32, HSV S goes 0.360 -> 0.381 and V 0.75 -> 0.54, where a
+// pure-black target would leave S at 0.360 exactly. That is the "and saturate" half of the brief,
+// as far as the blend state allows.
+//
+// kWetSandStrength is the PEAK ALPHA, reached exactly on the waterline (shore = 0) and falling to
+// zero at both ends of the strip. It is the first lever if the contact line reads as a hard dark
+// rim.
+//
+// The effect is deliberately TERRAIN-AGNOSTIC: a meadow or rock coast darkens at the waterline
+// too, which is right -- wet ground is darker whatever it is made of. Making it sand-only is not
+// cheap: the water pass has no terrain identity at the fragment, and the SDF payload's nearest-land
+// terrain (shore_distance_field.h, WP-11) is the wrong quantity on the land side of the field.
+//
+// kWetSandWidth is the inland reach in field widths. 0.5 is one SDF cell (32 px at zoom 1) and
+// equals kWaterEdgeWidth, so the shader's existing early-out reach is unchanged and the whole
+// effect stays inside the -w < shore < +w strip that is already rasterised.
+const vec3 kWetSandTint = vec3(0.10, 0.06, 0.03);
+const float kWetSandStrength = 0.35;  // STARTING POINT -- tuned against a capture
+const float kWetSandWidth = 0.5;      // inland reach, field widths: one SDF cell, 32 px at zoom 1
+
 // Wave surface motion (water_wave_field(), water.fp; Claude/WATER.md §4.6, WP-8a): three
 // travelling wave trains, each a sharpened sine whose crest lines run perpendicular to its own
 // direction, plus one fine detail layer. WP-8 built this as two scrolled simplex layers instead;
