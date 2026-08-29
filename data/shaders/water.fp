@@ -684,39 +684,6 @@ void main() {
 
 	vec3 lit_color = color * var_brightness * var_cloud_shadow;
 
-	/* WP-16c (Claude/WATER_WP16_NOTES.md §3): quantise and dither the water layer
-	 * so it reads as hand-pixelled rather than as a smooth wash. This is a
-	 * terminal operation on lit_color -- everything upstream (ramp, wave swing,
-	 * foam mix, lighting) is untouched, which is what let WP-16 land before
-	 * WP-13/14/15. Both exits below consume lit_color, so one insertion covers
-	 * the open-water return and the WP-12 composite; wet_color stays linear by
-	 * construction.
-	 *
-	 * One threshold shared across R, G and B (a luminance-ish pattern that keeps
-	 * hue) from a world-anchored tile: var_texture_position is map pixels / 64,
-	 * so * kDitherGrainFrequency / kWaterDitherTileSize is the identity and lands
-	 * one tile texel per map pixel -- the same grid dither.fp uses, not a second
-	 * one. kWaterDitherAmp is the dissolve width: at 0.25 only values within an
-	 * eighth of a step of a band edge are dithered, so band interiors stay flat
-	 * (WP-16b measured uniform amp = 1.0 as static, not pixel art). px_per_field
-	 * is reused from line 482 -- fwidth() here would be in non-uniform control
-	 * flow after the early-out return and is undefined. Same reason the tile is
-	 * sampled with textureLod, not texture(): the implicit-derivative LOD is
-	 * undefined here (see shore_at()), and NEAREST on a one-level texture makes
-	 * level 0 the only correct choice anyway. The fade takes the whole reduction
-	 * back toward continuous: keeping quantisation without dither would leave
-	 * clean banding, worse than either end.
-	 */
-	float thresh = textureLod(u_blue_noise,
-	                          var_texture_position * kDitherGrainFrequency / kWaterDitherTileSize,
-	                          0.0).r;
-	float steps = kWaterQuantLevels - 1.0;
-	vec3 banded = clamp(floor(lit_color * steps + 0.5 + kWaterDitherAmp * (thresh - 0.5)) / steps,
-	                    0.0, 1.0);
-	float dither_lod = smoothstep(kWaterDitherFadeMinPx, kWaterDitherFadeMaxPx,
-	                              px_per_field / kDitherGrainFrequency);
-	lit_color = mix(lit_color, banded, dither_lod);
-
 	float alpha_water = opacity * coverage;
 
 	/* No wet layer to composite (shore >= w -- all open water, and most of the band): the present

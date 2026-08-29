@@ -649,33 +649,20 @@ const vec3 kFoamColor = vec3(189.0, 217.0, 228.0) / 255.0;
 // none of them reach (largest x, largest positive y).
 const vec2 kFoamOffset = vec2(226.4, 174.9);
 
-// WP-16c -- water-layer quantise and dither (Claude/WATER_WP16_NOTES.md §3/§10, water.fp).
-// A terminal dithered quantiser on lit_color: everything upstream stays continuous and the
-// smooth alpha ramp through the shallows is left alone, so the layer reads as hand-pixelled
-// water without turning the waterline into a dissolve.
-//
-// kWaterDitherAmp is the dissolve width, not a dither strength in the textbook sense: the
-// quantiser is floor(v * steps + 0.5 + amp * (thresh - 0.5)) / steps, so amp = 1.0 is the
-// classic uniform ordered dither, amp = 0.0 is plain rounding with hard band edges, and only
-// values within amp/2 of a step boundary are dithered at all. WP-16b's offline sheets measured
-// amp = 1.0 as 90s random static rather than pixel art -- it destroys the flat colour regions
-// that make pixel art read as pixel art -- so we sit at 0.25: flat band interiors, narrow
-// dithered transitions. Both amp and kWaterQuantLevels were tuned on stills and want re-judging
-// in engine, especially in motion (the wave swing carrying values across steps is the animation
-// mechanism, so the swing must not itself be snapped).
+// Water blue-noise threshold tile (Claude/WATER_WP16_NOTES.md §3/§10, water.fp). A world-anchored
+// void-and-cluster tile (u_blue_noise, data/shaders/blue_noise_64.png), shared with dither.fp's
+// grain grid rather than being a second one, sampled by cell index. WP-16c used it to quantise the
+// whole water layer; that reduction was retracted at WP-17 (the re-captured golden measured it as a
+// generic 256-colour reduction, not pixel art -- see WATER_WP16_NOTES.md). The tile and the three
+// constants below are kept for a future consumer; they are inert until then.
 //
 // The fade endpoints reproduce kDitherGrainFadeMin/Max exactly, expressed in water's own
-// px_per_field convention (water.fp:482): the sample coordinate is var_texture_position, i.e.
+// px_per_field convention (water.fp): the sample coordinate is var_texture_position, i.e.
 // map pixels / 64, so px_per_field / kDitherGrainFrequency is pixels per dither cell, and below
-// ~1 px per cell the tile aliases. The fade takes the *whole* reduction back toward continuous,
-// quantisation included -- keeping the bands while dropping the dither would leave clean banding,
-// worse than either end. At zoom 2 this is exactly 0 (0.5 px per cell) and the layer is
-// bit-for-bit today's smooth water.
+// ~1 px per cell the tile aliases. At zoom 2 this is exactly 0 (0.5 px per cell).
 //
 // The threshold tile itself takes no row in the offset budget table above: it is a static
 // texture sampled by cell index, not a simplex field.
-const float kWaterQuantLevels    = 6.0;   // levels per channel; WP-16b: 5-7 all plausible, larger subtler
-const float kWaterDitherAmp      = 0.25;  // dissolve width (see above); NOT the uniform-dither 1.0
 const float kWaterDitherTileSize = 64.0;  // texels in blue_noise_64.png; divides out the cell frequency
-const float kWaterDitherFadeMinPx = 0.5;  // no dither/quant at or below this many px per cell
-const float kWaterDitherFadeMaxPx = 1.0;  // full reduction at or above it (== zoom 1.0)
+const float kWaterDitherFadeMinPx = 0.5;  // fade endpoint: many px per cell (see above)
+const float kWaterDitherFadeMaxPx = 1.0;  // fade endpoint: == zoom 1.0
