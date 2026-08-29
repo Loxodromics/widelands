@@ -573,18 +573,44 @@ void main() {
 	float wave_amplitude = mix(kWaveAmplitudeShallow, kWaveAmplitudeDeep, depth_t);
 	color = clamp(color + kWaveColorSwing * wave_amplitude * wave, 0.0, 1.0);
 
-	/* Whitecaps (WP-9a, Claude/WATER.md §6): the top of the crest sum only, so they land where the
-	 * three trains coincide rather than along every crest, gated off near the waterline (the shore
-	 * band owns that zone) and when the crests get too small on screen to hold detail. WP-8a built
-	 * this as a quiet additive "glint" at a high threshold; WP-9a lowers the threshold so the
-	 * result reads as streaks rather than sparkle, and re-composites it as foam below -- together
-	 * with the shore band -- rather than as brightening, so the caps sit *on* the water instead of
-	 * lightening it. This is the same crest field retuned, not a parallel term: two stacked
-	 * highlights over one crest sum would double up.
+	/* Whitecaps (WP-9a, hardened at WP-17, Claude/WATER.md §6): the top of the crest sum only, so
+	 * they land where the three trains coincide rather than along every crest, gated off near the
+	 * waterline (the shore band owns that zone) and when the crests get too small on screen to hold
+	 * detail. WP-8a built this as a quiet additive "glint"; WP-9a lowered the threshold and
+	 * re-composited it as a partial foam mix so the caps sit *on* the water. This is the same crest
+	 * field retuned, not a parallel term: two stacked highlights over one crest sum would double up.
+	 *
+	 * WP-17 gives it the pixel-art character WP-16c's depth quantiser failed to (that reduction was
+	 * retracted in commit 1). cap_soft is WP-9a's continuous coverage, capped at kWhitecapStrength,
+	 * which composited as a partial mix is exactly why it reads as translucent dashes. step() against
+	 * the world-anchored blue-noise tile binarises it: the tile's codes are equally frequent, so
+	 * thresholding a coverage v lights a fraction v of pixels at full value -- the mean is unchanged,
+	 * only the distribution moves, from many dim pixels to few bright ones. That energy-preservation
+	 * is the point, and it means WP-9a's tuning of kWhitecapStart / kWhitecapStrength carries over.
+	 * It also means the operation only works where the coverage gradient is steep: over the depth
+	 * ramp a value-space threshold smears across ~17 px, but kFoamHalfWidthNear puts the cap
+	 * coverage falloff at ~0.18 units/px, so here the same threshold lands under one pixel.
+	 *
+	 * cap_lod cross-fades back to cap_soft when zoomed out, matching dither.fp's mix(coverage,
+	 * dissolved, grain_lod) house pattern: below ~1 px per tile cell the hard pattern aliases.
+	 * dither.fp itself rejected single-cell hard thresholding (its :68-73) because its perforation
+	 * mask had to imitate a LINEAR-sampled texture and blocky salt-and-pepper failed that -- here
+	 * blocky salt-and-pepper is exactly what we want, so that objection does not carry.
+	 *
+	 * Three constraints from the post-early-out position: the tap must be textureLod (implicit-
+	 * derivative LOD is undefined after the returns at the top of main(), see shore_at()); fwidth()
+	 * must not be called here for the same reason, so px_per_field from the top of main() is the
+	 * sanctioned substitute; and NEAREST on the one-level tile makes level 0 the only choice anyway.
 	 */
-	float whitecap = smoothstep(kWhitecapStart, 1.0, crest) *
+	float cap_soft = smoothstep(kWhitecapStart, 1.0, crest) *
 	                 smoothstep(kWhitecapDepthMin, kWhitecapDepthMax, depth_t) *
 	                 crest_fade * kWhitecapStrength;
+	float cap_thresh = textureLod(u_blue_noise,
+	                              var_texture_position * kDitherGrainFrequency / kWaterDitherTileSize,
+	                              0.0).r;
+	float cap_lod = smoothstep(kWaterDitherFadeMinPx, kWaterDitherFadeMaxPx,
+	                           px_per_field / kDitherGrainFrequency);
+	float whitecap = mix(cap_soft, step(cap_thresh, cap_soft), cap_lod);
 
 	/* Foam band (WP-9, reworked at WP-9a, three arcs at WP-9b/WP-9c, animated at WP-10,
 	 * Claude/WATER.md §4.6): stylised shore-parallel foam lines that thin and fade offshore
@@ -649,15 +675,21 @@ void main() {
 
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
 
-	/* The shore band and the whitecaps are one foam layer, combined by max() so the composite
-	 * never stacks two mixes toward kFoamColor. Foam then folds into color as a linear mix *before*
-	 * the cloud-shadow multiply, and into opacity independently of the shadow -- Claude/WATER.md
-	 * §4.8's cancellation identity is what breaks if foam went in additively. kFoamOpacity near 1
-	 * hides the seabed under the band and makes it read white rather than sand-tinted.
+	/* The shore band and the whitecaps are one foam layer. WP-9a combined them with max() before a
+	 * single mix so the composite never stacked two mixes; WP-17 splits them, because the hardened
+	 * sparkle wants its own colour (kWhitecapColor, brighter than the band's kFoamColor) and cannot
+	 * share the band's mix. Both mixes stay linear and stay *before* the cloud-shadow multiply, and
+	 * opacity stays cloud-independent, so Claude/WATER.md §4.8's cancellation identity still holds.
+	 * What the split drops is the "never stacks two mixes" property: the band reaches shore <
+	 * kFoamReach (0.97) and caps start beyond shore ~ 0.6, so there is a real overlap zone where
+	 * both apply. Both targets are near-white, so the doubling is mild -- checked in the capture.
+	 * kFoamOpacity near 1 hides the seabed under the band and makes it read white rather than
+	 * sand-tinted; the caps reuse kFoamOpacity until tuning asks for kWhitecapOpacity.
 	 *
-	 * Clamped because kFoamStrengthNear = 1.10 (WP-10, the profile line extended to centre 0) lets
-	 * band exceed 1 at an arc's core, and mix() past 1 extrapolates past kFoamColor rather than
-	 * interpolating. WP-9c did not need this -- its arc strengths were all <= 1.
+	 * band_f is clamped because kFoamStrengthNear = 1.10 (WP-10, the profile line extended to
+	 * centre 0) lets band exceed 1 at an arc's core, and mix() past 1 extrapolates past kFoamColor
+	 * rather than interpolating. WP-9c did not need this -- its arc strengths were all <= 1. cap_f
+	 * needs no clamp: whitecap is a mix of two [0, 1] terms.
 	 *
 	 * Scaled by coverage: foam can only sit where there is water. WP-9c's arcs were static and
 	 * seaward of the waterline, so this never came up; WP-10's train marches its arcs *through* the
@@ -678,9 +710,12 @@ void main() {
 	 * Whitecaps are unaffected: their depth_t gate keeps them beyond shore = 0.6, where coverage is
 	 * already 1.
 	 */
-	float foam = clamp(max(band, whitecap), 0.0, 1.0) * coverage;
-	color = mix(color, kFoamColor, foam);
-	opacity = mix(opacity, kFoamOpacity, foam);
+	float band_f = clamp(band, 0.0, 1.0) * coverage;
+	float cap_f = whitecap * coverage;
+	color = mix(color, kFoamColor, band_f);
+	color = mix(color, kWhitecapColor, cap_f);
+	opacity = mix(opacity, kFoamOpacity, band_f);
+	opacity = mix(opacity, kFoamOpacity, cap_f);
 
 	vec3 lit_color = color * var_brightness * var_cloud_shadow;
 

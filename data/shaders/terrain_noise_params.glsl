@@ -420,23 +420,35 @@ const float kDetailEvolve = 0.6;  // third-axis units per second
 //
 // - Lower threshold than WP-8a's 0.68, so more crests pass and the result reads as streaks rather
 //   than as isolated sparkle.
-// - Composited by mixing toward kFoamColor and contributing to opacity, the way the shore band is
-//   (main()). kFoamColor is the measured reference foam tone -- no reason for a second white -- so
-//   kGlintColor is gone.
 // - Both WP-8a gates kept: the depth_t gate keeps whitecaps off the waterline where the shore
 //   band owns the look, and crest_fade drops them when crests get too small on screen to hold
 //   detail.
-// - Combined with the shore band by max() before a single mix and a single opacity term, so the
-//   two never stack two mixes toward the same colour, and §4.8's cloud-shadow cancellation stays
-//   intact (foam folds into color before the * var_cloud_shadow, alpha stays cloud-independent).
+//
+// WP-9a composited this as a partial mix toward kFoamColor, capped at kWhitecapStrength, combined
+// with the shore band by max() before a single mix -- which is why it read as translucent dashes.
+// WP-17 binarises it against the blue-noise tile (water.fp), an energy-preserving transform: the
+// mean coverage is unchanged, only the distribution moves to few bright pixels. That needs the
+// sparkle to carry its own colour rather than share the band's mix, so kWhitecapColor is added and
+// the max() combine is split into two mixes. This reverses WP-9a's deletion of kGlintColor ("no
+// reason for a second white"): with the hardening there now is a reason -- a foam mass and a
+// scatter of single pixels are not the same target.
 //
 // kWhitecapStart and kWhitecapStrength have no model behind them: crest depends on the three wave
 // trains and snoise3(), which is not ported, so both are A/B'd on captures and the achieved
-// near-white water fraction is measured (WATER.md WP-9a), not asserted.
+// near-white water fraction is measured (WATER.md WP-9a/WP-17), not asserted. Under the WP-17
+// hardening kWhitecapStrength sets what fraction of pixels light at peak crest coincidence.
 const float kWhitecapStart = 0.5;     // crest sum, in [0, 1], at which whitecaps begin
-const float kWhitecapStrength = 0.7;   // foam coverage the strongest crest coincidences reach
+const float kWhitecapStrength = 0.7;   // fraction of pixels lit at the strongest crest coincidences
 const float kWhitecapDepthMin = 0.05;  // depth_t gate: no whitecaps right at the waterline,
 const float kWhitecapDepthMax = 0.15;  // the shore band owns that zone
+// kWhitecapColor (WP-17): the sparkle's mix target, distinct from the band's kFoamColor. kFoamColor's
+// own comment names this exact value and rejects it -- "a white that bright would bloom against the
+// wash" -- but that was measured against the foam MASS at the shore contact in AoE2_1.png. It does
+// not transfer to sparse single pixels: the eye integrates them spatially, so they read dimmer than
+// the same value spread over an area. dither.fp's :68-73 rejection of single-cell hard thresholding
+// ("blocky salt-and-pepper rather than grain") is for a mask imitating a LINEAR texture; blocky
+// salt-and-pepper is what we want here.
+const vec3 kWhitecapColor = vec3(230.0, 240.0, 245.0) / 255.0;
 // How far the detail field can pull the crest sum down before it is thresholded, so the whitecaps
 // scatter instead of repeating on the trains' own beat lattice (water_wave_field()).
 const float kCrestMaskFloor = 0.55;
@@ -653,16 +665,17 @@ const vec2 kFoamOffset = vec2(226.4, 174.9);
 // void-and-cluster tile (u_blue_noise, data/shaders/blue_noise_64.png), shared with dither.fp's
 // grain grid rather than being a second one, sampled by cell index. WP-16c used it to quantise the
 // whole water layer; that reduction was retracted at WP-17 (the re-captured golden measured it as a
-// generic 256-colour reduction, not pixel art -- see WATER_WP16_NOTES.md). The tile and the three
-// constants below are kept for a future consumer; they are inert until then.
+// generic 256-colour reduction, not pixel art -- see WATER_WP16_NOTES.md). WP-17 keeps the tile and
+// the fade to harden the whitecap sparkle instead (kWhitecapColor above, water.fp).
 //
 // The fade endpoints reproduce kDitherGrainFadeMin/Max exactly, expressed in water's own
 // px_per_field convention (water.fp): the sample coordinate is var_texture_position, i.e.
-// map pixels / 64, so px_per_field / kDitherGrainFrequency is pixels per dither cell, and below
-// ~1 px per cell the tile aliases. At zoom 2 this is exactly 0 (0.5 px per cell).
+// map pixels / 64, so px_per_field / kDitherGrainFrequency is pixels per tile cell, and below
+// ~1 px per cell the hard pattern aliases. At zoom 2 this is exactly 0 (0.5 px per cell), so the
+// hardening is fully faded out and the whitecaps are bit-for-bit their un-hardened form.
 //
 // The threshold tile itself takes no row in the offset budget table above: it is a static
 // texture sampled by cell index, not a simplex field.
 const float kWaterDitherTileSize = 64.0;  // texels in blue_noise_64.png; divides out the cell frequency
-const float kWaterDitherFadeMinPx = 0.5;  // fade endpoint: many px per cell (see above)
-const float kWaterDitherFadeMaxPx = 1.0;  // fade endpoint: == zoom 1.0
+const float kWaterDitherFadeMinPx = 0.5;  // no hardening at or below this many px per cell
+const float kWaterDitherFadeMaxPx = 1.0;  // full hardening at or above it (== zoom 1.0)
