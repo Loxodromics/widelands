@@ -18,7 +18,6 @@
 
 #include "graphic/gl/shore_distance_field.h"
 
-#include <algorithm>
 #include <chrono>
 #include <cmath>
 
@@ -174,6 +173,11 @@ void ShoreDistanceField::seed(
 			/* The payload carries the seeding triangle's own terrain and the field's true height
 			 * (WATER.md WP-11). Height is packed in the low byte, terrain above it -- see
 			 * land_seed_at() for the inverse. Only the kLand branch of seed_cell() reads it.
+			 *
+			 * The height is the *node's*, so both of a field's triangles carry it, where a
+			 * triangle spans three nodes that may differ sharply -- which is exactly the case at
+			 * a cliff. WP-13 inherits that approximation: it reads the height of the land nearest
+			 * a water cell, not of the specific edge facing it.
 			 */
 			const uint32_t height_bits = fcoords.field->get_height();
 			const int cx_d = 2 * fx + parity;

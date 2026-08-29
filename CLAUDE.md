@@ -140,6 +140,12 @@ network sync and replays (`logic/replay.h`).
 Two independent serialization layers: `map_io` (the map itself — terrain, tribes placement, etc.,
 used by both the editor and the game) and `game_io` (full running-game state — savegames).
 
+### Graphics target zoom
+
+Zoom level 1 (no zoom) is the target for any graphical feature. Every other zoom level is a bonus
+and only has to look "not horrible" and "not totally broken" — never let it constrain the design at
+zoom 1.
+
 ### Misc
 - The dirctory "Claude" is its own repo
 - The clang-format binary is called on macOS `clang-format-mp-22`

@@ -81,6 +81,15 @@ void resolve_seabed_terrains(
  *
  * 'map' is null exactly when the true terrain applies (no player, or seeing all), same contract
  * as triangle_terrain().
+ *
+ * Why this sits upstream of both passes rather than inside either (WP-6, still the reason): no
+ * water terrain index ever reaches the terrain pass, collect_vertex_terrains() or
+ * add_dithering_triangles(), so the water/land case the dither program would otherwise need
+ * special-casing for simply never arises, and neither program had to be taught anything about
+ * water. WP-11 only changes *which* seabed comes back, not where the substitution happens. Note
+ * the consequence it does change: where the seabed now equals the neighbouring land, that
+ * boundary has nothing left to dither, so WP-6's uniform sandy fringe survives only on coasts
+ * whose land is actually sand.
  */
 Widelands::DescriptionIndex draw_terrain_for_triangle(const FieldsToDraw& fields_to_draw,
                                                       const SeabedTables& tables,
