@@ -301,6 +301,7 @@ wl_library(graphic_terrain_programs
     graphic
     graphic_fields_to_draw
     graphic_gl_utils
+    graphic_image_io
     graphic_rhi
     graphic_surface
     logic

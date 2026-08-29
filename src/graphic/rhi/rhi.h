@@ -61,18 +61,24 @@ enum class Backend {
 // the exception (WP-3a): one 16-bit-float channel, added for WP-3's
 // shore-distance field, created and uploaded directly through
 // GlCoreDevice::create_texture / GlCoreTexture::upload. GL backs it with
-// GL_R16F / GL_RED / GL_FLOAT. Add further formats only when a caller needs
-// one.
+// GL_R16F / GL_RED / GL_FLOAT. kR8 is the same one-channel path with a single
+// unsigned byte per texel (GL_R8 / GL_RED / GL_UNSIGNED_BYTE), added for
+// WP-16c's blue-noise threshold tile where a 0..1 threshold needs no more
+// precision. Add further formats only when a caller needs one.
 enum class TextureFormat {
 	kRGBA8,
 	kR16F,
+	kR8,
 };
 
-// Texture addressing mode. Every texture in the tree uses clamp-to-edge
-// (texture.cc); kept explicit so the contract does not assume it. Consumed by
-// WP-16 (Vulkan sampler/upload); the GL backend always clamps.
+// Texture addressing mode. Almost every texture in the tree clamps to edge
+// (texture.cc); kept explicit so the contract does not assume it. kRepeat was
+// added for WP-16c's blue-noise tile, which is toroidal and tiles the whole
+// map. Consumed by the GL backend (create_texture) and by a future Vulkan
+// sampler.
 enum class TextureWrap {
 	kClampToEdge,
+	kRepeat,
 };
 
 // Texture filtering. Every texture uses linear filtering (texture.cc:220).

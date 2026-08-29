@@ -111,6 +111,14 @@ private:
 	 */
 	void upload_distance_texture(const ShoreDistanceField& field);
 
+	/* Loads data/shaders/blue_noise_64.png once and uploads it as the kR8 /
+	 * kRepeat / kNearest threshold tile the WP-16c quantiser samples. Deferred
+	 * to the first draw() rather than the constructor so it shares the lazy
+	 * pattern of the distance texture and runs when the data dir and a GL
+	 * context are both certainly up.
+	 */
+	void ensure_blue_noise_texture();
+
 	/// Logs the chamfer's own cost, averaged over a window of rebuilds. A no-op unless 'debug'
 	/// (--water-debug): shipping gameplay must not carry this instrument's logging cost.
 	void report_rebuild_cost(const ShoreDistanceField& field, bool debug);
@@ -120,6 +128,8 @@ private:
 	std::unique_ptr<Rhi::Buffer> vertex_buffer_;
 	std::unique_ptr<Rhi::Buffer> uniform_rhi_buffer_;
 	std::unique_ptr<Rhi::Texture> distance_texture_;
+	// The WP-16c blue-noise threshold tile, loaded once by ensure_blue_noise_texture().
+	std::unique_ptr<Rhi::Texture> blue_noise_texture_;
 
 	// The cloud-shadow amplitude multiplier, see set_cloud_amplitude().
 	float cloud_amplitude_ = kCloudShadowAmplitude;

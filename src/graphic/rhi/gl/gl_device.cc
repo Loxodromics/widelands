@@ -88,6 +88,29 @@ GLint to_gl(const TextureWrap wrap) {
 	switch (wrap) {
 	case TextureWrap::kClampToEdge:
 		return GL_CLAMP_TO_EDGE;
+	case TextureWrap::kRepeat:
+		return GL_REPEAT;
+	}
+	NEVER_HERE();
+}
+
+// The (internal format, client format, client type) triple GL wants for a
+// single-channel RHI format. Shared by create_texture's storage allocation and
+// GlCoreTexture::upload so the two cannot drift.
+struct GlTextureFormat {
+	GLint internal_format;
+	GLenum client_format;
+	GLenum client_type;
+};
+
+GlTextureFormat to_gl(const TextureFormat format) {
+	switch (format) {
+	case TextureFormat::kR16F:
+		return {GL_R16F, GL_RED, GL_FLOAT};
+	case TextureFormat::kR8:
+		return {GL_R8, GL_RED, GL_UNSIGNED_BYTE};
+	case TextureFormat::kRGBA8:
+		throw wexception("Rhi to_gl(TextureFormat): kRGBA8 stays in graphic::Texture for WP-10");
 	}
 	NEVER_HERE();
 }
@@ -148,20 +171,30 @@ public:
 	}
 
 	void upload(const void* pixels) override {
-		switch (format_) {
-		case TextureFormat::kR16F:
-			// Whole-image re-upload, matching graphic::Texture::unlock()'s
-			// glTexImage2D pattern (texture.cc) rather than glTexSubImage2D:
-			// upload() replaces the whole image, per the RHI contract.
-			Gl::State::instance().bind(GL_TEXTURE0, gl_id_);
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, static_cast<GLsizei>(width_),
-			             static_cast<GLsizei>(height_), 0, GL_RED, GL_FLOAT, pixels);
-			return;
-		case TextureFormat::kRGBA8:
+		if (format_ == TextureFormat::kRGBA8) {
 			throw wexception(
 			   "Rhi::GlCoreTexture::upload: kRGBA8 upload stays in graphic::Texture for WP-10");
 		}
-		NEVER_HERE();
+		// Whole-image re-upload, matching graphic::Texture::unlock()'s
+		// glTexImage2D pattern (texture.cc) rather than glTexSubImage2D:
+		// upload() replaces the whole image, per the RHI contract. Rows are
+		// taken in memory order (RHI_INTERFACE.md §2.4 fixes shader v=0 as the
+		// first row in memory); unlike graphic::Texture this path does not
+		// flip, which a later backend must not "correct" for the toroidal
+		// blue-noise tile where it makes no difference anyway.
+		const GlTextureFormat gl_format = to_gl(format_);
+		Gl::State::instance().bind(GL_TEXTURE0, gl_id_);
+		// A one-byte-per-texel format has no guaranteed row alignment; the
+		// float path is 4-byte aligned for free, this one is not.
+		if (format_ == TextureFormat::kR8) {
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+		}
+		glTexImage2D(GL_TEXTURE_2D, 0, gl_format.internal_format, static_cast<GLsizei>(width_),
+		             static_cast<GLsizei>(height_), 0, gl_format.client_format, gl_format.client_type,
+		             pixels);
+		if (format_ == TextureFormat::kR8) {
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		}
 	}
 	void read_back(uint8_t* /* pixels */) override {
 		throw wexception("Rhi::GlCoreTexture::read_back: texture readback stays in graphic::Texture "
@@ -521,9 +554,9 @@ void GlCoreDevice::read_back_swapchain(uint8_t* /* pixels */) {
 }
 
 std::unique_ptr<Texture> GlCoreDevice::create_texture(const TextureDescriptor& desc) {
-	if (desc.format != TextureFormat::kR16F) {
-		throw wexception("Rhi::GlCoreDevice::create_texture: only kR16F is implemented (kRGBA8 "
-		                 "creation stays in graphic::Texture for WP-10)");
+	if (desc.format != TextureFormat::kR16F && desc.format != TextureFormat::kR8) {
+		throw wexception("Rhi::GlCoreDevice::create_texture: only kR16F and kR8 are implemented "
+		                 "(kRGBA8 creation stays in graphic::Texture for WP-10)");
 	}
 
 	GLuint gl_id = 0;
@@ -541,8 +574,10 @@ std::unique_ptr<Texture> GlCoreDevice::create_texture(const TextureDescriptor& d
 	// Allocate storage with undefined contents (matches TextureLayout::kUndefined,
 	// the state a freshly created texture is in per the RHI contract); the first
 	// real contents come from the caller's first upload(), not from here.
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, static_cast<GLsizei>(desc.width),
-	             static_cast<GLsizei>(desc.height), 0, GL_RED, GL_FLOAT, nullptr);
+	const GlTextureFormat gl_format = to_gl(desc.format);
+	glTexImage2D(GL_TEXTURE_2D, 0, gl_format.internal_format, static_cast<GLsizei>(desc.width),
+	             static_cast<GLsizei>(desc.height), 0, gl_format.client_format,
+	             gl_format.client_type, nullptr);
 
 	return std::unique_ptr<Texture>(
 	   new GlCoreTexture(gl_id, desc.width, desc.height, /*owns_texture=*/true, desc.format));

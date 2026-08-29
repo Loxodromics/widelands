@@ -20,9 +20,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
+
+#include <SDL_surface.h>
 
 #include "base/log.h"
+#include "base/wexception.h"
 #include "graphic/gl/terrain_noise.h"
+#include "graphic/image_io.h"
 #include "graphic/rhi/device.h"
 
 namespace {
@@ -56,7 +61,7 @@ WaterProgram::WaterProgram() {
 	desc.topology = Rhi::PrimitiveTopology::kTriangleList;
 	desc.blend = Rhi::kBlendAlpha;
 	desc.depth = {true, true, Rhi::CompareOp::kLessOrEqual};
-	desc.samplers = {{0, "u_shore_distance"}};
+	desc.samplers = {{0, "u_shore_distance"}, {1, "u_blue_noise"}};
 	desc.uniform_block = Rhi::UniformBlockBinding{0, "per_program_state", sizeof(WaterProgramState)};
 	pipeline_ = Rhi::device().create_pipeline(desc);
 	descriptor_set_ = Rhi::device().create_descriptor_set(*pipeline_);
@@ -133,6 +138,58 @@ void WaterProgram::upload_distance_texture(const ShoreDistanceField& field) {
 	distance_texture_->upload(field.values().data());
 }
 
+void WaterProgram::ensure_blue_noise_texture() {
+	if (blue_noise_texture_ != nullptr) {
+		return;
+	}
+
+	/* WP-16a's void-and-cluster tile. It is an 8-bit greyscale PNG, so SDL
+	 * returns SDL_PIXELFORMAT_INDEX8 whose bytes are palette indices, not
+	 * intensities -- they coincide for this generator's ramp, but we convert
+	 * rather than rely on it. Resolves against the data dir exactly as the
+	 * shader sources do (gl/utils.cc).
+	 */
+	SDL_Surface* surface = load_image_as_sdl_surface("shaders/blue_noise_64.png");
+	if (surface == nullptr) {
+		throw wexception("WaterProgram: could not load shaders/blue_noise_64.png");
+	}
+	SDL_Surface* rgba = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+	SDL_FreeSurface(surface);
+	if (rgba == nullptr) {
+		throw wexception("WaterProgram: could not convert blue_noise_64.png to RGBA32");
+	}
+
+	const uint32_t width = static_cast<uint32_t>(rgba->w);
+	const uint32_t height = static_cast<uint32_t>(rgba->h);
+	std::vector<uint8_t> thresholds(static_cast<size_t>(width) * height);
+	const auto* bytes = static_cast<const uint8_t*>(rgba->pixels);
+	for (uint32_t y = 0; y < height; ++y) {
+		// pitch need not equal 4 * width; index each row from the surface's own stride.
+		const uint8_t* row = bytes + static_cast<size_t>(y) * rgba->pitch;
+		for (uint32_t x = 0; x < width; ++x) {
+			// RGBA32 is the byte-order alias, so byte 0 of each texel is red; the
+			// generator writes r == g == b, so any channel is the threshold.
+			thresholds[static_cast<size_t>(y) * width + x] = row[x * 4];
+		}
+	}
+	SDL_FreeSurface(rgba);
+
+	/* kNearest so each screen pixel gets one whole threshold, kRepeat because
+	 * the tile is toroidal and covers the whole map. Rows go to the GL texture
+	 * in memory order (the RHI fixes v=0 as the first row in memory); for this
+	 * toroidal tile the orientation does not matter, but a later backend must
+	 * not "fix" it.
+	 */
+	Rhi::TextureDescriptor desc;
+	desc.width = width;
+	desc.height = height;
+	desc.format = Rhi::TextureFormat::kR8;
+	desc.wrap = Rhi::TextureWrap::kRepeat;
+	desc.filter = Rhi::TextureFilter::kNearest;
+	blue_noise_texture_ = Rhi::device().create_texture(desc);
+	blue_noise_texture_->upload(thresholds.data());
+}
+
 void WaterProgram::draw(const FieldsToDraw& fields_to_draw,
                         const ShoreDistanceField& shore_distance_field,
                         const float z_value,
@@ -140,6 +197,7 @@ void WaterProgram::draw(const FieldsToDraw& fields_to_draw,
                         const bool debug) {
 	report_rebuild_cost(shore_distance_field, debug);
 	upload_distance_texture(shore_distance_field);
+	ensure_blue_noise_texture();
 
 	/* The same triangle stream and winding as TerrainProgram::draw. Both signs
 	 * of the field are drawn, water and land alike, which is the whole point of
@@ -185,12 +243,16 @@ void WaterProgram::draw(const FieldsToDraw& fields_to_draw,
 	uniform_rhi_buffer_->update(&state, sizeof(state));
 
 	descriptor_set_->set_texture(0, distance_texture_.get());
+	descriptor_set_->set_texture(1, blue_noise_texture_.get());
 	descriptor_set_->set_uniform_buffer(0, uniform_rhi_buffer_.get(), 0, sizeof(state));
 
 	auto& command_buffer = Rhi::command_buffer();
 	// A no-op on the GL backend today, but it is the contract the Vulkan
 	// backend will need: the texture was just written and is about to be read.
 	command_buffer.transition(distance_texture_.get(), Rhi::TextureLayout::kShaderReadOnly);
+	// The blue-noise tile is uploaded once and never rewritten; the transition
+	// is here for symmetry with the SDF and the Vulkan contract.
+	command_buffer.transition(blue_noise_texture_.get(), Rhi::TextureLayout::kShaderReadOnly);
 	command_buffer.bind_pipeline(pipeline_.get());
 	command_buffer.bind_descriptor_set(descriptor_set_.get());
 	command_buffer.bind_vertex_buffer(vertex_buffer_.get());
