@@ -308,12 +308,21 @@ const float kWaterEdgeWidth = 0.5;  // one whole cell either side of the coastli
 //
 // kWetSandTint is a MIX TARGET, not the colour of wet sand. The water pass is kBlendAlpha, so it
 // cannot read the land colour back and cannot apply a true saturation boost; all it can do is mix
-// the destination toward a constant. The target is near-black so the operator is mostly a multiply
-// (a darkening), and warm so it is not ONLY a multiply: mixing toward a warm dark pulls blue down
-// harder than red, which buys a small genuine chroma rise on top of the darkening. On a sand tone
-// (0.75, 0.65, 0.48) at mix alpha ~0.32, HSV S goes 0.360 -> 0.381 and V 0.75 -> 0.54, where a
-// pure-black target would leave S at 0.360 exactly. That is the "and saturate" half of the brief,
-// as far as the blend state allows.
+// the destination toward a constant. The target is near-black, so the operator is essentially a
+// darkening, and warm (hue ~26 degrees) so the damp margin shifts toward brown rather than toward
+// grey.
+//
+// It does NOT deliver the "and saturate" half of WP-12's brief, and the first cut of this comment
+// claimed that it did. The arithmetic behind that claim -- a sand swatch (0.75, 0.65, 0.48) mixed
+// 0.32 toward this target takes HSV S 0.360 -> 0.381 -- is correct but does not generalise: HSV
+// saturation is not linear under an RGB mix, so the sign of the change depends on how close the
+// source hue is to the target's, and it was never checked against a render. Measured over the
+// affected land pixels of the water_coast golden (WATER.md WP-12's review pass): mean S goes
+// 0.371 -> 0.348 and V 0.457 -> 0.397. By hue, warm/sandy sources (20-60 deg, matching the tint)
+// are a wash at -0.002 with S rising on 53% of them, while green coasts (90-160 deg, most of that
+// scene) lose 0.027. The DARKENING is what carries the effect. Treat the hue shift as a side
+// effect to watch, not as a feature, and if a chroma rise is ever wanted it needs a different
+// mechanism than a mix toward a constant.
 //
 // kWetSandStrength is the PEAK ALPHA, reached exactly on the waterline (shore = 0) and falling to
 // zero at both ends of the strip. It is the first lever if the contact line reads as a hard dark
@@ -325,8 +334,10 @@ const float kWaterEdgeWidth = 0.5;  // one whole cell either side of the coastli
 // terrain (shore_distance_field.h, WP-11) is the wrong quantity on the land side of the field.
 //
 // kWetSandWidth is the inland reach in field widths. 0.5 is one SDF cell (32 px at zoom 1) and
-// equals kWaterEdgeWidth, so the shader's existing early-out reach is unchanged and the whole
-// effect stays inside the -w < shore < +w strip that is already rasterised.
+// equals kWaterEdgeWidth, so the whole effect stays inside the -w < shore < +w strip that is
+// already rasterised and water.fp's early-out (which gates on max(kWetSandWidth, w)) is unchanged.
+// Raising this past kWaterEdgeWidth widens that gate rather than clipping the band -- which is a
+// property of the gate, so keep it gating on the max if this constant is ever tuned.
 const vec3 kWetSandTint = vec3(0.10, 0.06, 0.03);
 const float kWetSandStrength = 0.35;  // STARTING POINT -- tuned against a capture
 const float kWetSandWidth = 0.5;      // inland reach, field widths: one SDF cell, 32 px at zoom 1

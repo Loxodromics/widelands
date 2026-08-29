@@ -482,23 +482,29 @@ void main() {
 	float px_per_field = 1.0 / max(fwidth(var_texture_position.x), 1e-6);
 
 	/* Early-out (WP-8): every triangle in frame reaches this shader, water and land alike
-	 * (water_program.cc), so a fragment more than half a field width inland already contributes
-	 * nothing -- coverage below is exactly 0 there. Skipping it here also skips the wave field for
-	 * such fragments, which is the point: without this, every land pixel on screen would pay for
-	 * the wave field's two snoise3 samples and three trains, none of which it can ever show. It
-	 * does not skip water_shore_warp() above, whose two snoise calls every fragment still pays:
-	 * this test needs 'shore', and 'shore' needs the warp. Bit-exact, not an approximation: under
-	 * kBlendAlpha, mix(dst, src, 0) == dst regardless of src's colour, and w is computed early
-	 * purely so this check can use it -- it is the same value coverage (just above, moved there for
-	 * WP-12) is built from.
+	 * (water_program.cc), so a fragment farther inland than anything this shader draws contributes
+	 * nothing -- both coverage and WP-12's wet are exactly 0 there. Skipping it here also skips the
+	 * wave field for such fragments, which is the point: without this, every land pixel on screen
+	 * would pay for the wave field's two snoise3 samples and three trains, none of which it can
+	 * ever show. It does not skip water_shore_warp() above, whose two snoise calls every fragment
+	 * still pays: this test needs 'shore', and 'shore' needs the warp. Bit-exact, not an
+	 * approximation: under kBlendAlpha, mix(dst, src, 0) == dst regardless of src's colour.
 	 */
 	float shore_fwidth = fwidth(shore);
 	float w = max(kWaterEdgeWidth, 0.5 * shore_fwidth);
+	/* How far inland anything this shader draws reaches: the wash's own edge stops at -w, WP-12's
+	 * wet-sand band at -kWetSandWidth. The gate below has to clear BOTH, or raising kWetSandWidth
+	 * past kWaterEdgeWidth would silently clip the band at -w instead of widening it -- and the
+	 * coverage <= 0 exit further down, which exists for exactly that case, would stay unreachable.
+	 * The two are equal as shipped and w >= kWaterEdgeWidth always, so this max() is a no-op today
+	 * and the gate is bit-for-bit the -w it has been since WP-8.
+	 */
+	float wet_reach = max(kWetSandWidth, w);
 	/* coverage is 0 deep inland, 1 in open water, ramping smoothly through the coastline. Moved up
 	 * from the composite for WP-12 -- the wet-sand early exit below needs it -- and the move is
 	 * bit-exact: it depends only on shore and w, both already computed here. */
 	float coverage = smoothstep(-w, w, shore);
-	if (shore <= -w) {
+	if (shore <= -wet_reach) {
 		frag_color = vec4(0.0);
 		return;
 	}
@@ -507,7 +513,8 @@ void main() {
 	 * shoreward of the waterline, so a beach reads as damp where the water meets it. Two-sided
 	 * profile: peak kWetSandStrength exactly on the waterline (shore = 0), zero by shore = -wet_reach
 	 * inland and by shore = +w under the water. See terrain_noise_params.glsl for the operator
-	 * choice (a warm dark mix target, not neutral black) and the measured S/V numbers.
+	 * choice (a warm dark mix target, not neutral black) and for what it measured -- notably that
+	 * the darkening, not a chroma rise, is what carries the effect.
 	 *
 	 * The seaward factor is 1 - smoothstep(0, w, shore), not 1 - coverage: the composite below
 	 * already scales the wet layer by (1 - alpha_water), so reusing coverage here would halve the
@@ -515,20 +522,19 @@ void main() {
 	 * because alpha_water tops out at kWaterOpacityDeep = 0.9, not 1 -- a wet layer surviving into
 	 * open water would leak a tenth of its tint across the whole sea.
 	 *
-	 * kWetSandWidth == kWaterEdgeWidth and w == max(kWaterEdgeWidth, 0.5 * fwidth(shore)), so
-	 * wet_reach == w in practice, wet is exactly 0 at both ends of the -w < shore < +w strip, and
-	 * the early-out above already covers the whole band -- it needs no widening.
+	 * wet_reach is computed with the early-out above, which gates on it; as shipped it is exactly
+	 * w, so wet is exactly 0 at both ends of the -w < shore < +w strip.
 	 */
-	float wet_reach = max(kWetSandWidth, w);
 	float wet = kWetSandStrength *
 	            (1.0 - smoothstep(0.0, wet_reach, -shore)) *
 	            (1.0 - smoothstep(0.0, w, shore));
 
 	/* Pure land side: no water to composite over, so emit the wet tint alone and skip the wave
-	 * field and the foam block. Unreachable at the shipped constants (the early-out already caught
-	 * shore <= -w, and kWetSandWidth == kWaterEdgeWidth), but kept so a later
-	 * kWetSandWidth > kWaterEdgeWidth does not silently make every dry-land fragment pay for three
-	 * wave trains and two snoise3 taps it can never show. */
+	 * field and the foam block. Unreachable at the shipped constants (kWetSandWidth ==
+	 * kWaterEdgeWidth, so the early-out's wet_reach is w and it already caught shore <= -w), but
+	 * kept live for a later kWetSandWidth > kWaterEdgeWidth: the early-out widens with it, and
+	 * without this exit every dry-land fragment in the widened band would pay for three wave
+	 * trains and two snoise3 taps it can never show. */
 	if (coverage <= 0.0) {
 		frag_color = vec4(kWetSandTint * var_brightness * var_cloud_shadow, wet);
 		return;
