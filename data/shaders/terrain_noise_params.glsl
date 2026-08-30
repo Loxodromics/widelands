@@ -441,6 +441,68 @@ const float kWhitecapStart = 0.5;     // crest sum, in [0, 1], at which whitecap
 const float kWhitecapStrength = 0.7;   // fraction of pixels lit at the strongest crest coincidences
 const float kWhitecapDepthMin = 0.05;  // depth_t gate: no whitecaps right at the waterline,
 const float kWhitecapDepthMax = 0.15;  // the shore band owns that zone
+// Map pixels per blue-noise texel for the whitecap threshold (water.fp). This is what decides
+// whether a cap reads as a mark or as a spray, and it is the one knob that moves speck size.
+// At 1 the threshold is independent per pixel and the caps are stochastic stipple -- WP-17's
+// first cut shipped that, and beside the coherent foam bands it read as two techniques in one
+// frame. At 2 a whole 2x2 block lights as a unit: measured on water_coast, median blob size goes
+// 1 px -> 4 px with 63 % of lit pixels in blobs of 2-4, which reads as small solid dashes.
+// It also halves the tile's own repeat rate and moves it off the field lattice: the spike at 64
+// map px (exactly one field, where the eye is primed to see structure) drops from 60x the base
+// rate to 1.2x, leaving one at 128 px. A 256-texel tile would push that to 8 fields.
+// STARTING POINT -- 3 is chunkier again (median 9 px) and was judged too coarse.
+const float kWhitecapCellPx = 2.0;
+// Map pixels per blue-noise texel ALONG the crest tangent (water.fp). Together with
+// kWhitecapCellPx across, this is what turns the highlight from scatter into dashes: several
+// pixels in a row share one threshold, so a lit run is extended along the crest and thin across.
+// STARTING POINT.
+const float kWhitecapStreakPx = 6.0;
+// WP-18: the crest window the QUANTISER sees, as against kWhitecapStart..1.0 for the soft path.
+// water.fp explains why the two paths cannot share one ramp; these are the numbers behind it.
+// Measured on water_coast at zoom 1, as added luminance over the cap footprint against a
+// whitecap = 0 capture, binned to show how the four levels are populated:
+//
+//   start / full   lit px   sum lum   vs WP-17   <15  15-30  30-50  50-75  75-110   (% of lit px)
+//   WP-17 step()     3396    290442      1.000     1      1      2     18      69
+//   0.50 / 1.00      9603    260623      0.897     2     82     10      5       0
+//   0.70 / 0.90      2115     60714      0.209     3     71     20      6       1
+//   0.65 / 0.85      4119    130261      0.448     2     70     14     11       3
+//   0.60 / 0.80      7972    275224      0.948     2     65     13     14       6
+//   0.60 / 0.75      9505    372057      1.281     2     57     12     18      11
+//
+// 0.60 / 0.80 is the pick: it holds total cap light within 5 % of WP-17 (and within 6 % of the
+// 0.50/1.00 cut that was on screen) while the top two levels actually fire. The distribution stays
+// bottom-heavy at 65 % on the dimmest level and that is inherent -- crest is a sum of sines, so
+// high crest is rare and any faithful reduction of it is bottom-heavy. What was wrong before was
+// not the skew but that levels 3 and 4 were unreachable. Widening toward 0.60/0.75 buys a flatter
+// spread at 1.28x the light; that is the lever if the caps read too weak.
+const float kWhitecapQuantStart = 0.60;
+const float kWhitecapQuantFull = 0.80;
+// Quantise that ramp onto this many evenly spaced levels (WP-17 was a hard 2-value step()) with a
+// blue-noise dither of up to +/-kWhitecapDitherAmp/2 of a step across each level boundary, so the
+// caps get stepped shading with dithered edges rather than a binary stamp -- they were the only
+// discontinuous element in an otherwise fully continuous frame and read as pasted on however they
+// were tuned. WP-17's step() is the N = 2, amp = 1 corner. At N = 4 the step is 0.333, so amp 1.0
+// puts ~3 px of dithered transition at each boundary and amp 0.6 ~2 px -- visible stepping either
+// way, which is the point.
+//
+// On brightness: mean energy IS preserved on the coverage itself (E[quantise(v)] = v at amp = 1),
+// and since the quantised ramp reaches 1.0 where cap_soft was capped at kWhitecapStrength, mean
+// coverage rises by 1/0.7. It does not follow that the frame gets 1.43x brighter, because the
+// composite is not linear in the coverage: cap_f drives both the colour mix and the opacity, and
+// the final blend is mix(terrain, lit_color, opacity * coverage), a product and so convex.
+// Binarising a convex function's argument raises its mean, which is why WP-17's few full-strength
+// specks delivered MORE light than many partial ones. The two effects fight; measured, total cap
+// light came to 0.95 of WP-17 at the constants above. Both directions were predicted wrong at
+// various points in this package -- measure the composite, do not reason from the coverage.
+//
+// The wave colour swing is deliberately NOT reduced with these two elements: it is a low-gradient
+// signal (~0.007 value units/px over open water, where depth_t has saturated and the swing is all
+// that varies), so a quantiser dissolve zone spreads over ~17 px and speckles a quarter of the
+// surface -- the WP-16c failure, and a property of the gradient, not of where the quantiser sits.
+// STARTING POINT -- N was swept at 3 and 4 against the ramp above; amp has not been swept off 1.0.
+const float kWhitecapLevels = 4.0;
+const float kWhitecapDitherAmp = 1.0;
 // kWhitecapColor (WP-17): the sparkle's mix target, distinct from the band's kFoamColor. kFoamColor's
 // own comment names this exact value and rejects it -- "a white that bright would bloom against the
 // wash" -- but that was measured against the foam MASS at the shore contact in AoE2_1.png. It does
@@ -607,6 +669,24 @@ const float kFoamMinWidthPixels = 1.5;
 // than the 2D snoise WP-9c used.
 const float kFoamNoiseScale = 1.44;
 const float kFoamDissolve = 0.20;   // threshold softness, in coverage units; raises the partial fraction
+// WP-18: the zoom-1 end of the foam arc's edge treatment (water.fp mixes kFoamDissolve ->
+// kFoamDissolveHard by cap_lod, so zoom 2 and beyond keep the soft edge unchanged). At zoom 1 the
+// arc edge narrows to 2 * 0.05 / 0.234 = ~0.43 px, effectively hard, and a blue-noise jitter of
+// +/-kFoamPixelDither/2 threshold units breaks it into a ragged fringe. That is +/-0.85 px of edge
+// wander at the arc's ~0.234/px coverage gradient (kFoamHalfWidthNear = 0.100 field widths is a
+// 6.4 px arc at zoom 1, and d(cov)/d(d) = 1.5 at the half-coverage point), so ~1.7 px peak to peak
+// on the widest arc and less on the thinner offshore ones, where hw is smaller and the gradient
+// steeper. The band is DITHERED rather than quantised like the whitecaps because foam_arc's
+// dissolved edge is already only ~1.7 px over that 6.4 px arc, so 3-5 levels would land sub-pixel.
+// The tap is ISOTROPIC where the caps' is anisotropic: the arc geometry already confines the
+// raggedness to a line, so no noise direction is needed to stop it scattering.
+//
+// Measured on water_coast at zoom 1 against a capture with both constants neutralised: this moves
+// 1.65 % of the frame, raising mean |luminance gradient| in the affected zone from 25.98 to 27.72
+// (p99 92.9 -> 102.3) and brightening the zone 5.8 %. So most of what it does is fill the band
+// rather than ragged its edge -- worth knowing before reaching for it as the lever. STARTING POINT.
+const float kFoamDissolveHard = 0.05;
+const float kFoamPixelDither = 0.4;
 const float kFoamOpacity = 0.95;  // near 1: the band hides the seabed and reads white, not sand
 const float kFoamGradStep = 0.5;  // shore-frame finite-difference step: one grid cell
 const float kFoamGradEpsilon = 0.05;  // plateau guard, on the frame's gradient magnitude

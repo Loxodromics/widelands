@@ -263,15 +263,36 @@ float foam_noise(vec2 world_pos, vec2 tangent, float foam_time, float arc_slot, 
  * hw guards the train's non-overlap invariant (max(half_width, pixel floor) < kFoamTrainSpacing/2,
  * or the nearest-arc collapse shows a seam midway between arcs): the profile stays well under it,
  * but the cap makes a later constant change or a larger kMaxZoom unable to violate it.
+ *
+ * WP-18 makes the dissolve width and a threshold jitter parameters rather than reading
+ * kFoamDissolve directly, so that zoomed in the edge can be narrowed to ~pixel scale and broken by
+ * blue noise into a ragged fringe -- the same vocabulary the quantiser gives the whitecaps.
+ * Quantising the band instead would be a no-op: its dissolved edge is already only ~1.7 px over a
+ * ~6.4 px arc, so three to five levels would land sub-pixel. main() passes dissolve ->
+ * kFoamDissolve and jitter -> 0 as cap_lod -> 0, recovering the pre-WP-18 behaviour zoomed out.
+ *
+ * WP-9a's self-limiting invariant still has to hold (the smoothstep exactly 0 wherever cov == 0,
+ * or foam leaks past the arc half-width onto the land side and kFoamReach stops being a tight
+ * bound). It used to follow from thresh >= kFoamDissolve; a signed jitter can break that, hence
+ * the max(). One consequence worth knowing when tuning: the clamp is one-sided, so on the most
+ * strongly lit arcs (small u) negative jitter is partly clipped and those edges can only grow
+ * outward, never inward.
+ *
+ * Feeding the zoomed-out path through here rather than through a separate copy of this body costs
+ * one code on one pixel of the zoom-2 golden (measured: 1 px of 921600, delta 1), because the
+ * runtime jitter term stops the compiler folding (thresh - kFoamDissolve). The golden was
+ * re-captured for it. Two near-identical copies of the file's most carefully tuned function,
+ * kept in sync forever to avoid a re-bless that leaves the gate exactly as sharp afterwards, is
+ * the worse trade.
  */
-float foam_arc(float shore, float u, float shore_fwidth,
+float foam_arc(float shore, float u, float dissolve, float jitter, float shore_fwidth,
                float centre, float half_width, float overshoot, float strength) {
 	float hw = max(half_width, kFoamMinWidthPixels * shore_fwidth);
 	hw = min(hw, kFoamArcHalfWidthCap * kFoamTrainSpacing);
 	float d = clamp(abs(shore - centre) / hw, 0.0, 1.0);
 	float cov = 1.0 - smoothstep(0.0, 1.0, d);
-	float thresh = kFoamDissolve + (1.0 + overshoot - kFoamDissolve) * u;
-	return smoothstep(thresh - kFoamDissolve, thresh + kFoamDissolve, cov) * strength;
+	float thresh = max(dissolve, dissolve + (1.0 + overshoot - dissolve) * u + jitter);
+	return smoothstep(thresh - dissolve, thresh + dissolve, cov) * strength;
 }
 
 // The depth ramp (Claude/WATER.md WP-7): two linear segments through the shallow/mid/deep stops,
@@ -580,16 +601,34 @@ void main() {
 	 * re-composited it as a partial foam mix so the caps sit *on* the water. This is the same crest
 	 * field retuned, not a parallel term: two stacked highlights over one crest sum would double up.
 	 *
-	 * WP-17 gives it the pixel-art character WP-16c's depth quantiser failed to (that reduction was
-	 * retracted in commit 1). cap_soft is WP-9a's continuous coverage, capped at kWhitecapStrength,
-	 * which composited as a partial mix is exactly why it reads as translucent dashes. step() against
-	 * the world-anchored blue-noise tile binarises it: the tile's codes are equally frequent, so
-	 * thresholding a coverage v lights a fraction v of pixels at full value -- the mean is unchanged,
-	 * only the distribution moves, from many dim pixels to few bright ones. That energy-preservation
-	 * is the point, and it means WP-9a's tuning of kWhitecapStart / kWhitecapStrength carries over.
-	 * It also means the operation only works where the coverage gradient is steep: over the depth
-	 * ramp a value-space threshold smears across ~17 px, but kFoamHalfWidthNear puts the cap
-	 * coverage falloff at ~0.18 units/px, so here the same threshold lands under one pixel.
+	 * WP-17 gave it a pixel-art character WP-16c's depth quantiser failed to (that reduction was
+	 * retracted in commit 1) by binarising cap_soft against the tile with a step(); WP-18 generalises
+	 * that to a kWhitecapLevels quantiser of cap_shape with a blue-noise boundary dither (the block
+	 * below), because a two-valued mark was the only discontinuous element left in an otherwise fully
+	 * continuous frame and read as pasted on however it was tuned. cap_soft is WP-9a's continuous
+	 * coverage, capped at kWhitecapStrength, which composited as a partial mix is why it reads as
+	 * translucent dashes. WP-17's binary output is this quantiser's kWhitecapLevels = 2,
+	 * kWhitecapDitherAmp = 1 corner. The quantiser keeps WP-17's energy argument -- the tile's codes
+	 * are equally frequent, so a dithered level boundary lights a fraction of the block on each side
+	 * -- and, like it, only bites where the coverage gradient is steep: over the depth ramp a
+	 * value-space step smears across ~17 px, but kFoamHalfWidthNear puts the cap coverage falloff at
+	 * ~0.18 units/px, so here each level boundary lands within a few pixels.
+	 *
+	 * kWhitecapCellPx is what makes a cap a *mark* rather than a spray, and it is the whole of the
+	 * WP-17 follow-up. Sampled at one tile texel per map pixel the threshold is independent per
+	 * pixel, so a cap is stochastic stipple -- which read as random static beside the coherent foam
+	 * bands, two techniques in one frame. Sampling the tile every kWhitecapCellPx map pixels instead
+	 * gives the threshold multi-pixel structure, so a whole 2x2 block lights or does not and the caps
+	 * come out as small solid dashes. Measured on water_coast: median blob 1 px at one texel per
+	 * pixel against 4 px at two, with 63 % of lit pixels in blobs of 2-4 px. It stays a stochastic
+	 * threshold, so the energy-preservation above is unaffected -- the coin is simply flipped per
+	 * block rather than per pixel.
+	 *
+	 * A fixed cut (thresholding at a constant instead of against the tile) was tried first and is
+	 * the wrong lever: blob size is then set by the crest field's own structure, whose finest term
+	 * is kDetailFrequency at ~18 px, so the caps came out as 16 solid clouds of median 36 px. Every
+	 * intermediate blend of the two kept the clouds and added stipple around them. Coarsening the
+	 * cell is the knob that moves size; the cut is not.
 	 *
 	 * cap_lod cross-fades back to cap_soft when zoomed out, matching dither.fp's mix(coverage,
 	 * dissolved, grain_lod) house pattern: below ~1 px per tile cell the hard pattern aliases.
@@ -602,15 +641,64 @@ void main() {
 	 * must not be called here for the same reason, so px_per_field from the top of main() is the
 	 * sanctioned substitute; and NEAREST on the one-level tile makes level 0 the only choice anyway.
 	 */
-	float cap_soft = smoothstep(kWhitecapStart, 1.0, crest) *
-	                 smoothstep(kWhitecapDepthMin, kWhitecapDepthMax, depth_t) *
-	                 crest_fade * kWhitecapStrength;
+	/* The depth gate and the zoom fade apply to both cap paths; only the crest ramp differs. */
+	float cap_gate = smoothstep(kWhitecapDepthMin, kWhitecapDepthMax, depth_t) * crest_fade;
+	float cap_soft = smoothstep(kWhitecapStart, 1.0, crest) * cap_gate * kWhitecapStrength;
+	/* The quantiser gets its own, narrower crest ramp rather than reusing cap_soft's. The two want
+	 * opposite things from it. cap_soft is a partial-coverage mix, so a soft ramp that mostly sits
+	 * low is exactly right -- it fades the caps in. The quantiser instead rounds to fixed levels,
+	 * so its peak brightness is a deterministic function of its input where WP-17's step() let any
+	 * footprint pixel go full white on a lucky noise draw. Feeding it cap_soft's ramp measured as a
+	 * collapse: crest rarely passes ~0.85, so smoothstep(0.5, 1.0, crest) times the gate peaks near
+	 * 0.4, the top two of four levels never fire, and 82 % of lit pixels land on the single dimmest
+	 * level -- a dim wash, not stepped shading. Narrowing the window to
+	 * [kWhitecapQuantStart, kWhitecapQuantFull] rescales the crest range that actually occurs onto
+	 * the full [0, 1] the quantiser needs. Both ends matter: lowering only the top lights far more
+	 * water (2.9x the light at 0.70) because every pixel above the floor rises together, so raising
+	 * the floor in step is what holds total cap light where it was.
+	 *
+	 * Keeping cap_soft's ramp untouched is also what keeps WP-18 confined to zoom 1, as every other
+	 * part of it is: sharing one ramp moved 2.5 % of the zoom-2 pixels by up to 28 codes, dimming
+	 * caps on a path this package has no business retuning. */
+	float cap_shape = smoothstep(kWhitecapQuantStart, kWhitecapQuantFull, crest) * cap_gate;
+	/* Sampled in the dominant train's crest frame, stretched along it. Thresholding a scalar
+	 * coverage against an *isotropic* noise can only ever produce scatter: the noise carries no
+	 * direction, so neither does the lit set, and the elongation that is genuinely present in the
+	 * crest field is thrown away, leaving only its density. Stretching the tile by
+	 * kWhitecapStreakPx along the crest tangent makes several map pixels in a row share one
+	 * threshold, so the lit runs come out extended along the crest and thin across it -- the
+	 * "dashed diagonal runs along the crest direction" WP-9a's own note describes. Train A carries
+	 * 1.0 of the 1.36 weight sum and its direction is a constant, so the crest normal is just
+	 * kWaveDirA; only wander bends it, and only slightly.
+	 */
+	vec2 crest_t = vec2(-kWaveDirA.y, kWaveDirA.x);
+	vec2 cap_px = var_texture_position * kDitherGrainFrequency;
 	float cap_thresh = textureLod(u_blue_noise,
-	                              var_texture_position * kDitherGrainFrequency / kWaterDitherTileSize,
+	                              vec2(dot(cap_px, crest_t) / kWhitecapStreakPx,
+	                                   dot(cap_px, kWaveDirA) / kWhitecapCellPx) /
+	                                 kWaterDitherTileSize,
 	                              0.0).r;
 	float cap_lod = smoothstep(kWaterDitherFadeMinPx, kWaterDitherFadeMaxPx,
 	                           px_per_field / kDitherGrainFrequency);
-	float whitecap = mix(cap_soft, step(cap_thresh, cap_soft), cap_lod);
+	/* WP-18 quantiser: round cap_shape onto kWhitecapLevels evenly spaced levels, with the tile
+	 * offsetting the rounding boundary by up to +/-kWhitecapDitherAmp/2 of a step so the boundary
+	 * dissolves rather than being a hard contour. At amp = 1 the dither term is exactly a uniform
+	 * [0, 1] offset, so this is an ordered-dither quantiser: E[cap_q] = cap_shape per level, and
+	 * the tile's codes being equally frequent is what makes that hold. Like WP-17's step() it only
+	 * bites where the coverage gradient is steep -- over the depth ramp a value-space step smears
+	 * across ~17 px, but kFoamHalfWidthNear puts the cap falloff at ~0.18 units/px, so here each
+	 * level boundary lands within a few pixels.
+	 *
+	 * That per-level identity is on the coverage, not on the frame: cap_f drives the opacity as
+	 * well as the colour mix, so what reaches the screen is convex in it and redistributing
+	 * coverage changes total light. terrain_noise_params.glsl carries the measurement. The
+	 * levers if the caps read too weak are kWhitecapQuantFull (lower = the ramp saturates sooner)
+	 * and kWhitecapLevels, in that order.
+	 */
+	float cap_steps = kWhitecapLevels - 1.0;
+	float cap_q = clamp(floor(cap_shape * cap_steps + 0.5 +
+	                          kWhitecapDitherAmp * (cap_thresh - 0.5)) / cap_steps, 0.0, 1.0);
+	float whitecap = mix(cap_soft, cap_q, cap_lod);
 
 	/* Foam band (WP-9, reworked at WP-9a, three arcs at WP-9b/WP-9c, animated at WP-10,
 	 * Claude/WATER.md §4.6): stylised shore-parallel foam lines that thin and fade offshore
@@ -670,7 +758,25 @@ void main() {
 		float u = clamp(0.5 + 0.5 * foam_noise(var_texture_position, tangent, foam_time,
 		                                       centre / kFoamTrainSpacing, drift_conf),
 		                0.0, 1.0);
-		band = foam_arc(shore, u, shore_fwidth, centre, half_width, overshoot, strength * life);
+
+		/* WP-18: zoomed in, harden the arc edge toward kFoamDissolveHard and break it with a
+		 * blue-noise jitter; both terms scale by cap_lod, the same fade the whitecaps use, so the
+		 * zoomed-out end recovers the pre-WP-18 edge exactly.
+		 *
+		 * The tap is ISOTROPIC (cap_px scaled by kWhitecapCellPx on both axes), unlike the caps'
+		 * anisotropic one: thresholding an area against isotropic noise can only scatter, but the
+		 * arc geometry already confines this raggedness to a line, so a 1-2 px fringe reads without
+		 * a direction. If it ever reads too speckly, 'tangent' is in scope to stretch the tap along.
+		 * Reusing kWhitecapCellPx couples the fringe's scale to the caps' -- one knob moves both --
+		 * which is deliberate while they are being tuned together, but is the thing to split first if
+		 * they need to diverge.
+		 */
+		float band_dither =
+		   textureLod(u_blue_noise, cap_px / kWhitecapCellPx / kWaterDitherTileSize, 0.0).r;
+		float dissolve = mix(kFoamDissolve, kFoamDissolveHard, cap_lod);
+		float jitter = kFoamPixelDither * (band_dither - 0.5) * cap_lod;
+		band = foam_arc(shore, u, dissolve, jitter, shore_fwidth, centre, half_width, overshoot,
+		                strength * life);
 	}
 
 	float opacity = mix(kWaterOpacityShallow, kWaterOpacityDeep, depth_t);
