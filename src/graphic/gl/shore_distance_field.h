@@ -64,7 +64,7 @@ public:
 	 * cell either has its true nearest seed inside the grid (and reads its
 	 * exact distance) or saturates at the clamp regardless of grid extent.
 	 */
-	static constexpr float kMaxShoreDistance = 12.0f;
+	static constexpr float kMaxShoreDistance = 3.0f;
 
 	/* The grid's margin beyond the drawn fields, in cells. One cell is half a
 	 * field width, so the clamp above is 24 cells; the margin must exceed that

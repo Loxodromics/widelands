@@ -302,7 +302,7 @@ const vec3 kWaterColorShallow = vec3(100.0, 190.0, 215.0) / 255.0;
 const vec3 kWaterColorMid = vec3(80.0, 135.0, 175.0) / 255.0;
 const vec3 kWaterColorDeep = vec3(70.0, 110.0, 150.0) / 255.0;
 const float kWaterOpacityShallow = 0.5;  // STARTING POINT -- tuned against a capture
-const float kWaterOpacityDeep = 0.9;     // unchanged from WP-6's kWaterOpacity
+const float kWaterOpacityDeep = 1.3;     // unchanged from WP-6's kWaterOpacity
 const float kWaterEdgeWidth = 0.5;  // one whole cell either side of the coastline, in field widths
 
 // Wet sand (water.fp main(), Claude/WATER.md §4.4, WP-12): the negative side of the signed shore
